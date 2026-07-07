@@ -2,22 +2,72 @@
 	"listen": "unix:/run/gh-broker/gh-broker.sock",
 	"upstream": "https://api.githubcopilot.com/mcp/",
 	"tools": [
-		{ "name": "list_issues", "mode": "read" },
-		{ "name": "issue_read", "mode": "read" },
-		{ "name": "search_issues", "mode": "read" },
-		{ "name": "semantic_issues_search", "mode": "read" },
-		{ "name": "list_issue_types", "mode": "read" },
-		{ "name": "list_issue_fields", "mode": "read" },
-		{ "name": "list_label", "mode": "read" },
-		{ "name": "list_pull_requests", "mode": "read" },
-		{ "name": "pull_request_read", "mode": "read" },
-		{ "name": "issue_write", "mode": "write" },
-		{ "name": "add_issue_comment", "mode": "write" },
-		{ "name": "sub_issue_write", "mode": "write" },
-		{ "name": "update_pull_request", "mode": "write" },
-		{ "name": "link_issue", "mode": "write", "custom": true }
+		{
+			"name": "list_issues",
+			"mode": "read"
+		},
+		{
+			"name": "issue_read",
+			"mode": "read"
+		},
+		{
+			"name": "search_issues",
+			"mode": "read"
+		},
+		{
+			"name": "semantic_issues_search",
+			"mode": "read"
+		},
+		{
+			"name": "list_issue_types",
+			"mode": "read"
+		},
+		{
+			"name": "list_issue_fields",
+			"mode": "read"
+		},
+		{
+			"name": "list_label",
+			"mode": "read"
+		},
+		{
+			"name": "list_pull_requests",
+			"mode": "read"
+		},
+		{
+			"name": "pull_request_read",
+			"mode": "read"
+		},
+		{
+			"name": "issue_write",
+			"mode": "write"
+		},
+		{
+			"name": "add_issue_comment",
+			"mode": "write"
+		},
+		{
+			"name": "sub_issue_write",
+			"mode": "write"
+		},
+		{
+			"name": "create_pull_request",
+			"mode": "write"
+		},
+		{
+			"name": "update_pull_request",
+			"mode": "write"
+		},
+		{
+			"name": "link_issue",
+			"mode": "write",
+			"custom": true
+		}
 	],
 	"owners": {
-		"cldmv": { "read": "cred:cldmv-read", "write": "cred:cldmv-write" }
+		"cldmv": {
+			"read": "cred:cldmv-read",
+			"write": "cred:cldmv-write"
+		}
 	}
 }
