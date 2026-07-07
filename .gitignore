@@ -1,0 +1,20 @@
+# deps + build
+node_modules/
+dist/
+
+# never commit real config or secrets — config.json holds owner→cred *names*,
+# but keep the live one out of git regardless; creds themselves live in
+# systemd-encrypted files under /etc/gh-broker/creds (root-owned), never here.
+config.json
+creds/
+*.cred
+*.pat
+*.token
+
+# logs / scratch
+tmp/
+*.log
+
+# editor / OS
+.DS_Store
+.vscode/

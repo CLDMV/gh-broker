@@ -1,0 +1,55 @@
+[Unit]
+Description=CLDMV gh-broker — GitHub MCP credential-routing proxy
+Documentation=https://github.com/CLDMV/gh-broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gh-broker
+Group=gh-broker
+
+# PATs are delivered ENCRYPTED and decrypted into $CREDENTIALS_DIRECTORY at
+# start — in the service's memory only, never on an agent-readable path.
+LoadCredentialEncrypted=cldmv-read:/etc/gh-broker/creds/cldmv-read.cred
+LoadCredentialEncrypted=cldmv-write:/etc/gh-broker/creds/cldmv-write.cred
+
+# Socket dir /run/gh-broker (traversable), owned by the service user; the daemon
+# creates the socket there and sets it 0660 group=gh-broker-clients so the agent
+# user (a member of that group) can connect, while the token stays server-side.
+RuntimeDirectory=gh-broker
+RuntimeDirectoryMode=0755
+
+# System-wide node >=20 (the service can't use a /home nvm — ProtectHome blocks it;
+# /usr/bin/node is v18 here). Version-pinned; update this line if you bump node.
+ExecStart=/usr/local/nvm/versions/node/v26.4.0/bin/node /opt/gh-broker/dist/index.mjs --config /etc/gh-broker/config.json
+Restart=on-failure
+RestartSec=2
+
+# ---- hardening (least privilege for a credential holder) ----
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+# NOTE: MemoryDenyWriteExecute is intentionally OMITTED — V8's JIT requires
+# writable→executable memory, and enabling it crashes Node at startup with
+# "Fatal OOM ... during deserialization".
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadWritePaths=/run/gh-broker
+UMask=0077
+# Optional egress lockdown once GitHub ranges are pinned:
+# IPAddressDeny=any
+# IPAddressAllow=<github api ranges>
+
+[Install]
+WantedBy=multi-user.target
