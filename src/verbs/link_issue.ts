@@ -1,18 +1,20 @@
-/**
- * Custom verb: link_issue — create an EXPLICIT PR→issue closing reference.
- *
- * Why this is a custom verb and not a proxied tool: the hosted MCP has no
- * PR→issue closing-link tool, and we deliberately do NOT depend on commit-message
- * keywords (the next→master squash can drop them, and merging to next closes
- * nothing). This calls the `addClosingIssueReference` GraphQL mutation directly.
- *
- * Caveat: `addClosingIssueReference` is a preview/feature-flagged mutation (not in
- * the public schema; `closingIssuesReferences` is read-only). It works today
- * (CLDMV CI uses it). If GitHub requires a preview header, set GH_BROKER_GRAPHQL_FEATURES
- * (comma-separated) — we don't hardcode a guessed flag name.
- */
+import type { Octokit } from "@octokit/core";
 
-const GRAPHQL = "https://api.github.com/graphql";
+/**
+ * Custom verb: link_issue — create an EXPLICIT PR→issue closing reference via the
+ * `addClosingIssueReference` GraphQL mutation.
+ *
+ * Why a custom verb and why an App token:
+ *  - The hosted GitHub MCP has no tool for PR→issue closing links (verified), so
+ *    it can't be proxied — it's a direct GitHub API call.
+ *  - `addClosingIssueReference` is NOT in the fine-grained-PAT GraphQL schema
+ *    (GitHub returns "Field doesn't exist", distinct from a permission error). It
+ *    is available to GitHub **App** tokens — exactly what CLDMV's own
+ *    `sync-closing-issues` action uses. So this runs on an App-authed Octokit.
+ *  - We deliberately do NOT depend on commit-message keywords for linkage.
+ *
+ * Uses Octokit (`octokit.graphql`) — GitHub's official SDK — not a hand-rolled fetch.
+ */
 
 export interface LinkIssueInput {
 	owner: string;
@@ -23,58 +25,33 @@ export interface LinkIssueInput {
 	issue: number;
 }
 
-interface GraphQLResult<T> {
-	data?: T;
-	errors?: { message: string }[];
-}
+const RESOLVE_IDS = `
+	query($owner: String!, $repo: String!, $pr: Int!, $issue: Int!) {
+		repository(owner: $owner, name: $repo) {
+			pullRequest(number: $pr) { id }
+			issue(number: $issue) { id }
+		}
+	}`;
 
-function headers(token: string): Record<string, string> {
-	const h: Record<string, string> = {
-		authorization: `Bearer ${token}`,
-		accept: "application/vnd.github+json",
-		"content-type": "application/json",
-		"user-agent": "cldmv-gh-broker"
-	};
-	const features = process.env.GH_BROKER_GRAPHQL_FEATURES;
-	if (features) h["graphql-features"] = features;
-	return h;
-}
+const ADD_CLOSING_REF = `
+	mutation($prId: ID!, $issueId: ID!) {
+		addClosingIssueReference(input: { pullRequestId: $prId, issueId: $issueId }) {
+			pullRequest { id }
+		}
+	}`;
 
-async function gql<T>(token: string, query: string, variables: Record<string, unknown>): Promise<T> {
-	const res = await fetch(GRAPHQL, { method: "POST", headers: headers(token), body: JSON.stringify({ query, variables }) });
-	if (!res.ok) throw new Error(`graphql HTTP ${res.status} ${res.statusText}`);
-	const body = (await res.json()) as GraphQLResult<T>;
-	if (body.errors?.length) throw new Error(`graphql: ${body.errors.map((e) => e.message).join("; ")}`);
-	if (!body.data) throw new Error("graphql: empty response");
-	return body.data;
-}
-
-/** Resolve node IDs, then create the closing reference. Returns the linked issue's node id. */
-export async function linkIssue(token: string, input: LinkIssueInput): Promise<{ pullRequestId: string; issueId: string }> {
-	const ids = await gql<{
+/** Resolve node IDs, then create the closing reference. Returns the linked node IDs. */
+export async function linkIssue(octokit: Octokit, input: LinkIssueInput): Promise<{ pullRequestId: string; issueId: string }> {
+	const ids = await octokit.graphql<{
 		repository: { pullRequest: { id: string } | null; issue: { id: string } | null };
-	}>(
-		token,
-		`query($owner:String!,$repo:String!,$pr:Int!,$issue:Int!){
-			repository(owner:$owner,name:$repo){
-				pullRequest(number:$pr){ id }
-				issue(number:$issue){ id }
-			}
-		}`,
-		{ owner: input.owner, repo: input.repo, pr: input.pull, issue: input.issue }
-	);
+	}>(RESOLVE_IDS, { owner: input.owner, repo: input.repo, pr: input.pull, issue: input.issue });
+
 	const pullRequestId = ids.repository.pullRequest?.id;
 	const issueId = ids.repository.issue?.id;
 	if (!pullRequestId) throw new Error(`link_issue: PR #${input.pull} not found in ${input.owner}/${input.repo}`);
 	if (!issueId) throw new Error(`link_issue: issue #${input.issue} not found in ${input.owner}/${input.repo}`);
 
-	await gql<{ addClosingIssueReference: { clientMutationId: string | null } }>(
-		token,
-		`mutation($pr:ID!,$issue:ID!){
-			addClosingIssueReference(input:{pullRequestId:$pr, issueId:$issue}){ clientMutationId }
-		}`,
-		{ pr: pullRequestId, issue: issueId }
-	);
+	await octokit.graphql(ADD_CLOSING_REF, { prId: pullRequestId, issueId });
 	return { pullRequestId, issueId };
 }
 

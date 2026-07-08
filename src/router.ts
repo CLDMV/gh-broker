@@ -1,5 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { Config, SecretStore, ToolRule } from "./types.ts";
+import type { AppAuth } from "./appauth.ts";
 import { indexTools } from "./config.ts";
 import { audit } from "./audit.ts";
 import { linkIssue, type LinkIssueInput } from "./verbs/link_issue.ts";
@@ -19,7 +20,8 @@ export class Router {
 	constructor(
 		private readonly config: Config,
 		private readonly secrets: SecretStore,
-		private readonly upstream: Upstream
+		private readonly upstream: Upstream,
+		private readonly appAuth?: AppAuth
 	) {
 		this.rules = indexTools(config.tools);
 	}
@@ -50,7 +52,7 @@ export class Router {
 
 		try {
 			const out = rule.custom
-				? await this.dispatchCustom(tool, args, token)
+				? await this.dispatchCustom(tool, args, owner)
 				: await this.upstream.forward(tool, args, token);
 			audit({ tool, owner, mode: rule.mode, repo, decision: rule.custom ? "custom" : "forward", ok: true });
 			return out;
@@ -60,10 +62,14 @@ export class Router {
 		}
 	}
 
-	private async dispatchCustom(tool: string, args: Record<string, unknown>, token: string): Promise<CallToolResult> {
+	private async dispatchCustom(tool: string, args: Record<string, unknown>, owner: string): Promise<CallToolResult> {
 		switch (tool) {
 			case "link_issue": {
-				const out = await linkIssue(token, args as unknown as LinkIssueInput);
+				const octokit = this.appAuth?.octokitFor(owner);
+				if (!octokit) {
+					throw new Error(`link_issue needs a GitHub App for "${owner}": set config.app + owners.${owner}.installationId + the app key cred (addClosingIssueReference is App-token-only — not available to fine-grained PATs)`);
+				}
+				const out = await linkIssue(octokit, args as unknown as LinkIssueInput);
 				return { content: [{ type: "text", text: `linked: PR ${out.pullRequestId} → issue ${out.issueId}` }] };
 			}
 			default:

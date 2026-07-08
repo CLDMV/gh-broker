@@ -41,11 +41,26 @@ export function loadConfig(path: string): Config {
 		if (typeof o.read !== "string" || typeof o.write !== "string") {
 			throw new Error(`config.owners.${owner}: needs "read" and "write" credential refs`);
 		}
-		owners[owner.toLowerCase()] = { read: o.read, write: o.write };
+		if (o.installationId !== undefined && typeof o.installationId !== "number") {
+			throw new Error(`config.owners.${owner}.installationId: must be a number`);
+		}
+		owners[owner.toLowerCase()] = {
+			read: o.read,
+			write: o.write,
+			...(typeof o.installationId === "number" ? { installationId: o.installationId } : {})
+		};
 	}
 	if (Object.keys(owners).length === 0) throw new Error("config.owners: at least one owner required");
 
-	return { listen: c.listen, upstream: c.upstream, tools, owners };
+	let app: Config["app"];
+	if (c.app !== undefined) {
+		const a = c.app as Record<string, unknown>;
+		if (typeof a.appId !== "number") throw new Error("config.app.appId: must be a number");
+		if (typeof a.privateKey !== "string") throw new Error('config.app.privateKey: must be a "cred:<name>" ref');
+		app = { appId: a.appId, privateKey: a.privateKey };
+	}
+
+	return { listen: c.listen, upstream: c.upstream, tools, owners, ...(app ? { app } : {}) };
 }
 
 /** Build a name→rule index for O(1) allowlist checks. */

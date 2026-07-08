@@ -19,6 +19,19 @@ export interface ToolRule {
 export interface OwnerCreds {
 	read: string;
 	write: string;
+	/**
+	 * GitHub App installation id for this owner. Required only for verbs that need
+	 * an App token (currently `link_issue` → addClosingIssueReference, which is not
+	 * available to fine-grained PATs). Omit if the owner has no App installed.
+	 */
+	installationId?: number;
+}
+
+/** GitHub App config — for App-token-only operations (`link_issue`). Optional. */
+export interface AppConfig {
+	appId: number;
+	/** Credential reference (e.g. "cred:gh-app-key") for the App's PEM private key. */
+	privateKey: string;
 }
 
 export interface Config {
@@ -28,6 +41,8 @@ export interface Config {
 	upstream: string;
 	tools: ToolRule[];
 	owners: Record<string, OwnerCreds>;
+	/** Optional GitHub App — enables `link_issue` (App-token-only mutation). */
+	app?: AppConfig;
 }
 
 /** Resolves a "cred:<name>" reference to a token, never logging it. */
