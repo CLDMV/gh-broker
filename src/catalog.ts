@@ -15,6 +15,12 @@ import { LINK_ISSUE_SCHEMA } from "./verbs/link_issue.ts";
  */
 export async function buildCatalog(config: Config, secrets: SecretStore, upstream: UpstreamPool): Promise<Tool[]> {
 	const upstreamByName = new Map<string, Tool>();
+	// Whether the upstream tool list was actually fetched. If it wasn't (network/token), we must NOT drop
+	// allowlisted tools — we fall back to minimal schemas so the daemon still serves + routes. But if the
+	// fetch DID succeed, a tool missing from it genuinely isn't served by this upstream (wrong toolset /
+	// renamed), so advertising a minimal-schema stub only defers the failure to call time (the confusing
+	// "could not determine repo owner" → "unknown tool" pair) — better to skip it and say why at startup.
+	let upstreamFetched = false;
 	const firstOwner = Object.values(config.owners)[0];
 	if (firstOwner) {
 		try {
@@ -26,6 +32,7 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 				new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs).unref())
 			]);
 			for (const t of tools) upstreamByName.set(t.name, t);
+			upstreamFetched = true;
 		} catch (err) {
 			console.error(`catalog: could not fetch upstream tool schemas (${(err as Error).message}) — advertising minimal schemas`);
 		}
@@ -44,6 +51,11 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 			continue;
 		}
 		const up = upstreamByName.get(rule.name);
+		if (!up && upstreamFetched) {
+			// Reachable upstream that doesn't expose this tool → it would 32602 at call time. Skip + warn.
+			console.error(`catalog: allowlisted tool "${rule.name}" is NOT exposed by the upstream (${config.upstream}) — skipping it. Check the tool name or the upstream toolset (e.g. use /mcp/x/all for non-default toolsets like labels).`);
+			continue;
+		}
 		tools.push(up ?? { name: rule.name, description: `(${rule.mode}) proxied to the GitHub MCP`, inputSchema: { type: "object" } });
 	}
 	return tools;

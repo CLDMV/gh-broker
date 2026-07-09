@@ -1,6 +1,6 @@
 {
 	"listen": "unix:/run/gh-broker/gh-broker.sock",
-	"upstream": "https://api.githubcopilot.com/mcp/",
+	"upstream": "https://api.githubcopilot.com/mcp/x/all",
 	"tools": [
 		{
 			"name": "list_issues",
