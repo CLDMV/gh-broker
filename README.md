@@ -12,7 +12,7 @@ A small daemon (this package) runs as a dedicated **`gh-broker` system user** an
 
 - holds per-org **read-scoped** and **write-scoped** fine-grained PATs (systemd-encrypted, in memory only);
 - routes the right PAT by **repo owner + read/write mode** on each call;
-- exposes a **config-driven, default-deny** toolset — mostly **proxied** to GitHub's hosted MCP (which already does labels, type, issue fields, dedup), plus a few **custom verbs** for gaps (currently `link_issue` → the explicit `addClosingIssueReference` closing link);
+- exposes a **config-driven, default-deny** toolset — mostly **proxied** to GitHub's hosted MCP (which already does labels, type, issue fields, dedup), plus **custom verbs** for gaps the hosted MCP has no tool for: `link_issue` (the explicit `addClosingIssueReference` closing link, App-token-only), and `resolve_review_thread` / `reply_review_thread` (resolve or reply to a PR review thread — e.g. Copilot's comments — via the `resolveReviewThread` / `addPullRequestReviewThreadReply` GraphQL mutations, which run on the write PAT);
 - talks to the agent over a **Unix socket** (bytes only; no token crosses).
 
 The agent (uid 1003, rootless docker, no passwordless sudo — verified) cannot read another user's mode-0400 secrets, so the boundary is real.
@@ -30,7 +30,8 @@ src/
   upstream.ts       pool of MCP clients to the hosted GitHub MCP (per-token, Bearer)
   catalog.ts        build the advertised tool list (real upstream schemas + custom)
   server.ts         Unix-socket MCP server toward the agent (StdioServerTransport)
-  verbs/link_issue.ts  custom verb: addClosingIssueReference
+  verbs/link_issue.ts     custom verb: addClosingIssueReference (App token)
+  verbs/review_thread.ts  custom verbs: resolve/reply PR review threads (write PAT)
   audit.ts          structured audit log (never tokens)
 deploy/
   provision.sh      Phase 0 — RUN AS ROOT (user/creds/unit)

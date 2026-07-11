@@ -57,6 +57,16 @@
 		{
 			"name": "update_pull_request",
 			"mode": "write"
+		},
+		{
+			"name": "resolve_review_thread",
+			"mode": "write",
+			"custom": true
+		},
+		{
+			"name": "reply_review_thread",
+			"mode": "write",
+			"custom": true
 		}
 	],
 	"owners": {

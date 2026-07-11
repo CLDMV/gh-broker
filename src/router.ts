@@ -1,9 +1,16 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { Config, SecretStore, ToolRule } from "./types.ts";
 import type { AppAuth } from "./appauth.ts";
+import { Octokit } from "@octokit/core";
 import { indexTools } from "./config.ts";
 import { audit } from "./audit.ts";
 import { linkIssue, type LinkIssueInput } from "./verbs/link_issue.ts";
+import {
+	resolveReviewThread,
+	replyReviewThread,
+	type ResolveReviewThreadInput,
+	type ReplyReviewThreadInput
+} from "./verbs/review_thread.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
@@ -52,7 +59,7 @@ export class Router {
 
 		try {
 			const out = rule.custom
-				? await this.dispatchCustom(tool, args, owner)
+				? await this.dispatchCustom(tool, args, owner, token)
 				: await this.upstream.forward(tool, args, token);
 			audit({ tool, owner, mode: rule.mode, repo, decision: rule.custom ? "custom" : "forward", ok: true });
 			return out;
@@ -62,7 +69,12 @@ export class Router {
 		}
 	}
 
-	private async dispatchCustom(tool: string, args: Record<string, unknown>, owner: string): Promise<CallToolResult> {
+	private async dispatchCustom(
+		tool: string,
+		args: Record<string, unknown>,
+		owner: string,
+		token: string
+	): Promise<CallToolResult> {
 		switch (tool) {
 			case "link_issue": {
 				const octokit = this.appAuth?.octokitFor(owner);
@@ -71,6 +83,17 @@ export class Router {
 				}
 				const out = await linkIssue(octokit, args as unknown as LinkIssueInput);
 				return { content: [{ type: "text", text: `linked: PR ${out.pullRequestId} → issue ${out.issueId}` }] };
+			}
+			case "resolve_review_thread": {
+				// PAT-usable (Pull requests: write) — run on the resolved write PAT, not the App token.
+				const octokit = new Octokit({ auth: token });
+				const out = await resolveReviewThread(octokit, args as unknown as ResolveReviewThreadInput);
+				return { content: [{ type: "text", text: `thread ${out.threadId}: isResolved=${out.isResolved}` }] };
+			}
+			case "reply_review_thread": {
+				const octokit = new Octokit({ auth: token });
+				const out = await replyReviewThread(octokit, args as unknown as ReplyReviewThreadInput);
+				return { content: [{ type: "text", text: `replied: ${out.url}` }] };
 			}
 			default:
 				throw new Error(`custom verb "${tool}" not implemented`);
