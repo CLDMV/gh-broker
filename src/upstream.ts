@@ -39,13 +39,27 @@ export class UpstreamPool implements Upstream {
 
 	async forward(tool: string, args: Record<string, unknown>, token: string): Promise<CallToolResult> {
 		const client = await this.connect(token);
-		return (await client.callTool({ name: tool, arguments: args })) as CallToolResult;
+		try {
+			return (await client.callTool({ name: tool, arguments: args })) as CallToolResult;
+		} catch (err) {
+			// The cached session can go stale server-side (e.g. upstream idle-session
+			// expiry) even though connect() succeeded — evict it so the *next* call
+			// gets a fresh connection instead of repeating this failure until the
+			// whole broker process is restarted.
+			this.clients.delete(token);
+			throw err;
+		}
 	}
 
 	/** Fetch upstream tool schemas (owner-independent) to build the advertised catalog. */
 	async listToolsFor(token: string): Promise<Tool[]> {
 		const client = await this.connect(token);
-		const res = await client.listTools();
-		return res.tools;
+		try {
+			const res = await client.listTools();
+			return res.tools;
+		} catch (err) {
+			this.clients.delete(token);
+			throw err;
+		}
 	}
 }
