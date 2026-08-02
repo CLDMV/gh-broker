@@ -52,6 +52,17 @@ export function loadConfig(path: string): Config {
 	}
 	if (Object.keys(owners).length === 0) throw new Error("config.owners: at least one owner required");
 
+	let defaultOwner: string | undefined;
+	if (c.defaultOwner !== undefined) {
+		if (typeof c.defaultOwner !== "string" || !c.defaultOwner) {
+			throw new Error("config.defaultOwner: must be a non-empty string naming a configured owner");
+		}
+		defaultOwner = c.defaultOwner.toLowerCase();
+		if (!owners[defaultOwner]) {
+			throw new Error(`config.defaultOwner "${c.defaultOwner}" is not a key of config.owners`);
+		}
+	}
+
 	let app: Config["app"];
 	if (c.app !== undefined) {
 		const a = c.app as Record<string, unknown>;
@@ -60,7 +71,7 @@ export function loadConfig(path: string): Config {
 		app = { appId: a.appId, privateKey: a.privateKey };
 	}
 
-	return { listen: c.listen, upstream: c.upstream, tools, owners, ...(app ? { app } : {}) };
+	return { listen: c.listen, upstream: c.upstream, tools, owners, ...(app ? { app } : {}), ...(defaultOwner ? { defaultOwner } : {}) };
 }
 
 /** Build a name→rule index for O(1) allowlist checks. */
