@@ -44,7 +44,13 @@ export class Router {
 			audit({ tool, decision: "deny", detail: "not in allowlist" });
 			throw new Error(`tool "${tool}" is not allowed`);
 		}
-		const owner = extractOwner(args);
+		// Owner-less reads (global advisory DB, get_me, notifications) fall back to
+		// the configured defaultOwner's READ PAT. Writes never fall back — a write
+		// must always name the owner it targets.
+		let owner = extractOwner(args);
+		if (!owner && rule.mode === "read" && this.config.defaultOwner && this.config.owners[this.config.defaultOwner]) {
+			owner = this.config.defaultOwner.toLowerCase();
+		}
 		if (!owner) {
 			audit({ tool, decision: "error", detail: "no owner in args" });
 			throw new Error(`tool "${tool}": could not determine repo owner from arguments`);
@@ -104,6 +110,9 @@ export class Router {
 /** Derive the repo owner from a tool call's arguments, so we pick the right PAT. */
 export function extractOwner(args: Record<string, unknown>): string | undefined {
 	if (typeof args.owner === "string" && args.owner) return args.owner.toLowerCase();
+	// Many org-scoped tools (list_org_repository_security_advisories, get_team_members, …)
+	// name the org as `org` rather than `owner`; for routing, org === owner.
+	if (typeof args.org === "string" && args.org) return args.org.toLowerCase();
 	if (typeof args.query === "string") {
 		const m = args.query.match(/\brepo:([^/\s]+)\/[^\s]+|\b(?:org|user):([^\s]+)/i);
 		const hit = m?.[1] ?? m?.[2];

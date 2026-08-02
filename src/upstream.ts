@@ -38,14 +38,33 @@ export class UpstreamPool implements Upstream {
 	}
 
 	async forward(tool: string, args: Record<string, unknown>, token: string): Promise<CallToolResult> {
-		const client = await this.connect(token);
-		return (await client.callTool({ name: tool, arguments: args })) as CallToolResult;
+		return this.withReconnect(token, (client) => client.callTool({ name: tool, arguments: args }) as Promise<CallToolResult>);
 	}
 
 	/** Fetch upstream tool schemas (owner-independent) to build the advertised catalog. */
 	async listToolsFor(token: string): Promise<Tool[]> {
-		const client = await this.connect(token);
-		const res = await client.listTools();
-		return res.tools;
+		return this.withReconnect(token, async (client) => (await client.listTools()).tools);
+	}
+
+	/**
+	 * Run an upstream op with a single transparent reconnect. The hosted MCP's
+	 * streamable-HTTP session can die server-side (idle-session expiry, upstream
+	 * restart) even though our cached client still looks connected — the next call
+	 * then fails with "invalid session". Rather than surface that first failure to
+	 * the agent (and leave it stuck until the whole broker restarts), evict the dead
+	 * client and retry ONCE with a fresh connection. A genuinely broken call (bad
+	 * token, real upstream error) fails the retry too and propagates.
+	 */
+	private async withReconnect<T>(token: string, op: (client: Client) => Promise<T>): Promise<T> {
+		for (let attempt = 0; ; attempt++) {
+			const client = await this.connect(token);
+			try {
+				return await op(client);
+			} catch (err) {
+				// Evict the (possibly stale) session so this retry / the next call reconnects.
+				this.clients.delete(token);
+				if (attempt >= 1) throw err;
+			}
+		}
 	}
 }

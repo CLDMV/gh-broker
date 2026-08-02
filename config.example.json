@@ -39,6 +39,186 @@
 			"mode": "read"
 		},
 		{
+			"name": "search_pull_requests",
+			"mode": "read"
+		},
+		{
+			"name": "search_repositories",
+			"mode": "read"
+		},
+		{
+			"name": "search_code",
+			"mode": "read"
+		},
+		{
+			"name": "actions_list",
+			"mode": "read"
+		},
+		{
+			"name": "actions_get",
+			"mode": "read"
+		},
+		{
+			"name": "get_job_logs",
+			"mode": "read"
+		},
+		{
+			"name": "list_code_scanning_alerts",
+			"mode": "read"
+		},
+		{
+			"name": "get_code_scanning_alert",
+			"mode": "read"
+		},
+		{
+			"name": "list_dependabot_alerts",
+			"mode": "read"
+		},
+		{
+			"name": "get_dependabot_alert",
+			"mode": "read"
+		},
+		{
+			"name": "list_secret_scanning_alerts",
+			"mode": "read"
+		},
+		{
+			"name": "get_secret_scanning_alert",
+			"mode": "read"
+		},
+		{
+			"name": "get_file_contents",
+			"mode": "read"
+		},
+		{
+			"name": "get_commit",
+			"mode": "read"
+		},
+		{
+			"name": "list_commits",
+			"mode": "read"
+		},
+		{
+			"name": "list_branches",
+			"mode": "read"
+		},
+		{
+			"name": "list_tags",
+			"mode": "read"
+		},
+		{
+			"name": "get_repository_tree",
+			"mode": "read"
+		},
+		{
+			"name": "list_releases",
+			"mode": "read"
+		},
+		{
+			"name": "get_latest_release",
+			"mode": "read"
+		},
+		{
+			"name": "check_dependency_vulnerabilities",
+			"mode": "read"
+		},
+		{
+			"name": "get_code_quality_finding",
+			"mode": "read"
+		},
+		{
+			"name": "get_discussion",
+			"mode": "read"
+		},
+		{
+			"name": "get_discussion_comments",
+			"mode": "read"
+		},
+		{
+			"name": "get_global_security_advisory",
+			"mode": "read"
+		},
+		{
+			"name": "get_label",
+			"mode": "read"
+		},
+		{
+			"name": "get_me",
+			"mode": "read"
+		},
+		{
+			"name": "get_notification_details",
+			"mode": "read"
+		},
+		{
+			"name": "get_release_by_tag",
+			"mode": "read"
+		},
+		{
+			"name": "get_tag",
+			"mode": "read"
+		},
+		{
+			"name": "get_team_members",
+			"mode": "read"
+		},
+		{
+			"name": "get_teams",
+			"mode": "read"
+		},
+		{
+			"name": "list_discussion_categories",
+			"mode": "read"
+		},
+		{
+			"name": "list_discussions",
+			"mode": "read"
+		},
+		{
+			"name": "list_global_security_advisories",
+			"mode": "read"
+		},
+		{
+			"name": "list_notifications",
+			"mode": "read"
+		},
+		{
+			"name": "list_org_repository_security_advisories",
+			"mode": "read"
+		},
+		{
+			"name": "list_repository_collaborators",
+			"mode": "read"
+		},
+		{
+			"name": "list_repository_security_advisories",
+			"mode": "read"
+		},
+		{
+			"name": "projects_get",
+			"mode": "read"
+		},
+		{
+			"name": "projects_list",
+			"mode": "read"
+		},
+		{
+			"name": "search_commits",
+			"mode": "read"
+		},
+		{
+			"name": "search_orgs",
+			"mode": "read"
+		},
+		{
+			"name": "search_users",
+			"mode": "read"
+		},
+		{
+			"name": "semantic_issue_similarity_search",
+			"mode": "read"
+		},
+		{
 			"name": "issue_write",
 			"mode": "write"
 		},
@@ -74,5 +254,6 @@
 			"read": "cred:cldmv-read",
 			"write": "cred:cldmv-write"
 		}
-	}
+	},
+	"defaultOwner": "cldmv"
 }
