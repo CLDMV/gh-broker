@@ -39,6 +39,86 @@
 			"mode": "read"
 		},
 		{
+			"name": "search_pull_requests",
+			"mode": "read"
+		},
+		{
+			"name": "search_repositories",
+			"mode": "read"
+		},
+		{
+			"name": "search_code",
+			"mode": "read"
+		},
+		{
+			"name": "actions_list",
+			"mode": "read"
+		},
+		{
+			"name": "actions_get",
+			"mode": "read"
+		},
+		{
+			"name": "get_job_logs",
+			"mode": "read"
+		},
+		{
+			"name": "list_code_scanning_alerts",
+			"mode": "read"
+		},
+		{
+			"name": "get_code_scanning_alert",
+			"mode": "read"
+		},
+		{
+			"name": "list_dependabot_alerts",
+			"mode": "read"
+		},
+		{
+			"name": "get_dependabot_alert",
+			"mode": "read"
+		},
+		{
+			"name": "list_secret_scanning_alerts",
+			"mode": "read"
+		},
+		{
+			"name": "get_secret_scanning_alert",
+			"mode": "read"
+		},
+		{
+			"name": "get_file_contents",
+			"mode": "read"
+		},
+		{
+			"name": "get_commit",
+			"mode": "read"
+		},
+		{
+			"name": "list_commits",
+			"mode": "read"
+		},
+		{
+			"name": "list_branches",
+			"mode": "read"
+		},
+		{
+			"name": "list_tags",
+			"mode": "read"
+		},
+		{
+			"name": "get_repository_tree",
+			"mode": "read"
+		},
+		{
+			"name": "list_releases",
+			"mode": "read"
+		},
+		{
+			"name": "get_latest_release",
+			"mode": "read"
+		},
+		{
 			"name": "issue_write",
 			"mode": "write"
 		},
