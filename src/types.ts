@@ -41,6 +41,14 @@ export interface Config {
 	upstream: string;
 	tools: ToolRule[];
 	owners: Record<string, OwnerCreds>;
+	/**
+	 * Owner whose READ PAT handles calls that carry no owner in their args —
+	 * the genuinely global/identity reads (global security-advisory DB, `get_me`,
+	 * `list_notifications`). Must be a key of `owners`. Applies to `mode: "read"`
+	 * only; write calls always require an explicit owner. Omit to reject every
+	 * owner-less call (the stricter original behaviour).
+	 */
+	defaultOwner?: string;
 	/** Optional GitHub App — enables `link_issue` (App-token-only mutation). */
 	app?: AppConfig;
 }
