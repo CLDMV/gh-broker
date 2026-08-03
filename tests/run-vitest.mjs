@@ -26,7 +26,7 @@ const code = await run({
 	cwd: root,
 	testDir: "tests",
 	vitestConfig: ".configs/vitest.config.mjs",
-	testFilePattern: /\.test\.mts$/,
+	testFilePattern: /\.test\.vitest\.mts$/,
 	testPatterns,
 	workers,
 	coverageQuiet,
