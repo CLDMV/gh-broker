@@ -271,7 +271,13 @@ jobs:
         github.event.pull_request.head.ref == 'next' ||
         github.event.pull_request.head.ref == 'hotfixes'
       )
-    runs-on: ubuntu-latest
+    # Match the reusable's runner routing (workflow-ci.yml): private CLDMV
+    # repos run on self-hosted cldmv-runners (GitHub-hosted Actions budget is
+    # private-metered and exhausted), public repos use free GitHub-hosted, and
+    # RUNS_ON_DEFAULT overrides. Hardcoding ubuntu-latest here made this
+    # required check fail to provision a runner on private repos once the
+    # reusable moved its own jobs to cldmv-runners in v4.19.1 (see CLDMV/.github#208).
+    runs-on: ${{ vars.RUNS_ON_DEFAULT != '' && vars.RUNS_ON_DEFAULT || ((github.repository_owner == 'CLDMV' && github.event.repository.private) && 'cldmv-runners' || 'ubuntu-latest') }}
     # Pure shell mirror — no GitHub API access. Strip the workflow's
     # write defaults to zero for this job.
     permissions: {}
