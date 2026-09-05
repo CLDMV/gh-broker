@@ -1,7 +1,8 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Config, SecretStore } from "./types.ts";
 import type { UpstreamPool } from "./upstream.ts";
-import { LINK_ISSUE_SCHEMA } from "./verbs/link_issue.ts";
+// DEFERRED: link_issue (addClosingIssueReference) is App-token-only and not wired in — see docs.
+// import { LINK_ISSUE_SCHEMA } from "./verbs/link_issue.ts";
 import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verbs/review_thread.ts";
 
 /**
@@ -42,13 +43,10 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 	const tools: Tool[] = [];
 	for (const rule of config.tools) {
 		if (rule.custom) {
-			if (rule.name === "link_issue") {
-				tools.push({
-					name: "link_issue",
-					description: "Create an explicit PR→issue closing reference (addClosingIssueReference) so the issue auto-closes when the PR's changes reach the default branch. Does not rely on commit-message keywords.",
-					inputSchema: LINK_ISSUE_SCHEMA
-				});
-			} else if (rule.name === "resolve_review_thread") {
+			// DEFERRED: link_issue (App-token-only addClosingIssueReference) is not wired in — see docs.
+			// Intentionally not advertised even if an allowlist entry is added; re-enable by restoring
+			// this branch + the import above + the router dispatch case, then config.app + installationId.
+			if (rule.name === "resolve_review_thread") {
 				tools.push({
 					name: "resolve_review_thread",
 					description:

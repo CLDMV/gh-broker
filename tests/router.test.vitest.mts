@@ -126,23 +126,15 @@ describe("Router.call", () => {
 	});
 
 	describe("custom verbs", () => {
-		it("link_issue dispatches through the App octokit", async () => {
-			graphqlMock.mockResolvedValue({
-				repository: { pullRequest: { id: "PR_1" }, issue: { id: "I_1" } }
-			});
-			const appAuth = { octokitFor: vi.fn(() => ({ graphql: graphqlMock })) };
-			const r = new Router(makeConfig(), secrets as any, upstream as any, appAuth as any);
-			const out = await r.call("link_issue", { owner: "cldmv", repo: "gh-broker", pull: 5, issue: 9 });
-			expect(appAuth.octokitFor).toHaveBeenCalledWith("cldmv");
-			expect(out).toEqual({ content: [{ type: "text", text: "linked: PR PR_1 → issue I_1" }] });
-			expect(upstream.forward).not.toHaveBeenCalled();
-		});
-
-		it("link_issue errors when no App is configured for the owner", async () => {
-			const r = new Router(makeConfig(), secrets as any, upstream as any); // no appAuth
+		it("link_issue is DEFERRED — dispatching it (even if allowlisted) is not implemented", async () => {
+			// The catalog + router hooks for link_issue are commented out (App-token-only,
+			// not wired in). So even with an allowlist entry it never dispatches — it falls
+			// through to the not-implemented default, and never reaches the upstream.
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
 			await expect(r.call("link_issue", { owner: "cldmv", repo: "x", pull: 1, issue: 2 })).rejects.toThrow(
-				/link_issue needs a GitHub App for "cldmv"/
+				/custom verb "link_issue" not implemented/
 			);
+			expect(upstream.forward).not.toHaveBeenCalled();
 		});
 
 		it("resolve_review_thread runs on a write-PAT Octokit", async () => {

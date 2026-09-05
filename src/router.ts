@@ -4,7 +4,8 @@ import type { AppAuth } from "./appauth.ts";
 import { Octokit } from "@octokit/core";
 import { indexTools } from "./config.ts";
 import { audit } from "./audit.ts";
-import { linkIssue, type LinkIssueInput } from "./verbs/link_issue.ts";
+// DEFERRED: link_issue is App-token-only and not wired in — see docs.
+// import { linkIssue, type LinkIssueInput } from "./verbs/link_issue.ts";
 import {
 	resolveReviewThread,
 	replyReviewThread,
@@ -82,14 +83,17 @@ export class Router {
 		token: string
 	): Promise<CallToolResult> {
 		switch (tool) {
-			case "link_issue": {
-				const octokit = this.appAuth?.octokitFor(owner);
-				if (!octokit) {
-					throw new Error(`link_issue needs a GitHub App for "${owner}": set config.app + owners.${owner}.installationId + the app key cred (addClosingIssueReference is App-token-only — not available to fine-grained PATs)`);
-				}
-				const out = await linkIssue(octokit, args as unknown as LinkIssueInput);
-				return { content: [{ type: "text", text: `linked: PR ${out.pullRequestId} → issue ${out.issueId}` }] };
-			}
+			// DEFERRED: link_issue (App-token-only addClosingIssueReference) is not wired in — see docs.
+			// Re-enable by restoring this case + the import above + the catalog block, adding a
+			// link_issue allowlist entry to config, and configuring config.app + owner installationId.
+			// case "link_issue": {
+			// 	const octokit = this.appAuth?.octokitFor(owner);
+			// 	if (!octokit) {
+			// 		throw new Error(`link_issue needs a GitHub App for "${owner}": set config.app + owners.${owner}.installationId + the app key cred (addClosingIssueReference is App-token-only — not available to fine-grained PATs)`);
+			// 	}
+			// 	const out = await linkIssue(octokit, args as unknown as LinkIssueInput);
+			// 	return { content: [{ type: "text", text: `linked: PR ${out.pullRequestId} → issue ${out.issueId}` }] };
+			// }
 			case "resolve_review_thread": {
 				// PAT-usable (Pull requests: write) — run on the resolved write PAT, not the App token.
 				const octokit = new Octokit({ auth: token });
