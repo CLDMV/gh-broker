@@ -68,11 +68,13 @@ The only thing that can't be Node is bootstrapping node itself. So the entrypoin
 1. detect platform + check prerequisites (`socat`, `rsync`, `systemctl`),
 2. **create or confirm the agent user** — hard stop if it can't (no silent warn-and-continue),
 3. ensure node on a stable path + the `/usr/local/bin/node` symlink,
-4. **prompt for PATs** → write the secrets file (`0640 root:gh-broker`),
-5. **regenerate the config** via `merge(example, current)`,
+4. **regenerate the config** via `merge(example, current)`,
+5. **choose the secret backend and store the PATs** — keep existing, migrate a legacy `systemd-creds` token, or take it from `--secrets-file` / env / a prompt (see the Secrets section),
 6. validate the config with the real loader (`node dist/index.mjs --check`),
 7. build + deploy (unit → `/usr/local/bin/node`, `dist/`, config, secrets),
 8. **smoke test** — MCP `initialize` + one real read over the socket → ✅/❌.
+
+The same flow runs **fully unattended** via flags — `--agent-user`, `--secrets-provider`, `--secrets-file` / `GH_BROKER_SECRET_<NAME>`, `--create-agent-user`, `--non-interactive`; prompts are the default when flags are omitted. See [`../deploy/README.md`](../deploy/README.md) and `--help`.
 
 ## What is deliberately deferred
 
