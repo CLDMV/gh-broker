@@ -37,7 +37,7 @@ export function resolveConfigPath(explicit?: string): string {
 	return join(configDir(), "config.json");
 }
 
-/** Resolve the secrets file path: GH_BROKER_SECRETS, then `<configDir>/secrets.json`. */
+/** Resolve the secrets file path: an explicit argument wins, then GH_BROKER_SECRETS, then `<configDir>/secrets.json`. */
 export function resolveSecretsPath(explicit?: string): string {
 	if (explicit) return explicit;
 	if (env.GH_BROKER_SECRETS) return env.GH_BROKER_SECRETS;

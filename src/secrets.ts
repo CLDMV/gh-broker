@@ -44,7 +44,14 @@ function validateRefs(config: Config, read: (name: string) => string): void {
 			read(ref.slice(CRED_PREFIX.length));
 		}
 	}
-	if (config.app && config.app.privateKey.startsWith(CRED_PREFIX)) read(config.app.privateKey.slice(CRED_PREFIX.length));
+	if (config.app) {
+		// The App key is a secret too — it must be a cred: ref, never inlined in the
+		// token-free config. Reject a non-cred ref rather than silently accepting it.
+		if (!config.app.privateKey.startsWith(CRED_PREFIX)) {
+			throw new Error(`secrets: config.app.privateKey must be a "cred:<name>" ref, got "${config.app.privateKey}"`);
+		}
+		read(config.app.privateKey.slice(CRED_PREFIX.length));
+	}
 }
 
 /** systemd-creds provider: read decrypted creds from $CREDENTIALS_DIRECTORY. */

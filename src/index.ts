@@ -18,10 +18,18 @@ async function main(): Promise<void> {
 
 	// --print-paths: emit the resolved config + secrets paths and exit. The
 	// installer uses this so there is one path resolver (src/paths.ts), no drift.
-	// Handled before loadConfig, since the config may not exist yet on first install.
+	// Honor a deployed config's secrets.path override when the config already exists
+	// (upgrades); fall back to the default when it doesn't (first install) or is
+	// unparseable — this must not require a valid config to run.
 	if (process.argv.includes("--print-paths")) {
 		const { resolveSecretsPath } = await import("./paths.ts");
-		console.log(JSON.stringify({ config: configPath, secrets: resolveSecretsPath() }));
+		let secretsOverride: string | undefined;
+		try {
+			secretsOverride = loadConfig(configPath).secrets?.path;
+		} catch {
+			secretsOverride = undefined;
+		}
+		console.log(JSON.stringify({ config: configPath, secrets: resolveSecretsPath(secretsOverride) }));
 		return;
 	}
 

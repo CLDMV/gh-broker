@@ -68,7 +68,7 @@ export interface Config {
 	defaultOwner?: string;
 	/** Optional GitHub App — enables `link_issue` (App-token-only mutation). */
 	app?: AppConfig;
-	/** Optional secret-store backend selection. Defaults to the file provider. */
+	/** Optional secret-store backend selection. Defaults to the systemd-creds provider. */
 	secrets?: SecretsConfig;
 }
 

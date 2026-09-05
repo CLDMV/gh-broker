@@ -9,9 +9,10 @@ Type=simple
 User=gh-broker
 Group=gh-broker
 
-# Secrets: the daemon reads PATs from an agent-unreadable secrets file (0640
-# root:gh-broker inside a 0750 dir) via the config's cred: refs — no systemd
-# credential delivery, no machine-bound store. See secrets.ts / docs/deploy-architecture.md.
+# Secrets: the daemon resolves the config's cred: refs via the provider chosen at
+# install — systemd-creds (a unit drop-in adds LoadCredentialEncrypted, delivering
+# creds into $CREDENTIALS_DIRECTORY) or an agent-unreadable file (0640 root:gh-broker).
+# See secrets.ts / docs/deploy-architecture.md.
 
 # Socket dir /run/gh-broker (traversable), owned by the service user; the daemon
 # creates the socket there and sets it 0660 group=gh-broker-clients so the agent

@@ -82,6 +82,13 @@ describe("loadSecretStore (file provider)", () => {
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
 		expect(() => loadSecretStore(config(undefined, { secrets: { provider: "vault", path: SECRETS } }))).toThrow(/unknown provider/);
 	});
+
+	it("rejects a non-cred config.app.privateKey (would inline a secret in the config)", () => {
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		expect(() => loadSecretStore(config(undefined, { app: { appId: 1, privateKey: "-----BEGIN PRIVATE KEY-----" } }))).toThrow(
+			/config.app.privateKey must be a "cred:<name>" ref/
+		);
+	});
 });
 
 describe("loadSecretStore (systemd-creds provider, the default)", () => {
