@@ -9,10 +9,9 @@ Type=simple
 User=gh-broker
 Group=gh-broker
 
-# PATs are delivered ENCRYPTED and decrypted into $CREDENTIALS_DIRECTORY at
-# start — in the service's memory only, never on an agent-readable path.
-LoadCredentialEncrypted=cldmv-read:/etc/gh-broker/creds/cldmv-read.cred
-LoadCredentialEncrypted=cldmv-write:/etc/gh-broker/creds/cldmv-write.cred
+# Secrets: the daemon reads PATs from an agent-unreadable secrets file (0640
+# root:gh-broker inside a 0750 dir) via the config's cred: refs — no systemd
+# credential delivery, no machine-bound store. See secrets.ts / docs/deploy-architecture.md.
 
 # Socket dir /run/gh-broker (traversable), owned by the service user; the daemon
 # creates the socket there and sets it 0660 group=gh-broker-clients so the agent
@@ -20,13 +19,11 @@ LoadCredentialEncrypted=cldmv-write:/etc/gh-broker/creds/cldmv-write.cred
 RuntimeDirectory=gh-broker
 RuntimeDirectoryMode=0755
 
-# Node comes from the SYSTEM-WIDE nvm (/usr/local/nvm), resolved at start from
-# its `default` alias by launch.sh — so no node version is pinned here and
-# bumping node needs no edit to this unit. The service is jailed (ProtectHome),
-# so a /home ~/.nvm is unreachable by design; NVM_DIR must point at the shared
-# system install. (/usr/bin/node is too old — v18 here.)
-Environment=NVM_DIR=/usr/local/nvm
-ExecStart=/opt/gh-broker/launch.sh /opt/gh-broker/dist/index.mjs --config /etc/gh-broker/config.json
+# Node comes from the maintained /usr/local/bin/node symlink (the installer points
+# it at the chosen node and re-points it on a bump), so no node version is pinned
+# here and there is no nvm resolution at start. The symlink is the single source of
+# truth, so CLI node == service node by construction. See docs/deploy-architecture.md.
+ExecStart=/usr/local/bin/node /opt/gh-broker/dist/index.mjs --config /etc/gh-broker/config.json
 Restart=on-failure
 RestartSec=2
 
