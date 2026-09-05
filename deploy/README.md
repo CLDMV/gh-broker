@@ -37,6 +37,18 @@ sudo node deploy/install.mjs [agent-user]
 9. installs the unit, deploys `dist/`, restarts, and
 10. runs a **smoke test** (MCP handshake + a real read over the socket) → ✅/❌.
 
+### Unattended (single non-interactive command)
+
+Pass flags plus `--non-interactive` (`-y`) to skip every prompt: `--agent-user <name>`, `--secrets-provider systemd-creds|file`, `--create-agent-user`, and supply tokens via `--secrets-file <json>` (`{ "<cred-name>": "<token>" }`) or env `GH_BROKER_SECRET_<NAME>` (NAME upper-cased, non-alnum → `_`). Example:
+
+```sh
+sudo GH_BROKER_SECRET_CLDMV_READ=… GH_BROKER_SECRET_CLDMV_WRITE=… \
+  /usr/local/bin/node deploy/install.mjs --agent-user repo \
+  --secrets-provider systemd-creds --non-interactive
+```
+
+Migrating an existing `systemd-creds` install needs **no tokens** — `--secrets-provider systemd-creds --non-interactive` keeps the existing `.cred` files (nothing to prompt). `--help` lists every flag.
+
 **Upgrade** is just re-running it: config merged (edits kept), your previously-chosen storage backend pre-selected, existing tokens kept. You can **switch backends** on any run — pick `file` and it decrypts the existing `systemd-creds` tokens into the file (no re-entry); pick `systemd-creds` and it encrypts the tokens into `.cred` files. `launch.sh` is no longer used — remove it after a successful run: `sudo rm -f /opt/gh-broker/launch.sh` (and `sudo rm -rf /etc/gh-broker/creds` only if you've moved fully to the `file` backend).
 
 ## Credential storage — your choice
