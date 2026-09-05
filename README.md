@@ -15,7 +15,7 @@ A small daemon (this package) runs as a dedicated **`gh-broker` system user** an
 - exposes a **config-driven, default-deny** toolset — mostly **proxied** to GitHub's hosted MCP (which already does labels, type, issue fields, dedup), plus **custom verbs** for gaps the hosted MCP has no tool for: `link_issue` (the explicit `addClosingIssueReference` closing link, App-token-only), and `resolve_review_thread` / `reply_review_thread` (resolve or reply to a PR review thread — e.g. Copilot's comments — via the `resolveReviewThread` / `addPullRequestReviewThreadReply` GraphQL mutations, which run on the write PAT);
 - talks to the agent over a **Unix socket** (bytes only; no token crosses).
 
-The agent (uid 1003, rootless docker, no passwordless sudo — verified) cannot read another user's mode-0400 secrets, so the boundary is real.
+The agent (uid 1003, rootless docker, no passwordless sudo — verified) cannot read another user's mode-0400 secrets, so the boundary is real. The **agent-as-separate-user** model — the users, the bridge group, and the permissions that make the boundary real, as a reproducible example setup — is documented in [`docs/agent-user-model.md`](docs/agent-user-model.md).
 
 Full design + threat model: `~/.claude/designs/github-mcp-broker.md`.
 
@@ -35,8 +35,12 @@ src/
   audit.ts          structured audit log (never tokens)
 deploy/
   provision.sh      Phase 0 — RUN AS ROOT (user/creds/unit)
+  deploy-app.sh     the single deploy path — sync unit/config/launcher/dist + restart (root)
+  launch.sh         node launcher — resolves node from the system nvm's `default` alias
   gh-broker.service systemd unit (hardened)
-  README.md         PAT scopes + build/deploy/wiring
+  README.md         prerequisites (nvm) + PAT scopes + build/deploy/wiring
+docs/
+  agent-user-model.md   the agent-as-separate-user isolation model (example setup)
 config.example.json
 ```
 
