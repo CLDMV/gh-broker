@@ -15,8 +15,10 @@ systemctl daemon-reload
 # in the repo to change the allowlist or add an org.
 install -o root -g gh-broker -m 0640 "$SRC/config.example.json" /etc/gh-broker/config.json
 
-# Deploy the bundled app.
+# Deploy the bundled app + the node launcher (resolves node from nvm's `default`
+# alias at start, so the unit pins no node version).
 install -d -o gh-broker -g gh-broker -m 0755 /opt/gh-broker
+install -o gh-broker -g gh-broker -m 0755 "$SRC/deploy/launch.sh" /opt/gh-broker/launch.sh
 rsync -a --delete "$SRC/dist/" /opt/gh-broker/dist/
 chown -R gh-broker:gh-broker /opt/gh-broker
 

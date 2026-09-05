@@ -20,9 +20,13 @@ LoadCredentialEncrypted=cldmv-write:/etc/gh-broker/creds/cldmv-write.cred
 RuntimeDirectory=gh-broker
 RuntimeDirectoryMode=0755
 
-# System-wide node >=20 (the service can't use a /home nvm — ProtectHome blocks it;
-# /usr/bin/node is v18 here). Version-pinned; update this line if you bump node.
-ExecStart=/usr/local/nvm/versions/node/v26.4.0/bin/node /opt/gh-broker/dist/index.mjs --config /etc/gh-broker/config.json
+# Node comes from the SYSTEM-WIDE nvm (/usr/local/nvm), resolved at start from
+# its `default` alias by launch.sh — so no node version is pinned here and
+# bumping node needs no edit to this unit. The service is jailed (ProtectHome),
+# so a /home ~/.nvm is unreachable by design; NVM_DIR must point at the shared
+# system install. (/usr/bin/node is too old — v18 here.)
+Environment=NVM_DIR=/usr/local/nvm
+ExecStart=/opt/gh-broker/launch.sh /opt/gh-broker/dist/index.mjs --config /etc/gh-broker/config.json
 Restart=on-failure
 RestartSec=2
 

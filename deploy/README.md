@@ -1,6 +1,49 @@
 # Deploying gh-broker
 
-Phase 0 (provisioning) runs as **root** and is the only privileged step. Everything else runs as the unprivileged dev user.
+Phase 0 (provisioning) runs as **root** and is the only privileged step. Everything else runs as the unprivileged dev user. Section 0 below is the host prerequisites — do it once per machine before provisioning.
+
+The broker is designed to run as a **dedicated service user, separate from the unprivileged user the agent runs as** — that two-user split is the security boundary. The users, the bridge group, and the permissions that enforce it are documented, with a reproducible example setup, in [`../docs/agent-user-model.md`](../docs/agent-user-model.md). Read it before choosing which user your agent runs as (§2 wires that user into the socket's bridge group).
+
+## 0. Host prerequisites
+
+A systemd host with `systemd-creds` (systemd ≥ 250) for the encrypted credential store, plus these tools on `PATH`: `git`, `rsync`, `socat` (the agent's stdio↔socket bridge), and `npm` for the build. Install whatever's missing from the distro (`apt install socat rsync git` etc.).
+
+### Node — one system-wide nvm, shared by the CLI and the jailed service
+
+The broker runs jailed: service user `gh-broker`, `--home-dir /nonexistent`, and `ProtectHome=true` in the unit. Two consequences drive the whole node setup:
+
+- A per-user nvm under `/home` (`~/.nvm`) is **invisible** to the service — `ProtectHome` masks `/home` by design.
+- There is **no login shell** at service start, so nvm's usual PATH shim (`nvm use` rewriting `$PATH`) never runs — the service can't just "find node on PATH."
+
+The fix is a **single system-wide nvm at `/usr/local/nvm`** (`NVM_DIR`), owned by root and world-readable, with a `default` alias. Both the interactive CLI user and the service resolve node from that same install, so the CLI's `node` and the service's `node` are the **same binary** — bump one and both move. No node version is pinned anywhere:
+
+- The **service** gets `NVM_DIR=/usr/local/nvm` from the unit and runs `deploy/launch.sh`, which sources the system nvm and execs `nvm which default`. Bump node with `nvm install --lts` / `nvm alias default <ver>` (or just install a newer one — `default` tracks `node`, the latest installed) and the next `systemctl restart gh-broker` picks it up. Nothing to edit.
+- The **interactive users** (every human account) should resolve node from the *same* install so nothing drifts. Do this **server-wide**, not by editing one person's `~/.bashrc` — a per-user rc edit fixes only that one account, and a personal `export NVM_DIR="$HOME/.nvm"` block in someone's rc will *shadow* the shared install for them. Two root steps cover every shell:
+
+  ```sh
+  # a) every login shell gets the shared nvm (and the `nvm` command itself)
+  sudo tee /etc/profile.d/nvm.sh >/dev/null <<'EOF'
+  export NVM_DIR=/usr/local/nvm
+  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+  EOF
+
+  # b) point the system node/npm/npx at the shared nvm, so EVERY shell (login or
+  #    not) gets the same binary on PATH via /usr/local/bin
+  ver="$(NVM_DIR=/usr/local/nvm bash -c '. "$NVM_DIR/nvm.sh" --no-use && nvm version default')"
+  for b in node npm npx; do sudo ln -sfn "/usr/local/nvm/versions/node/$ver/bin/$b" "/usr/local/bin/$b"; done
+  ```
+
+  Then, on any account that *already* sources a personal `~/.nvm` in its rc (it overrides the shared install for that user), remove that block — in that user's own shell: `grep -nE 'HOME/\.nvm|\.nvm/nvm\.sh' ~/.bashrc` and delete the matches; optionally `rm -rf ~/.nvm`. Afterward `readlink -f "$(which node)"` and `nvm which default` should print the same `/usr/local/nvm/versions/node/<ver>/bin/node` for every user and the service.
+
+Install nvm system-wide (once, as root — node ≥ 20 is required; the daemon targets node20):
+
+```sh
+export NVM_DIR=/usr/local/nvm
+sudo git clone https://github.com/nvm-sh/nvm.git "$NVM_DIR"
+sudo bash -c '. "'"$NVM_DIR"'/nvm.sh" && nvm install --lts && nvm alias default node'
+```
+
+> **Pitfall (don't do this):** a `/usr/local/bin/node` symlink pointing into a user's home — e.g. `→ /home/<user>/.nvm/.../bin/node` — is **unusable by the jailed service** (ProtectHome masks `/home`) and ties the whole machine to one person's personal nvm. The service resolves node itself via `NVM_DIR`, so it doesn't need such a symlink. If you want a stable `/usr/local/bin/node` for humans, point it at the *system* nvm (`/usr/local/nvm/versions/node/<ver>/bin/node`), never a home dir.
 
 ## 1. Mint the two CLDMV fine-grained PATs
 
@@ -34,17 +77,15 @@ sudo ./deploy/provision.sh repo   # arg = the user your agent runs as
 
 It creates the `gh-broker` service user, `gh-broker-clients` group (adds `repo`), `/etc/gh-broker/{config.json,creds}`, encrypts both PATs with `systemd-creds` (paste each when prompted — input hidden, never hits disk/plaintext/history), and installs + enables the unit. It does **not** start the service yet.
 
-## 3. Build + deploy the app (dev user, then a root copy)
+## 3. Build + deploy (one command)
 
 ```sh
-npm ci && npm run build
-sudo rsync -a --delete dist/ /opt/gh-broker/dist/
-sudo chown -R gh-broker:gh-broker /opt/gh-broker
-sudo systemctl start gh-broker
+npm ci && npm run build          # as your dev user
+sudo ./deploy/deploy-app.sh      # root: unit + config + launcher + dist, then restart
 systemctl status gh-broker --no-pager
 ```
 
-The unit runs the system-wide nvm node at `/usr/local/nvm/versions/node/v26.4.0/bin/node` (v18 at `/usr/bin/node` is too old, and `ProtectHome` blocks any `/home` nvm). If you bump node, update the `ExecStart` line.
+`deploy/deploy-app.sh` is the **single** deploy path — first deploy and every redeploy. It syncs the systemd unit, the config (from the committed `config.example.json`, the source of truth for the allowlist), the node launcher, and the built `dist/` to `/opt/gh-broker`, then restarts and tails the log. (The GitHub-App section below re-runs this same script — there is no separate manual copy step.)
 
 ## 4. Point Claude at the broker
 
@@ -58,11 +99,11 @@ The agent connects over the Unix socket via a stdio bridge (bytes only; no token
 }
 ```
 
-(Install `socat` if absent. A re-login is needed after provisioning so `repo`'s `gh-broker-clients` membership is active.) Then reload Claude and retire the old single-org `github-readonly` server.
+(`socat` is in the prerequisites above. A re-login is needed after provisioning so `repo`'s `gh-broker-clients` membership is active.) Then reload Claude and retire the old single-org `github-readonly` server.
 
 ## Adding an org later
 
-Mint `<org>-read` / `<org>-write` PATs, `systemd-creds encrypt` them into `/etc/gh-broker/creds/`, add an `owners` entry to `/etc/gh-broker/config.json`, `LoadCredentialEncrypted` lines to the unit, and `systemctl restart gh-broker`. No code or agent changes.
+Mint `<org>-read` / `<org>-write` PATs, `systemd-creds encrypt` them into `/etc/gh-broker/creds/`, add an `owners` entry to `config.example.json` (redeploy syncs it), `LoadCredentialEncrypted` lines to the unit, and `sudo ./deploy/deploy-app.sh`. No code or agent changes.
 
 ## Enabling `link_issue` (GitHub App)
 
