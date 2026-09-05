@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // secrets.ts reads the JSON secrets file via node:fs.readFileSync.
 vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
@@ -10,7 +10,7 @@ const mockRead = vi.mocked(readFileSync);
 const SECRETS = "/x/secrets.json";
 
 function config(owners: Record<string, unknown> = { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } }, extra: Record<string, unknown> = {}): any {
-	return { listen: "unix:/x", upstream: "https://x", tools: [], owners, secrets: { path: SECRETS }, ...extra };
+	return { listen: "unix:/x", upstream: "https://x", tools: [], owners, secrets: { provider: "file", path: SECRETS }, ...extra };
 }
 
 /**
@@ -81,5 +81,44 @@ describe("loadSecretStore (file provider)", () => {
 	it("rejects an unknown provider", () => {
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
 		expect(() => loadSecretStore(config(undefined, { secrets: { provider: "vault", path: SECRETS } }))).toThrow(/unknown provider/);
+	});
+});
+
+describe("loadSecretStore (systemd-creds provider, the default)", () => {
+	const CREDS = "/run/creds";
+	const original = process.env.CREDENTIALS_DIRECTORY;
+	function scConfig(): any {
+		return {
+			listen: "unix:/x",
+			upstream: "https://x",
+			tools: [],
+			owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
+			secrets: { provider: "systemd-creds" }
+		};
+	}
+
+	beforeEach(() => {
+		mockRead.mockReset();
+		process.env.CREDENTIALS_DIRECTORY = CREDS;
+	});
+	afterEach(() => {
+		if (original === undefined) delete process.env.CREDENTIALS_DIRECTORY;
+		else process.env.CREDENTIALS_DIRECTORY = original;
+	});
+
+	it("throws when $CREDENTIALS_DIRECTORY is unset", () => {
+		delete process.env.CREDENTIALS_DIRECTORY;
+		expect(() => loadSecretStore(scConfig())).toThrow(/\$CREDENTIALS_DIRECTORY unset/);
+	});
+
+	it("resolves creds from $CREDENTIALS_DIRECTORY, stripping a trailing newline", () => {
+		mockRead.mockImplementation((p: any) => {
+			if (String(p).endsWith("cldmv-read")) return "rtok\n" as any;
+			if (String(p).endsWith("cldmv-write")) return "wtok" as any;
+			throw new Error(`ENOENT: ${p}`);
+		});
+		const store = loadSecretStore(scConfig());
+		expect(store.resolve("cred:cldmv-read")).toBe("rtok");
+		expect(store.resolve("cred:cldmv-write")).toBe("wtok");
 	});
 });

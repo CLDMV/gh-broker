@@ -68,3 +68,16 @@ export async function confirm(question) {
 	const a = await promptLine(`${question} [y/N] `);
 	return /^y(es)?$/i.test(a);
 }
+
+/**
+ * Present numbered options ({ key, label }) and return the chosen key.
+ * Empty input picks the 1-based default `def`.
+ */
+export async function choose(question, options, def = 1) {
+	stdout.write(`${question}\n`);
+	options.forEach((o, i) => stdout.write(`  ${i + 1}) ${o.label}\n`));
+	const a = await promptLine(`Choose [${def}]: `);
+	const n = a === "" ? def : parseInt(a, 10);
+	const idx = Number.isInteger(n) && n >= 1 && n <= options.length ? n - 1 : def - 1;
+	return options[idx].key;
+}

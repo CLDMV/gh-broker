@@ -10,7 +10,7 @@ The hosted GitHub MCP authenticates with one token per server, so multi-org mean
 
 A small daemon (this package) runs as a dedicated **`gh-broker` system user** and:
 
-- holds per-org **read-scoped** and **write-scoped** fine-grained PATs, read from an agent-unreadable secrets file (via `cred:` references in a token-free config) into memory only;
+- holds per-org **read-scoped** and **write-scoped** fine-grained PATs, read from an agent-unreadable secret store — `systemd-creds` (encrypted at rest, default) or a plaintext file, chosen at install — via `cred:` references in a token-free config, into memory only;
 - routes the right PAT by **repo owner + read/write mode** on each call;
 - exposes a **config-driven, default-deny** toolset — mostly **proxied** to GitHub's hosted MCP (which already does labels, type, issue fields, dedup), plus **custom verbs** for gaps the hosted MCP has no tool for: `resolve_review_thread` / `reply_review_thread` (resolve or reply to a PR review thread — e.g. Copilot's comments — via the `resolveReviewThread` / `addPullRequestReviewThreadReply` GraphQL mutations, which run on the write PAT). A third verb, `link_issue` (the App-token-only `addClosingIssueReference` closing link), is implemented but currently **deferred** — not advertised or callable; see [`deploy/README.md`](deploy/README.md#enabling-link_issue-github-app--deferred);
 - talks to the agent over a **Unix socket** (bytes only; no token crosses).

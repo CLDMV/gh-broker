@@ -87,6 +87,36 @@ export function trySystemdCredDecrypt(name, credFile) {
 	}
 }
 
+/** Encrypt a token into a host-bound `.cred` (systemd-creds), 0400 root:root. */
+export function systemdCredsEncrypt(name, plaintext, credFile) {
+	run("systemd-creds", ["encrypt", `--name=${name}`, "-", credFile], { input: plaintext });
+	chmodSync(credFile, 0o400);
+	chownSync(credFile, 0, 0);
+}
+
+/** Ensure the creds dir exists (0750 root:group) for the systemd-creds provider. */
+export function ensureCredsDir(configDir, svcGroup) {
+	mkdirp(join(configDir, "creds"), 0o750, 0, gidOf(svcGroup));
+}
+
+/** Write a unit drop-in with LoadCredentialEncrypted lines for the given creds, and reload. */
+export function writeCredsDropin(names, credsDir, unitName = "gh-broker.service") {
+	const dir = `/etc/systemd/system/${unitName}.d`;
+	mkdirp(dir, 0o755, 0, 0);
+	const lines = ["[Service]", ...names.map((n) => `LoadCredentialEncrypted=${n}:${join(credsDir, `${n}.cred`)}`), ""];
+	writeFileSync(join(dir, "creds.conf"), lines.join("\n"), { mode: 0o644 });
+	run("systemctl", ["daemon-reload"]);
+}
+
+/** Remove the creds drop-in (used when switching to the file provider), and reload. */
+export function removeCredsDropin(unitName = "gh-broker.service") {
+	const f = `/etc/systemd/system/${unitName}.d/creds.conf`;
+	if (existsSync(f)) {
+		rmSync(f, { force: true });
+		run("systemctl", ["daemon-reload"]);
+	}
+}
+
 /** Point /usr/local/bin/{node,npm,npx} at the given node binary's dir (the single indirection). */
 export function pointNodeSymlinks(nodeBin) {
 	const binDir = dirname(nodeBin);

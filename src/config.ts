@@ -75,10 +75,12 @@ export function loadConfig(path: string): Config {
 	if (c.secrets !== undefined) {
 		if (typeof c.secrets !== "object" || c.secrets === null) throw new Error("config.secrets: must be an object");
 		const s = c.secrets as Record<string, unknown>;
-		if (s.provider !== undefined && s.provider !== "file") throw new Error('config.secrets.provider: only "file" is supported');
+		if (s.provider !== undefined && s.provider !== "file" && s.provider !== "systemd-creds") {
+			throw new Error('config.secrets.provider: must be "systemd-creds" or "file"');
+		}
 		if (s.path !== undefined && typeof s.path !== "string") throw new Error("config.secrets.path: must be a string");
 		secrets = {
-			...(s.provider === "file" ? { provider: "file" as const } : {}),
+			...(s.provider === "file" || s.provider === "systemd-creds" ? { provider: s.provider } : {}),
 			...(typeof s.path === "string" ? { path: s.path } : {})
 		};
 	}

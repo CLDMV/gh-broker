@@ -24,13 +24,16 @@ The merge is **field-level**, because the two halves have different owners:
 
 So an upgrade brings new defaults and allowlist changes through the example, while everything the operator configured survives. Nothing is blindly clobbered.
 
-## Secrets: separate, local, agent-unreadable — not a machine-bound store
+## Secrets: separate, agent-unreadable, and the storage backend is the operator's choice
 
-Secrets never live in the config. The daemon runs as the `gh-broker` service user and reads tokens from a **secrets file** the agent user cannot read — the same filesystem boundary that already protects the config (`0640 root:gh-broker` inside a `0750` dir; the agent is not in the `gh-broker` group). The `cred:<name>` references in the config resolve against this file.
+Secrets never live in the config — the config carries only `cred:<name>` references. The tokens live in a separate store the agent user cannot read, behind a **provider seam** (`config.secrets.provider`) the installer sets from a prompt. Two providers ship:
 
-This **replaces `systemd-creds`**. `systemd-creds` is Linux/systemd-only and, worse, machine-bound — a `.cred` is encrypted to that box's key and can't be moved — which fights both portability and platform-neutrality. The secrets file is a plain, platform-neutral mechanism behind a small **provider seam** (`config.secrets.provider`, default `file`), so an OS-keychain / DPAPI / encrypted-vault provider can be added later without touching the daemon's call sites.
+- **`systemd-creds`** (default, recommended on Linux): tokens are encrypted with a host/TPM-bound key as `.cred` files, delivered by a unit drop-in (`LoadCredentialEncrypted`) into a memory-only `$CREDENTIALS_DIRECTORY` at start. **Encrypted at rest** and resistant to backups/disk theft (the key isn't beside the ciphertext); not portable to another machine.
+- **`file`**: a JSON `{ "<name>": "<token>" }` map at `0640 root:gh-broker` inside the `0750` config dir. **Portable and platform-neutral**; at-rest protection is filesystem permissions only (plaintext on disk).
 
-Secrets are per-machine and never travel — so the portable artifact is the token-free config, and the secrets stay local. On a **fresh** install the operator enters each PAT once. On an **in-place migration** from the legacy `systemd-creds` store, the installer decrypts the host-bound `.cred` files (as root, same host) straight into the new secrets file — no re-entry; it prompts only for tokens it can't find. The agent-read protection is filesystem perms, exactly as before; what changed is that the store is a portable-shaped, platform-neutral file instead of a machine-bound systemd blob.
+The **agent-read boundary is identical either way** — it's filesystem permissions (the agent isn't in the `gh-broker` group), not encryption. The choice trades *at-rest protection* (systemd-creds) against *portability* (file); it does not weaken the agent boundary. This is a genuine trade because the daemon must auto-start, so any decryption key must be available without a human at boot — which only a host/TPM-bound key (systemd-creds) achieves without leaving the key beside the ciphertext.
+
+The installer moves tokens between backends without re-entry where it can: switching to `file` decrypts the existing host-bound `.cred` files (as root, same host) into the JSON; switching to `systemd-creds` encrypts the tokens into `.cred` files. It prompts only for tokens it can't find. Further providers (OS keychain, DPAPI, encrypted vault) slot into the same seam without touching the daemon's call sites.
 
 ## Paths: resolved, not hardcoded
 

@@ -37,14 +37,16 @@ export interface AppConfig {
 }
 
 /**
- * Where the actual token values live. A provider seam: only "file" is
- * implemented today (a JSON `{ "<name>": "<token>" }` map the daemon reads from
- * an agent-unreadable path); an OS-keychain / DPAPI / encrypted-vault provider
- * can be added without touching call sites. Omit to use the file provider at the
- * platform-default secrets path.
+ * Where the actual token values live — chosen at install time. A provider seam:
+ *   - "systemd-creds" (default): encrypted, host-bound `.cred` files via
+ *     LoadCredentialEncrypted → $CREDENTIALS_DIRECTORY (encrypted at rest, not portable).
+ *   - "file": a JSON `{ "<name>": "<token>" }` map at an agent-unreadable path
+ *     (plaintext at rest, portable, platform-neutral).
+ * Further providers (OS keychain, DPAPI, encrypted vault) can be added here
+ * without touching call sites. Omit to use the systemd-creds provider.
  */
 export interface SecretsConfig {
-	provider?: "file";
+	provider?: "systemd-creds" | "file";
 	/** For provider "file": path to the JSON secrets file. Defaults to <configDir>/secrets.json. */
 	path?: string;
 }

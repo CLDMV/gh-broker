@@ -26,16 +26,21 @@ async function main(): Promise<void> {
 	}
 
 	const config = loadConfig(configPath);
-	const secrets = loadSecretStore(config); // eagerly validates every referenced credential
 
-	// --check: validate that the config parses and every referenced credential
-	// resolves, then exit WITHOUT starting the server. The installer runs this to
-	// fail an install/upgrade early on a bad config instead of at service start.
+	// --check: validate the config parses (and, where possible, that credentials
+	// resolve), then exit WITHOUT starting the server. The installer runs this to
+	// fail an install/upgrade early. The file provider validates here; the
+	// systemd-creds provider can only resolve under systemd (needs
+	// $CREDENTIALS_DIRECTORY), so it's checked at service start / by the smoke test.
 	if (process.argv.includes("--check")) {
-		console.log(JSON.stringify({ event: "config-ok", config: configPath, owners: Object.keys(config.owners), tools: config.tools.length }));
+		const provider = config.secrets?.provider ?? "systemd-creds";
+		const secretsChecked = provider === "file" || process.env.CREDENTIALS_DIRECTORY !== undefined;
+		if (secretsChecked) loadSecretStore(config);
+		console.log(JSON.stringify({ event: "config-ok", config: configPath, provider, secretsChecked, owners: Object.keys(config.owners), tools: config.tools.length }));
 		return;
 	}
 
+	const secrets = loadSecretStore(config); // eagerly validates every referenced credential
 	const upstream = new UpstreamPool(config);
 
 	// Optional GitHub App (for link_issue). Non-fatal: a misconfigured App disables

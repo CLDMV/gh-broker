@@ -17,9 +17,9 @@ import {
 	ensureServiceUser, createAgentUser, addUserToGroup,
 	pointNodeSymlinks, currentNodeBin, ensureDirs, installUnit,
 	enableService, restartService, serviceActive, deployDist, writeConfigFile,
-	trySystemdCredDecrypt
+	trySystemdCredDecrypt, systemdCredsEncrypt, ensureCredsDir, writeCredsDropin, removeCredsDropin
 } from "./lib/system.mjs";
-import { promptLine, promptHidden, confirm } from "./lib/prompt.mjs";
+import { promptLine, promptHidden, confirm, choose } from "./lib/prompt.mjs";
 import { mergeConfig } from "./lib/config-merge.mjs";
 import { writeSecretsFile, readSecretsFile, referencedCredNames } from "./lib/secret-store.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
@@ -100,30 +100,57 @@ async function main() {
 	const current = readJson(paths.config); // null on first install
 	const merged = mergeConfig(example, current);
 
-	// --- secrets: keep existing, prompt only for the missing ones ---
+	// --- secrets: operator chooses the backend, then tokens are stored in it ---
 	step("secrets");
-	const existing = readSecretsFile(paths.secrets);
-	const legacyCredsDir = join(configDir, "creds"); // old systemd-creds location, if migrating
 	const needed = referencedCredNames(merged);
-	const secrets = { ...existing };
-	const missing = needed.filter((n) => !secrets[n]);
-	if (missing.length === 0) {
-		log(`  all ${needed.length} referenced credential(s) already present — keeping them`);
-	} else {
-		for (const name of missing) {
-			// Migrate a legacy systemd-creds token in place if we can decrypt it; else prompt.
-			const migrated = trySystemdCredDecrypt(name, join(legacyCredsDir, `${name}.cred`));
-			if (migrated) {
-				secrets[name] = migrated;
-				log(`  ${name}: migrated from systemd-creds`);
-			} else {
-				const val = await promptHidden(`  ${name} (input hidden): `);
-				if (!val) die(`empty value for "${name}"`);
-				secrets[name] = val;
-			}
+	const existingFile = readSecretsFile(paths.secrets); // {} if none
+	const credsDir = join(configDir, "creds"); // systemd-creds location
+	const priorProvider = merged.secrets?.provider ?? "systemd-creds";
+	const provider = await choose(
+		"How should the PAT credentials be stored at rest?",
+		[
+			{ key: "systemd-creds", label: "systemd-creds — encrypted, host-bound (recommended; Linux/systemd)" },
+			{ key: "file", label: "file — plaintext JSON 0640 root:gh-broker (portable, platform-neutral)" }
+		],
+		priorProvider === "file" ? 2 : 1
+	);
+	merged.secrets = { provider, ...(merged.secrets?.path ? { path: merged.secrets.path } : {}) };
+
+	// Resolve each token's plaintext (existing file → decrypt legacy .cred → prompt),
+	// but only when we actually need it (see per-provider handling below).
+	const resolveToken = async (name) => {
+		if (existingFile[name]) return existingFile[name];
+		const dec = trySystemdCredDecrypt(name, join(credsDir, `${name}.cred`));
+		if (dec) {
+			log(`  ${name}: migrated from systemd-creds`);
+			return dec;
 		}
+		const entered = await promptHidden(`  ${name} (input hidden): `);
+		if (!entered) die(`empty value for "${name}"`);
+		return entered;
+	};
+
+	if (provider === "systemd-creds") {
+		ensureCredsDir(configDir, SVC_GROUP);
+		for (const name of needed) {
+			const credFile = join(credsDir, `${name}.cred`);
+			// Keep an existing encrypted cred as-is; otherwise get the plaintext and encrypt it.
+			if (existsSync(credFile) && !existingFile[name]) {
+				log(`  ${name}: existing systemd-creds kept`);
+				continue;
+			}
+			systemdCredsEncrypt(name, await resolveToken(name), credFile);
+			log(`  ${name}: encrypted (systemd-creds)`);
+		}
+		writeCredsDropin(needed, credsDir);
+	} else {
+		const tokens = { ...existingFile };
+		for (const name of needed) {
+			if (!tokens[name]) tokens[name] = await resolveToken(name);
+		}
+		writeSecretsFile(paths.secrets, tokens, { gid: gidOf(SVC_GROUP) });
+		removeCredsDropin(); // no systemd-creds delivery under the file provider
 	}
-	writeSecretsFile(paths.secrets, secrets, { gid: gidOf(SVC_GROUP) });
 	writeConfigFile(paths.config, merged, SVC_GROUP);
 
 	// --- validate with the real loader before deploying ---

@@ -32,12 +32,21 @@ sudo node deploy/install.mjs [agent-user]
 4. points `/usr/local/bin/node` at the running node,
 5. builds `dist/` if it isn't already built,
 6. regenerates the config by **merging** `config.example.json` with whatever is deployed (your data is preserved; new keys/allowlist changes from the repo arrive),
-7. **migrates existing tokens in place** — decrypts any legacy `systemd-creds` (`/etc/gh-broker/creds/<name>.cred`, host-bound, decrypted as root), keeps any already in the secrets file, and **prompts only for what it can't find** (input hidden) — then writes the secrets file `0640 root:gh-broker`,
+7. **asks how to store the credentials** — `systemd-creds` (encrypted at rest, host-bound; recommended) or a plaintext `file` (`0640 root:gh-broker`; portable) — then stores the tokens in the chosen backend: it keeps existing creds, decrypts a legacy `systemd-creds` token when you switch to `file`, and **prompts only for what it can't find** (input hidden),
 8. validates the config with the real loader (`--check`),
 9. installs the unit, deploys `dist/`, restarts, and
 10. runs a **smoke test** (MCP handshake + a real read over the socket) → ✅/❌.
 
-**Upgrade** is just re-running it: the config is merged (edits kept), and secrets already present are kept. **Migrating an older `systemd-creds` install is automatic** — the first run decrypts the existing `.cred` tokens into the new secrets file with no re-entry; only tokens it genuinely can't find are prompted. After a successful migration you can remove the now-unused legacy bits: `sudo rm -rf /etc/gh-broker/creds /opt/gh-broker/launch.sh`.
+**Upgrade** is just re-running it: config merged (edits kept), your previously-chosen storage backend pre-selected, existing tokens kept. You can **switch backends** on any run — pick `file` and it decrypts the existing `systemd-creds` tokens into the file (no re-entry); pick `systemd-creds` and it encrypts the tokens into `.cred` files. `launch.sh` is no longer used — remove it after a successful run: `sudo rm -f /opt/gh-broker/launch.sh` (and `sudo rm -rf /etc/gh-broker/creds` only if you've moved fully to the `file` backend).
+
+## Credential storage — your choice
+
+The installer asks which backend holds the tokens at rest:
+
+- **`systemd-creds`** (recommended, Linux): tokens are encrypted with a host/TPM-bound key (`.cred` files delivered via a unit drop-in into memory-only `$CREDENTIALS_DIRECTORY`). Encrypted at rest and resistant to backup/disk theft; not portable to another machine.
+- **`file`**: tokens in a plaintext JSON file, `0640 root:gh-broker`. Portable and platform-neutral; at-rest protection is filesystem permissions only.
+
+Either way the **agent user cannot read the tokens** (that's filesystem perms, not encryption) and the **config stays token-free**. The choice only affects at-rest protection vs portability. See [`../docs/deploy-architecture.md`](../docs/deploy-architecture.md).
 
 ## 3. Point Claude at the broker
 
@@ -65,7 +74,7 @@ Add an `owners` entry to `config.example.json` (name + `cred:<org>-read` / `cred
 
 ## Verify no secret leaks
 
-- The agent user cannot read `/etc/gh-broker/` — the dir is `0750 root:gh-broker`; the config (`0640`) and secrets file (`0640 root:gh-broker`) are unreadable to a non-member.
-- The config file holds **no tokens** — only `cred:` references; the tokens live in the separate secrets file.
+- The agent user cannot read `/etc/gh-broker/` — the dir is `0750 root:gh-broker`; the config (`0640`) and, whichever backend is used, the tokens (systemd-creds `.cred` files `0400 root`, or the `file` backend's `secrets.json` `0640 root:gh-broker`) are unreadable to a non-member.
+- The config file holds **no tokens** — only `cred:` references; the tokens live in the separate secret store.
 - The socket carries MCP frames only.
 - `journalctl -u gh-broker` shows the audit log (tool, owner, mode, repo, result) — never tokens.
