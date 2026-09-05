@@ -4,14 +4,14 @@ gh-broker's security rests on one structural decision: **the agent runs as a dif
 
 ## Why a separate user at all
 
-The credential (per-org fine-grained PATs, and optionally a GitHub App key) is decrypted from the systemd-creds store into the broker process's memory at start, and lives on a root-owned path the agent cannot read. The only thing that ever crosses to the agent is MCP frames over a Unix socket — bytes in, bytes out, no token.
+The credentials (per-org fine-grained PATs, and optionally a GitHub App key) live in a secrets file on a root-owned, agent-unreadable path, read into the broker process's memory at start. The only thing that ever crosses to the agent is MCP frames over a Unix socket — bytes in, bytes out, no token.
 
-That isolation is the entire security property, not a garnish on top of one. If the agent and the broker were the same user, that user could read the decrypted credentials directory, connect to the socket, *and* read the broker process's environment and memory — the design would be theater. Running them as two users, with the OS enforcing the split, is what turns "the agent can't exfiltrate the secret" from a hope into a mechanism.
+That isolation is the entire security property, not a garnish on top of one. If the agent and the broker were the same user, that user could read the secrets file, connect to the socket, *and* read the broker process's environment and memory — the design would be theater. Running them as two users, with the OS enforcing the split, is what turns "the agent can't exfiltrate the secret" from a hope into a mechanism.
 
 ## The three roles
 
 - **Agent user** — the unprivileged account the agent (Claude, or any autonomous client) runs as. It is a member of the *bridge group* so it can open the socket, and nothing more. It is **not** in the service group and has no path to the credentials.
-- **Service user** — the dedicated account the broker daemon runs as. It owns the socket and runtime directory and is the only identity that can decrypt and hold the PATs. It runs nothing else.
+- **Service user** — the dedicated account the broker daemon runs as. It owns the socket and runtime directory and is the only identity that can read and hold the PATs. It runs nothing else.
 - **Bridge group** — a group whose *sole* purpose is socket access. Both users belong to it; the socket is `group=<bridge>, mode 0660`. Membership grants exactly one capability — connect to the socket — and grants nothing over the credentials.
 
 ## Example layout (this deployment)
@@ -28,7 +28,7 @@ Filesystem and socket:
 | Path | Owner:Group | Mode | Effect |
 |---|---|---|---|
 | `/etc/gh-broker` | `root:gh-broker` | `0750` | Agent (not in `gh-broker`) can't even traverse into it. |
-| `/etc/gh-broker/creds/*.cred` | `root:root` | `0400` | Only root reads the ciphertext; systemd decrypts it into the service's memory at start. |
+| `/etc/gh-broker/secrets.json` | `root:gh-broker` | `0640` | The tokens. Readable by the `gh-broker` group only; the agent (not in it) can't. Referenced by `cred:` names in the config. |
 | `/run/gh-broker` | `gh-broker:gh-broker` | `0755` | Traversable so the socket can be reached. |
 | `/run/gh-broker/gh-broker.sock` | `gh-broker:gh-broker-clients` | `0660` | Agent connects (it's in the bridge group); non-members can't. |
 
@@ -36,14 +36,14 @@ Filesystem and socket:
 
 Read these as the capability matrix — what each user actually can and cannot do:
 
-|  | Read `creds/*` | Read broker env / memory | Open the socket | Ever hold a PAT |
+|  | Read `secrets.json` | Read broker env / memory | Open the socket | Ever hold a PAT |
 |---|---|---|---|---|
-| **Agent** (`repo`) | no — not in `gh-broker`; dir is `0750 root:gh-broker`, files `0400 root` | no — separate user, plus the unit's `ProtectHome`/`NoNewPrivileges`/etc. | **yes** — member of `gh-broker-clients` | **never** |
-| **Service** (`gh-broker`) | via systemd-creds only (decrypted into `$CREDENTIALS_DIRECTORY`, memory-only) | yes (it is the process) | yes — it owns it | yes — in memory only, never on an agent-readable path |
+| **Agent** (`repo`) | no — not in `gh-broker`; dir is `0750 root:gh-broker`, secrets `0640 root:gh-broker` | no — separate user, plus the unit's `ProtectHome`/`NoNewPrivileges`/etc. | **yes** — member of `gh-broker-clients` | **never** |
+| **Service** (`gh-broker`) | yes — in the `gh-broker` group, reads it into memory only | yes (it is the process) | yes — it owns it | yes — in memory only, never on an agent-readable path |
 
 Three independent gates, each verifiable:
 
-1. **Credentials** — `/etc/gh-broker` is `0750 root:gh-broker`. The agent user is deliberately *not* in the `gh-broker` group, so it cannot list or traverse the directory, let alone read a `.cred`. Verify: as the agent user, `cat /etc/gh-broker/creds/cldmv-read.cred` → *Permission denied*.
+1. **Credentials** — `/etc/gh-broker` is `0750 root:gh-broker`. The agent user is deliberately *not* in the `gh-broker` group, so it cannot list or traverse the directory, let alone read `secrets.json`. Verify: as the agent user, `cat /etc/gh-broker/secrets.json` → *Permission denied*.
 2. **Socket** — `0660 gh-broker:gh-broker-clients`. The agent is in `gh-broker-clients`, so it can `connect()`; a user in neither group cannot. The socket speaks MCP frames only — no credential material is ever written to it.
 3. **Process** — the broker runs under the hardened unit (`ProtectHome`, `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges`, restricted syscalls). A separate user can't `ptrace` it or read `/proc/<pid>/environ`, so the in-memory token isn't reachable that way either.
 
@@ -78,7 +78,7 @@ Point the agent's MCP config at the socket via the stdio bridge (see `deploy/REA
 ## Anti-patterns
 
 - **Running the agent as root** (or with sudo) — collapses every gate; root reads the creds directly.
-- **Running the broker as the agent user** — the agent then owns the decrypted creds dir and the process; there is no boundary left.
+- **Running the broker as the agent user** — the agent then owns the secrets file and the process; there is no boundary left.
 - **Adding the agent to the *service* group (`gh-broker`)** — it only needs the *bridge* group (`gh-broker-clients`). Membership in `gh-broker` grants traversal into `/etc/gh-broker`. Keep these two groups distinct and put the agent in the bridge group only.
 - **Granting the agent read on `/etc/gh-broker/creds`** "for convenience" — the whole point is that it can't.
 - **A rootful `docker` group for the agent** — see above; it's a silent root-equivalent escape around the socket.
