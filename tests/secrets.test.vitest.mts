@@ -1,81 +1,85 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// secrets.ts reads credential files from $CREDENTIALS_DIRECTORY via node:fs.
+// secrets.ts reads the JSON secrets file via node:fs.readFileSync.
 vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
 
 import { readFileSync } from "node:fs";
 import { loadSecretStore } from "../src/secrets.ts";
 
 const mockRead = vi.mocked(readFileSync);
+const SECRETS = "/x/secrets.json";
 
-function config(owners: Record<string, unknown> = { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } }): any {
-	return { listen: "unix:/x", upstream: "https://x", tools: [], owners };
+function config(owners: Record<string, unknown> = { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } }, extra: Record<string, unknown> = {}): any {
+	return { listen: "unix:/x", upstream: "https://x", tools: [], owners, secrets: { path: SECRETS }, ...extra };
 }
 
-/** Map a credential file path to its contents by trailing name. */
-function fileMap(map: Record<string, string>) {
-	mockRead.mockImplementation((p: any) => {
-		for (const [name, val] of Object.entries(map)) {
-			if (String(p).endsWith(name)) return val as any;
-		}
-		throw new Error(`ENOENT: ${p}`);
-	});
+/**
+ * Serve the secrets file body (object → JSON, or a raw string). fileStore reads
+ * exactly one file, so this returns the body unconditionally.
+ */
+function secretsFile(obj: Record<string, unknown> | string) {
+	const body = typeof obj === "string" ? obj : JSON.stringify(obj);
+	mockRead.mockReset();
+	mockRead.mockReturnValue(body as any);
 }
 
-describe("loadSecretStore", () => {
-	const ORIGINAL = process.env.CREDENTIALS_DIRECTORY;
+describe("loadSecretStore (file provider)", () => {
+	beforeEach(() => mockRead.mockReset());
 
-	beforeEach(() => {
-		mockRead.mockReset();
-		process.env.CREDENTIALS_DIRECTORY = "/run/creds";
-	});
-
-	afterEach(() => {
-		if (ORIGINAL === undefined) delete process.env.CREDENTIALS_DIRECTORY;
-		else process.env.CREDENTIALS_DIRECTORY = ORIGINAL;
-	});
-
-	it("throws when $CREDENTIALS_DIRECTORY is unset", () => {
-		delete process.env.CREDENTIALS_DIRECTORY;
-		expect(() => loadSecretStore(config())).toThrow(/\$CREDENTIALS_DIRECTORY unset/);
-	});
-
-	it("rejects a credential ref that is not cred:<name>", () => {
-		fileMap({ "cldmv-read": "tok" });
-		expect(() => loadSecretStore(config({ cldmv: { read: "plain-ref", write: "cred:cldmv-write" } }))).toThrow(
-			/owner "cldmv" ref must be "cred:<name>"/
-		);
-	});
-
-	it("throws when a referenced credential file is unreadable (eager validation)", () => {
-		fileMap({ "cldmv-write": "wtok" }); // read is missing → readFileSync throws
-		expect(() => loadSecretStore(config())).toThrow(/credential "cldmv-read" not available/);
-	});
-
-	it("throws when a credential file is empty", () => {
-		fileMap({ "cldmv-read": "", "cldmv-write": "wtok" });
-		expect(() => loadSecretStore(config())).toThrow(/credential "cldmv-read" is empty/);
-	});
-
-	it("resolves a cred ref, stripping a trailing newline", () => {
-		fileMap({ "cldmv-read": "readtok\n", "cldmv-write": "writetok" });
+	it("resolves cred refs from the secrets file", () => {
+		secretsFile({ "cldmv-read": "readtok", "cldmv-write": "writetok" });
 		const store = loadSecretStore(config());
 		expect(store.resolve("cred:cldmv-read")).toBe("readtok");
 		expect(store.resolve("cred:cldmv-write")).toBe("writetok");
 	});
 
-	it("caches reads — the file is read once across eager validation and resolve", () => {
-		fileMap({ "cldmv-read": "readtok", "cldmv-write": "writetok" });
+	it("reads the secrets file once, not per credential", () => {
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
 		const store = loadSecretStore(config());
-		expect(mockRead).toHaveBeenCalledTimes(2); // one per referenced cred at startup
+		expect(mockRead).toHaveBeenCalledTimes(1);
 		store.resolve("cred:cldmv-read");
 		store.resolve("cred:cldmv-read");
-		expect(mockRead).toHaveBeenCalledTimes(2); // served from cache, no new reads
+		expect(mockRead).toHaveBeenCalledTimes(1);
+	});
+
+	it("throws when the secrets file is unreadable", () => {
+		mockRead.mockReset();
+		// Only the fileStore read throws; later reads (e.g. vitest error formatting)
+		// must not, or they'd mask the wrapped message under test.
+		mockRead.mockImplementationOnce(() => {
+			throw new Error("ENOENT");
+		});
+		expect(() => loadSecretStore(config())).toThrow(/cannot read\/parse secrets file/);
+	});
+
+	it("throws when the file is not a JSON object", () => {
+		secretsFile("[1,2,3]");
+		expect(() => loadSecretStore(config())).toThrow(/must be a JSON object/);
+	});
+
+	it("throws (eager) when a referenced credential is missing in the file", () => {
+		secretsFile({ "cldmv-write": "w" });
+		expect(() => loadSecretStore(config())).toThrow(/credential "cldmv-read" missing or empty/);
+	});
+
+	it("throws when a referenced credential is empty", () => {
+		secretsFile({ "cldmv-read": "", "cldmv-write": "w" });
+		expect(() => loadSecretStore(config())).toThrow(/credential "cldmv-read" missing or empty/);
+	});
+
+	it("rejects an owner ref that is not cred:<name>", () => {
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		expect(() => loadSecretStore(config({ cldmv: { read: "plain-ref", write: "cred:cldmv-write" } }))).toThrow(/must be "cred:<name>"/);
 	});
 
 	it("rejects a malformed ref at resolve time", () => {
-		fileMap({ "cldmv-read": "readtok", "cldmv-write": "writetok" });
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
 		const store = loadSecretStore(config());
-		expect(() => store.resolve("not-a-cred-ref")).toThrow(/bad credential ref "not-a-cred-ref"/);
+		expect(() => store.resolve("not-a-cred-ref")).toThrow(/bad credential ref/);
+	});
+
+	it("rejects an unknown provider", () => {
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		expect(() => loadSecretStore(config(undefined, { secrets: { provider: "vault", path: SECRETS } }))).toThrow(/unknown provider/);
 	});
 });

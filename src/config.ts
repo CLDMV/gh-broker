@@ -71,7 +71,27 @@ export function loadConfig(path: string): Config {
 		app = { appId: a.appId, privateKey: a.privateKey };
 	}
 
-	return { listen: c.listen, upstream: c.upstream, tools, owners, ...(app ? { app } : {}), ...(defaultOwner ? { defaultOwner } : {}) };
+	let secrets: Config["secrets"];
+	if (c.secrets !== undefined) {
+		if (typeof c.secrets !== "object" || c.secrets === null) throw new Error("config.secrets: must be an object");
+		const s = c.secrets as Record<string, unknown>;
+		if (s.provider !== undefined && s.provider !== "file") throw new Error('config.secrets.provider: only "file" is supported');
+		if (s.path !== undefined && typeof s.path !== "string") throw new Error("config.secrets.path: must be a string");
+		secrets = {
+			...(s.provider === "file" ? { provider: "file" as const } : {}),
+			...(typeof s.path === "string" ? { path: s.path } : {})
+		};
+	}
+
+	return {
+		listen: c.listen,
+		upstream: c.upstream,
+		tools,
+		owners,
+		...(app ? { app } : {}),
+		...(secrets ? { secrets } : {}),
+		...(defaultOwner ? { defaultOwner } : {})
+	};
 }
 
 /** Build a name→rule index for O(1) allowlist checks. */

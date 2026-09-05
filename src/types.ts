@@ -1,9 +1,11 @@
 /**
  * Config + internal types for gh-broker.
  *
- * The on-disk config (`/etc/gh-broker/config.json`) holds no secrets — only the
- * tool allowlist and, per owner, the *names* of the credentials to use. Actual
- * PAT values are resolved at runtime from systemd-delivered creds (see secrets.ts).
+ * The on-disk config holds no secrets — only the tool allowlist and, per owner,
+ * the *names* of the credentials to use. Actual PAT values are resolved at
+ * runtime from a separate, agent-unreadable secrets store (see secrets.ts and
+ * docs/deploy-architecture.md). Keeping the config token-free is what makes it
+ * safe to copy between machines.
  */
 
 export type Mode = "read" | "write";
@@ -34,6 +36,19 @@ export interface AppConfig {
 	privateKey: string;
 }
 
+/**
+ * Where the actual token values live. A provider seam: only "file" is
+ * implemented today (a JSON `{ "<name>": "<token>" }` map the daemon reads from
+ * an agent-unreadable path); an OS-keychain / DPAPI / encrypted-vault provider
+ * can be added without touching call sites. Omit to use the file provider at the
+ * platform-default secrets path.
+ */
+export interface SecretsConfig {
+	provider?: "file";
+	/** For provider "file": path to the JSON secrets file. Defaults to <configDir>/secrets.json. */
+	path?: string;
+}
+
 export interface Config {
 	/** e.g. "unix:/run/gh-broker/gh-broker.sock" */
 	listen: string;
@@ -51,6 +66,8 @@ export interface Config {
 	defaultOwner?: string;
 	/** Optional GitHub App — enables `link_issue` (App-token-only mutation). */
 	app?: AppConfig;
+	/** Optional secret-store backend selection. Defaults to the file provider. */
+	secrets?: SecretsConfig;
 }
 
 /** Resolves a "cred:<name>" reference to a token, never logging it. */
