@@ -69,6 +69,24 @@ export function createAgentUser(name) {
 	run("useradd", ["--create-home", "--shell", "/bin/bash", name]);
 }
 
+/**
+ * Migrate a token from the legacy systemd-creds store: decrypt the host-bound
+ * `<name>.cred` (as root, same host) into plaintext for the new secrets file.
+ * Returns the token, or null if there's nothing to migrate (file absent, no
+ * systemd-creds, wrong host/name → can't decrypt). Never logs the value.
+ */
+export function trySystemdCredDecrypt(name, credFile) {
+	if (!existsSync(credFile) || !has("systemd-creds")) return null;
+	try {
+		const r = run("systemd-creds", ["decrypt", `--name=${name}`, credFile, "-"], { allowFail: true });
+		if (r.status !== 0) return null;
+		const val = r.stdout.replace(/\r?\n$/, "");
+		return val || null;
+	} catch {
+		return null;
+	}
+}
+
 /** Point /usr/local/bin/{node,npm,npx} at the given node binary's dir (the single indirection). */
 export function pointNodeSymlinks(nodeBin) {
 	const binDir = dirname(nodeBin);

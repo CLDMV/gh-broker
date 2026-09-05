@@ -16,7 +16,8 @@ import {
 	run, has, isRoot, userExists, gidOf,
 	ensureServiceUser, createAgentUser, addUserToGroup,
 	pointNodeSymlinks, currentNodeBin, ensureDirs, installUnit,
-	enableService, restartService, serviceActive, deployDist, writeConfigFile
+	enableService, restartService, serviceActive, deployDist, writeConfigFile,
+	trySystemdCredDecrypt
 } from "./lib/system.mjs";
 import { promptLine, promptHidden, confirm } from "./lib/prompt.mjs";
 import { mergeConfig } from "./lib/config-merge.mjs";
@@ -102,17 +103,24 @@ async function main() {
 	// --- secrets: keep existing, prompt only for the missing ones ---
 	step("secrets");
 	const existing = readSecretsFile(paths.secrets);
+	const legacyCredsDir = join(configDir, "creds"); // old systemd-creds location, if migrating
 	const needed = referencedCredNames(merged);
 	const secrets = { ...existing };
 	const missing = needed.filter((n) => !secrets[n]);
 	if (missing.length === 0) {
 		log(`  all ${needed.length} referenced credential(s) already present — keeping them`);
 	} else {
-		log(`  enter ${missing.length} credential(s) (input hidden):`);
 		for (const name of missing) {
-			const val = await promptHidden(`    ${name}: `);
-			if (!val) die(`empty value for "${name}"`);
-			secrets[name] = val;
+			// Migrate a legacy systemd-creds token in place if we can decrypt it; else prompt.
+			const migrated = trySystemdCredDecrypt(name, join(legacyCredsDir, `${name}.cred`));
+			if (migrated) {
+				secrets[name] = migrated;
+				log(`  ${name}: migrated from systemd-creds`);
+			} else {
+				const val = await promptHidden(`  ${name} (input hidden): `);
+				if (!val) die(`empty value for "${name}"`);
+				secrets[name] = val;
+			}
 		}
 	}
 	writeSecretsFile(paths.secrets, secrets, { gid: gidOf(SVC_GROUP) });

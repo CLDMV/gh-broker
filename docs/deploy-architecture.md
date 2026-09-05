@@ -30,7 +30,7 @@ Secrets never live in the config. The daemon runs as the `gh-broker` service use
 
 This **replaces `systemd-creds`**. `systemd-creds` is Linux/systemd-only and, worse, machine-bound — a `.cred` is encrypted to that box's key and can't be moved — which fights both portability and platform-neutrality. The secrets file is a plain, platform-neutral mechanism behind a small **provider seam** (`config.secrets.provider`, default `file`), so an OS-keychain / DPAPI / encrypted-vault provider can be added later without touching the daemon's call sites.
 
-Because secrets are **re-entered at install** (the installer prompts for each PAT and writes the file locally), they are per-machine and never travel — so the portable artifact is the token-free config, and the secrets stay local. The agent-read protection is filesystem perms, exactly as before; what changed is that the store is a portable-shaped, platform-neutral file instead of a machine-bound systemd blob.
+Secrets are per-machine and never travel — so the portable artifact is the token-free config, and the secrets stay local. On a **fresh** install the operator enters each PAT once. On an **in-place migration** from the legacy `systemd-creds` store, the installer decrypts the host-bound `.cred` files (as root, same host) straight into the new secrets file — no re-entry; it prompts only for tokens it can't find. The agent-read protection is filesystem perms, exactly as before; what changed is that the store is a portable-shaped, platform-neutral file instead of a machine-bound systemd blob.
 
 ## Paths: resolved, not hardcoded
 

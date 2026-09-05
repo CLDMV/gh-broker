@@ -32,12 +32,12 @@ sudo node deploy/install.mjs [agent-user]
 4. points `/usr/local/bin/node` at the running node,
 5. builds `dist/` if it isn't already built,
 6. regenerates the config by **merging** `config.example.json` with whatever is deployed (your data is preserved; new keys/allowlist changes from the repo arrive),
-7. **prompts for any PATs not already stored** (input hidden) and writes the secrets file `0640 root:gh-broker`,
+7. **migrates existing tokens in place** — decrypts any legacy `systemd-creds` (`/etc/gh-broker/creds/<name>.cred`, host-bound, decrypted as root), keeps any already in the secrets file, and **prompts only for what it can't find** (input hidden) — then writes the secrets file `0640 root:gh-broker`,
 8. validates the config with the real loader (`--check`),
 9. installs the unit, deploys `dist/`, restarts, and
 10. runs a **smoke test** (MCP handshake + a real read over the socket) → ✅/❌.
 
-**Upgrade** is just re-running it: the config is merged (edits kept), and secrets already present are kept — only missing ones are prompted for.
+**Upgrade** is just re-running it: the config is merged (edits kept), and secrets already present are kept. **Migrating an older `systemd-creds` install is automatic** — the first run decrypts the existing `.cred` tokens into the new secrets file with no re-entry; only tokens it genuinely can't find are prompted. After a successful migration you can remove the now-unused legacy bits: `sudo rm -rf /etc/gh-broker/creds /opt/gh-broker/launch.sh`.
 
 ## 3. Point Claude at the broker
 
