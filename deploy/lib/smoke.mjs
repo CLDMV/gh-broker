@@ -6,19 +6,46 @@ import { connect } from "node:net";
  * advertised — make one real call so a GitHub round-trip is actually exercised.
  * Resolves with { tools, roundTrip } or rejects with a clear reason.
  *
+ * The daemon does a network `buildCatalog` before it creates the socket, and
+ * `systemctl restart` returns as soon as the process spawns — so the socket may
+ * not exist yet. We therefore RETRY the connection (ENOENT/ECONNREFUSED) until
+ * the deadline rather than failing on the first attempt.
+ *
  * The broker speaks newline-delimited JSON-RPC (MCP stdio framing) over the
  * socket, so this needs no dependency — raw net + JSON lines.
  */
-export function smokeTest(socketPath, { timeoutMs = 8000 } = {}) {
+function connectWithRetry(socketPath, deadline) {
 	return new Promise((resolve, reject) => {
-		const sock = connect(socketPath);
+		const attempt = () => {
+			const sock = connect(socketPath);
+			let settled = false;
+			sock.once("connect", () => {
+				settled = true;
+				resolve(sock);
+			});
+			sock.once("error", (e) => {
+				if (settled) return;
+				sock.destroy();
+				if (Date.now() < deadline && (e.code === "ENOENT" || e.code === "ECONNREFUSED")) {
+					setTimeout(attempt, 250);
+				} else {
+					reject(new Error(`smoke: socket error (${socketPath}): ${e.message}`));
+				}
+			});
+		};
+		attempt();
+	});
+}
+
+function handshake(sock, deadline) {
+	return new Promise((resolve, reject) => {
 		let buf = "";
 		let idc = 0;
 		const pending = new Map();
 		const timer = setTimeout(() => {
 			cleanup();
-			reject(new Error(`smoke: no response within ${timeoutMs}ms`));
-		}, timeoutMs);
+			reject(new Error(`smoke: no response before deadline`));
+		}, Math.max(1000, deadline - Date.now()));
 
 		const cleanup = () => {
 			clearTimeout(timer);
@@ -34,7 +61,7 @@ export function smokeTest(socketPath, { timeoutMs = 8000 } = {}) {
 
 		sock.on("error", (e) => {
 			cleanup();
-			reject(new Error(`smoke: socket error (${socketPath}): ${e.message}`));
+			reject(new Error(`smoke: socket error: ${e.message}`));
 		});
 		sock.on("data", (d) => {
 			buf += d.toString("utf8");
@@ -57,7 +84,8 @@ export function smokeTest(socketPath, { timeoutMs = 8000 } = {}) {
 				}
 			}
 		});
-		sock.on("connect", async () => {
+
+		(async () => {
 			try {
 				await send("initialize", {
 					protocolVersion: "2024-11-05",
@@ -83,6 +111,12 @@ export function smokeTest(socketPath, { timeoutMs = 8000 } = {}) {
 				cleanup();
 				reject(e);
 			}
-		});
+		})();
 	});
+}
+
+export async function smokeTest(socketPath, { timeoutMs = 15000 } = {}) {
+	const deadline = Date.now() + timeoutMs;
+	const sock = await connectWithRetry(socketPath, deadline);
+	return handshake(sock, deadline);
 }
