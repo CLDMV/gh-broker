@@ -21,7 +21,7 @@ import {
 } from "./lib/system.mjs";
 import { promptLine, promptHidden, confirm, choose } from "./lib/prompt.mjs";
 import { mergeConfig } from "./lib/config-merge.mjs";
-import { writeSecretsFile, readSecretsFile, referencedCredNames } from "./lib/secret-store.mjs";
+import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames } from "./lib/secret-store.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -69,14 +69,22 @@ Example (unattended):
 
 function parseArgs(argv) {
 	const o = { positional: [], nonInteractive: false, createAgentUser: false };
+	// Consume the value after a value-taking flag, failing if it's missing or is
+	// itself a flag — so `--agent-user --secrets-provider file` can't silently take
+	// "--secrets-provider" as the username and proceed with an unintended user.
+	const value = (i, flag) => {
+		const v = argv[i];
+		if (v === undefined || v.startsWith("-")) die(`${flag} requires a value (see --help)`);
+		return v;
+	};
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === "-h" || a === "--help") o.help = true;
 		else if (a === "-y" || a === "--non-interactive") o.nonInteractive = true;
 		else if (a === "--create-agent-user") o.createAgentUser = true;
-		else if (a === "--agent-user") o.agentUser = argv[++i];
-		else if (a === "--secrets-provider") o.provider = argv[++i];
-		else if (a === "--secrets-file") o.secretsFile = argv[++i];
+		else if (a === "--agent-user") o.agentUser = value(++i, a);
+		else if (a === "--secrets-provider") o.provider = value(++i, a);
+		else if (a === "--secrets-file") o.secretsFile = value(++i, a);
 		else if (a.startsWith("-")) die(`unknown flag: ${a} (see --help)`);
 		else o.positional.push(a);
 	}
@@ -208,6 +216,12 @@ async function main() {
 			log(`  ${name}: encrypted (systemd-creds)`);
 		}
 		writeCredsDropin(needed, credsDir);
+		// Now that creds are encrypted, a plaintext secrets file from a previous
+		// `file` install must not linger — it would defeat "encrypted at rest".
+		if (existsSync(paths.secrets)) {
+			removeSecretsFile(paths.secrets);
+			log(`  removed plaintext secrets file (now using systemd-creds)`);
+		}
 	} else {
 		const tokens = { ...existingFile };
 		for (const name of needed) {

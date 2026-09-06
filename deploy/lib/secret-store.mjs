@@ -1,4 +1,4 @@
-import { writeFileSync, chmodSync, chownSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, chmodSync, chownSync, readFileSync, existsSync, statSync, rmSync } from "node:fs";
 
 /**
  * Write the secrets map ({ "<name>": "<token>" }) to `path` as JSON, mode 0640,
@@ -30,6 +30,21 @@ export function readSecretsFile(path) {
 	} catch {
 		return {};
 	}
+}
+
+/**
+ * Remove a plaintext secrets file — used when the operator switches to the
+ * systemd-creds provider, so the tokens don't linger on disk and defeat
+ * "encrypted at rest". Best-effort zero-overwrite before unlink. No-op if absent.
+ */
+export function removeSecretsFile(path) {
+	if (!existsSync(path)) return;
+	try {
+		writeFileSync(path, Buffer.alloc(statSync(path).size, 0));
+	} catch {
+		// overwrite is best-effort; unlink still happens below
+	}
+	rmSync(path, { force: true });
 }
 
 /** The distinct cred names a config's owners + app reference (strips the "cred:" prefix). */

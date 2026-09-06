@@ -1,11 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("node:fs", () => ({ existsSync: vi.fn(() => true), readFileSync: vi.fn() }));
+vi.mock("node:fs", () => ({
+	existsSync: vi.fn(() => true),
+	readFileSync: vi.fn(),
+	writeFileSync: vi.fn(),
+	statSync: vi.fn(() => ({ size: 8 })),
+	rmSync: vi.fn()
+}));
 
-import { readFileSync } from "node:fs";
-import { readSecretsFile, referencedCredNames } from "../deploy/lib/secret-store.mjs";
+import { readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
+import { readSecretsFile, removeSecretsFile, referencedCredNames } from "../deploy/lib/secret-store.mjs";
 
 const mockRead = vi.mocked(readFileSync);
+const mockExists = vi.mocked(existsSync);
+const mockWrite = vi.mocked(writeFileSync);
+const mockRm = vi.mocked(rmSync);
 
 describe("readSecretsFile", () => {
 	beforeEach(() => mockRead.mockReset());
@@ -20,6 +29,30 @@ describe("readSecretsFile", () => {
 		expect(readSecretsFile("/x")).toEqual({});
 		mockRead.mockReturnValue("not json" as any);
 		expect(readSecretsFile("/x")).toEqual({});
+	});
+});
+
+describe("removeSecretsFile", () => {
+	beforeEach(() => {
+		mockExists.mockReset().mockReturnValue(true);
+		mockWrite.mockReset();
+		mockRm.mockReset();
+	});
+
+	it("zero-overwrites then unlinks an existing file", () => {
+		removeSecretsFile("/x/secrets.json");
+		expect(mockWrite).toHaveBeenCalledTimes(1);
+		const buf = mockWrite.mock.calls[0][1] as Buffer;
+		expect(Buffer.isBuffer(buf)).toBe(true);
+		expect(buf.every((b) => b === 0)).toBe(true);
+		expect(mockRm).toHaveBeenCalledWith("/x/secrets.json", { force: true });
+	});
+
+	it("is a no-op when the file is absent", () => {
+		mockExists.mockReturnValue(false);
+		removeSecretsFile("/x/secrets.json");
+		expect(mockWrite).not.toHaveBeenCalled();
+		expect(mockRm).not.toHaveBeenCalled();
 	});
 });
 

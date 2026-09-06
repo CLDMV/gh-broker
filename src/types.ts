@@ -66,7 +66,11 @@ export interface Config {
 	 * owner-less call (the stricter original behaviour).
 	 */
 	defaultOwner?: string;
-	/** Optional GitHub App — enables `link_issue` (App-token-only mutation). */
+	/**
+	 * Optional GitHub App, reserved for `link_issue` (an App-token-only mutation).
+	 * `link_issue` is currently deferred — it is neither advertised nor dispatched —
+	 * so providing this does not enable any verb today.
+	 */
 	app?: AppConfig;
 	/** Optional secret-store backend selection. Defaults to the systemd-creds provider. */
 	secrets?: SecretsConfig;
