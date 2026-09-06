@@ -21,7 +21,12 @@ export function readSecretsFile(path) {
 	if (!existsSync(path)) return {};
 	try {
 		const v = JSON.parse(readFileSync(path, "utf8"));
-		return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+		if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+		// Keep only non-empty string values — a non-string (number/object) must never
+		// be treated as a token (it would crash encryption or be written back invalid).
+		const out = {};
+		for (const [name, val] of Object.entries(v)) if (typeof val === "string" && val.length > 0) out[name] = val;
+		return out;
 	} catch {
 		return {};
 	}

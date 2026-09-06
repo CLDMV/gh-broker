@@ -9,8 +9,14 @@ import { resolveConfigPath } from "./paths.ts";
 
 function argConfig(): string {
 	const i = process.argv.indexOf("--config");
-	const explicit = i >= 0 ? process.argv[i + 1] : undefined;
-	return resolveConfigPath(explicit);
+	if (i >= 0) {
+		// Fail fast on `--config` with no value (or a flag as the "value") rather than
+		// silently falling back to env/default and hiding the operator's mistake.
+		const explicit = process.argv[i + 1];
+		if (!explicit || explicit.startsWith("-")) throw new Error("--config requires a path argument");
+		return resolveConfigPath(explicit);
+	}
+	return resolveConfigPath(undefined);
 }
 
 async function main(): Promise<void> {

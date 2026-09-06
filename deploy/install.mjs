@@ -176,13 +176,17 @@ async function main() {
 	// Resolve a token's plaintext, only when needed: existing store → decrypt legacy
 	// .cred → --secrets-file → env GH_BROKER_SECRET_<NAME> → prompt (interactive only).
 	const resolveToken = async (name) => {
-		if (existingFile[name]) return existingFile[name];
+		// Every source must yield a non-empty STRING — a non-string (number/object) from
+		// a secrets file or --secrets-file must never reach encryption or the secrets file.
+		const fromFile = existingFile[name];
+		if (typeof fromFile === "string" && fromFile) return fromFile;
 		const dec = trySystemdCredDecrypt(name, join(credsDir, `${name}.cred`));
 		if (dec) {
 			log(`  ${name}: migrated from systemd-creds`);
 			return dec;
 		}
-		if (importTokens && importTokens[name]) return importTokens[name];
+		const fromImport = importTokens && importTokens[name];
+		if (typeof fromImport === "string" && fromImport) return fromImport;
 		const fromEnv = process.env[envSecretKey(name)];
 		if (fromEnv) return fromEnv;
 		if (opts.nonInteractive) die(`missing credential "${name}" — provide via --secrets-file or env ${envSecretKey(name)}`);
