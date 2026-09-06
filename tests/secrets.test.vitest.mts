@@ -67,6 +67,18 @@ describe("loadSecretStore (file provider)", () => {
 		expect(() => loadSecretStore(config())).toThrow(/credential "cldmv-read" missing or empty/);
 	});
 
+	it("strips a single trailing newline (matches the systemd-creds provider)", () => {
+		secretsFile({ "cldmv-read": "readtok\n", "cldmv-write": "writetok\r\n" });
+		const store = loadSecretStore(config());
+		expect(store.resolve("cred:cldmv-read")).toBe("readtok");
+		expect(store.resolve("cred:cldmv-write")).toBe("writetok");
+	});
+
+	it("rejects a credential that is only a newline (empty after normalization)", () => {
+		secretsFile({ "cldmv-read": "\n", "cldmv-write": "w" });
+		expect(() => loadSecretStore(config())).toThrow(/credential "cldmv-read" missing or empty/);
+	});
+
 	it("rejects an owner ref that is not cred:<name>", () => {
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
 		expect(() => loadSecretStore(config({ cldmv: { read: "plain-ref", write: "cred:cldmv-write" } }))).toThrow(/must be "cred:<name>"/);

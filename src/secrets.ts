@@ -94,10 +94,13 @@ function fileStore(config: Config): SecretStore {
 
 	const read = (name: string): string => {
 		const val = map[name];
-		if (typeof val !== "string" || val.length === 0) {
-			throw new Error(`secrets: credential "${name}" missing or empty in ${path}`);
-		}
-		return val;
+		if (typeof val !== "string") throw new Error(`secrets: credential "${name}" missing or empty in ${path}`);
+		// Normalize like the systemd-creds provider: strip a single trailing newline
+		// (common when a token is copy/pasted into the JSON) so it isn't silently
+		// mismatched at auth time. A value that is only a newline then reads as empty.
+		const token = val.replace(/\r?\n$/, "");
+		if (token.length === 0) throw new Error(`secrets: credential "${name}" missing or empty in ${path}`);
+		return token;
 	};
 	validateRefs(config, read);
 	return { resolve: (ref) => read(credName(ref)) };
