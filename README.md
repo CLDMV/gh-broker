@@ -59,12 +59,12 @@ config.example.json  shipped defaults (token-free); merged into the deployed con
 
 ### Recent Releases
 
-- **v0.2.5** (September 2026) — Security: bump the `npm_and_yarn` group across 1 directory (4 updates), shipped as a hotfix ([#46](https://github.com/CLDMV/gh-broker/pull/46), deps [#40](https://github.com/CLDMV/gh-broker/pull/40)) ([Release](https://github.com/CLDMV/gh-broker/releases/tag/v0.2.5))
-- **v0.2.4** (September 2026) — Map `CLDMV_BOT_*` GPG secrets so redirected security PRs verify ([#42](https://github.com/CLDMV/gh-broker/pull/42)) ([Release](https://github.com/CLDMV/gh-broker/releases/tag/v0.2.4))
-- **v0.2.3** (September 2026) — Route the Required PR Check mirror to `cldmv-runners` on private repos ([#35](https://github.com/CLDMV/gh-broker/pull/35)) ([Release](https://github.com/CLDMV/gh-broker/releases/tag/v0.2.3))
-- **v0.2.2** (August 2026) — Bump `@hono/node-server` transitive to 2.0.12 ([#11](https://github.com/CLDMV/gh-broker/pull/11)) ([Release](https://github.com/CLDMV/gh-broker/releases/tag/v0.2.2))
+- **v0.2.5** (September 2026) — Security hotfix: bump the `npm_and_yarn` group across 1 directory (4 updates; [#40](https://github.com/CLDMV/gh-broker/pull/40)) ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.2.5.md))
+- **v0.2.4** (September 2026) — Sign redirected security PRs by mapping the `CLDMV_BOT_*` GPG secrets ([#42](https://github.com/CLDMV/gh-broker/pull/42)) ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.2.4.md))
+- **v0.2.3** (September 2026) — Route the Required PR Check mirror to `cldmv-runners` on private repos ([#35](https://github.com/CLDMV/gh-broker/pull/35)) ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.2.3.md))
+- **v0.2.2** (August 2026) — Bump `@hono/node-server` transitive to 2.0.12 ([#11](https://github.com/CLDMV/gh-broker/pull/11)) ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.2.2.md))
 
-_Entries before v0.3.0 predate the per-version changelog convention and link to their GitHub release._
+📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
 ## Install / build
 
