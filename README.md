@@ -50,6 +50,22 @@ config.example.json  shipped defaults (token-free); merged into the deployed con
 
 **Deployed and in production** — running under systemd, brokering live GitHub reads and writes across the configured org. The Unix-socket MCP server, the default-deny allowlist, and owner/mode→PAT routing are all exercised in normal use. `link_issue` (App-token-only) is implemented but deferred — see [`deploy/README.md`](deploy/README.md#enabling-link_issue-github-app--deferred). Install/upgrade with `sudo node deploy/install.mjs` (see [`deploy/README.md`](deploy/README.md)).
 
+## ✨ What's New
+
+### Latest: v0.3.0 (September 2026)
+
+- **Portable Node installer — first install and upgrade in one command** — A single idempotent `deploy/install.mjs` replaces the old shell scripts: it merges shipped config defaults over the deployed config, lets the operator choose how PATs are stored at rest (`systemd-creds`, encrypted, by default; or a portable plaintext file), auto-migrates and can rotate existing credentials, adds platform-neutral path resolution, and runs a post-deploy smoke test — interactive by default or fully non-interactive via CLI flags. The broker's runtime request path is unchanged; this release is entirely deploy/secret handling and its hardening.
+- [View full v0.3.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.3.0.md)
+
+### Recent Releases
+
+- **v0.2.5** (September 2026) — Security hotfix: bump the `npm_and_yarn` group across 1 directory (4 updates; [#40](https://github.com/CLDMV/gh-broker/pull/40)) ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.2.5.md))
+- **v0.2.4** (September 2026) — Sign redirected security PRs by mapping the `CLDMV_BOT_*` GPG secrets ([#42](https://github.com/CLDMV/gh-broker/pull/42)) ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.2.4.md))
+- **v0.2.3** (September 2026) — Route the Required PR Check mirror to `cldmv-runners` on private repos ([#35](https://github.com/CLDMV/gh-broker/pull/35)) ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.2.3.md))
+- **v0.2.2** (August 2026) — Bump `@hono/node-server` transitive to 2.0.12 ([#11](https://github.com/CLDMV/gh-broker/pull/11)) ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.2.2.md))
+
+📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
+
 ## Install / build
 
 ```sh
