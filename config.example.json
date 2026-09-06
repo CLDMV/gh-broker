@@ -15,10 +15,6 @@
 			"mode": "read"
 		},
 		{
-			"name": "semantic_issues_search",
-			"mode": "read"
-		},
-		{
 			"name": "list_issue_types",
 			"mode": "read"
 		},

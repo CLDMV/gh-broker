@@ -73,7 +73,7 @@ export function loadConfig(path: string): Config {
 
 	let secrets: Config["secrets"];
 	if (c.secrets !== undefined) {
-		if (typeof c.secrets !== "object" || c.secrets === null) throw new Error("config.secrets: must be an object");
+		if (typeof c.secrets !== "object" || c.secrets === null || Array.isArray(c.secrets)) throw new Error("config.secrets: must be an object");
 		const s = c.secrets as Record<string, unknown>;
 		if (s.provider !== undefined && s.provider !== "file" && s.provider !== "systemd-creds") {
 			throw new Error('config.secrets.provider: must be "systemd-creds" or "file"');

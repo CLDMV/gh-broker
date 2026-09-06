@@ -218,6 +218,33 @@ describe("loadConfig — app", () => {
 	});
 });
 
+describe("loadConfig — secrets", () => {
+	it("rejects an array (which typeof reports as 'object')", () => {
+		const c = baseConfig();
+		c.secrets = [];
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets: must be an object/);
+	});
+
+	it("rejects null", () => {
+		const c = baseConfig();
+		c.secrets = null;
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets: must be an object/);
+	});
+
+	it("rejects an unknown provider", () => {
+		const c = baseConfig();
+		c.secrets = { provider: "vault" };
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets\.provider/);
+	});
+
+	it("carries a valid secrets block through", () => {
+		const c = baseConfig();
+		c.secrets = { provider: "file", path: "/etc/gh-broker/secrets.json" };
+		const out = loadConfig(writeConfig(c));
+		expect(out.secrets).toEqual({ provider: "file", path: "/etc/gh-broker/secrets.json" });
+	});
+});
+
 describe("loadConfig — full valid config", () => {
 	it("returns the normalized shape", () => {
 		const c = baseConfig();

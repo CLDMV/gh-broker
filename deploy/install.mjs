@@ -103,7 +103,11 @@ async function main() {
 		die(`--secrets-provider must be "systemd-creds" or "file"`);
 	}
 	const importTokens = opts.secretsFile ? readJson(opts.secretsFile) : {};
-	if (opts.secretsFile && (!importTokens || typeof importTokens !== "object")) die(`--secrets-file: cannot read/parse ${opts.secretsFile}`);
+	// Must be a plain JSON object of { "<name>": "<token>" } — an array parses as an
+	// "object" but yields no tokens, so reject it explicitly rather than importing nothing.
+	if (opts.secretsFile && (!importTokens || typeof importTokens !== "object" || Array.isArray(importTokens))) {
+		die(`--secrets-file: ${opts.secretsFile} must be a JSON object of { "<name>": "<token>" }`);
+	}
 
 	if (!isRoot()) die("must run as root: sudo node deploy/install.mjs [agent-user] [flags]");
 	if (process.platform !== "linux") {
