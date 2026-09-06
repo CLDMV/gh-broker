@@ -16,9 +16,9 @@
  * On a first install (no current), the example is used as-is.
  */
 export function mergeConfig(example, current) {
-	if (!example || typeof example !== "object") throw new Error("mergeConfig: example config must be an object");
+	if (!example || typeof example !== "object" || Array.isArray(example)) throw new Error("mergeConfig: example config must be an object");
 	if (!current) return structuredClone(example);
-	if (typeof current !== "object") throw new Error("mergeConfig: current config must be an object");
+	if (typeof current !== "object" || Array.isArray(current)) throw new Error("mergeConfig: current config must be an object");
 
 	const out = structuredClone(example);
 

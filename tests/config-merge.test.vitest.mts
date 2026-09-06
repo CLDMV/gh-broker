@@ -50,4 +50,9 @@ describe("mergeConfig", () => {
 		mergeConfig(ex, { ...example, listen: "unix:/z" });
 		expect(ex).toEqual(example);
 	});
+
+	it("rejects an array as example or current (typeof reports 'object')", () => {
+		expect(() => mergeConfig([], null)).toThrow(/example config must be an object/);
+		expect(() => mergeConfig(example, [])).toThrow(/current config must be an object/);
+	});
 });
