@@ -138,6 +138,7 @@ async function main() {
 	// --- build if needed ---
 	if (!existsSync(DIST_ENTRY)) {
 		step("build (dist not found)");
+		if (!has("npm")) die(`dist/ is missing and 'npm' is not installed — build the bundle first (npm run build) or install npm, then re-run`);
 		if (!existsSync(join(REPO, "node_modules"))) run("npm", ["ci"], { cwd: REPO, stdio: "inherit" });
 		run("npm", ["run", "build"], { cwd: REPO, stdio: "inherit" });
 	}

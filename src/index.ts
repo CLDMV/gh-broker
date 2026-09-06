@@ -48,7 +48,10 @@ async function main(): Promise<void> {
 	// $CREDENTIALS_DIRECTORY), so it's checked at service start / by the smoke test.
 	if (process.argv.includes("--check")) {
 		const provider = config.secrets?.provider ?? "systemd-creds";
-		const secretsChecked = provider === "file" || process.env.CREDENTIALS_DIRECTORY !== undefined;
+		// Truthy, not just "defined": the systemd-creds store treats an empty
+		// $CREDENTIALS_DIRECTORY as unset (if (!dir)), so --check must too — otherwise
+		// it would attempt secret resolution and fail where it should report unchecked.
+		const secretsChecked = provider === "file" || Boolean(process.env.CREDENTIALS_DIRECTORY);
 		if (secretsChecked) loadSecretStore(config);
 		console.log(JSON.stringify({ event: "config-ok", config: configPath, provider, secretsChecked, owners: Object.keys(config.owners), tools: config.tools.length }));
 		return;

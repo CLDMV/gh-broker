@@ -243,6 +243,18 @@ describe("loadConfig — secrets", () => {
 		const out = loadConfig(writeConfig(c));
 		expect(out.secrets).toEqual({ provider: "file", path: "/etc/gh-broker/secrets.json" });
 	});
+
+	it("rejects a path without the file provider (omitted → systemd-creds default)", () => {
+		const c = baseConfig();
+		c.secrets = { path: "/etc/gh-broker/secrets.json" };
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets\.path is only used by the "file" provider/);
+	});
+
+	it("rejects a path with the systemd-creds provider", () => {
+		const c = baseConfig();
+		c.secrets = { provider: "systemd-creds", path: "/etc/gh-broker/secrets.json" };
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets\.path is only used by the "file" provider/);
+	});
 });
 
 describe("loadConfig — full valid config", () => {

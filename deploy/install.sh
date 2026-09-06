@@ -14,7 +14,10 @@ node_ok() { command -v node >/dev/null 2>&1 && node -e 'process.exit(+process.ve
 if ! node_ok; then
 	echo "==> node >=20 not found — installing system-wide nvm + node"
 	export NVM_DIR=/usr/local/nvm
-	[[ -s "$NVM_DIR/nvm.sh" ]] || git clone --depth 1 https://github.com/nvm-sh/nvm.git "$NVM_DIR"
+	if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
+		command -v git >/dev/null 2>&1 || { echo "git not found — needed to fetch nvm; install git, or install node>=20 yourself then run: sudo node $HERE/install.mjs [agent-user]" >&2; exit 1; }
+		git clone --depth 1 https://github.com/nvm-sh/nvm.git "$NVM_DIR"
+	fi
 	# shellcheck source=/dev/null
 	. "$NVM_DIR/nvm.sh"
 	nvm install --lts >/dev/null
