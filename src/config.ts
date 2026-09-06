@@ -78,7 +78,11 @@ export function loadConfig(path: string): Config {
 		if (s.provider !== undefined && s.provider !== "file" && s.provider !== "systemd-creds") {
 			throw new Error('config.secrets.provider: must be "systemd-creds" or "file"');
 		}
-		if (s.path !== undefined && typeof s.path !== "string") throw new Error("config.secrets.path: must be a string");
+		// Reject an empty path: resolveSecretsPath treats a falsy explicit path as
+		// "not provided" and falls back to env/default, so "" would be silently ignored.
+		if (s.path !== undefined && (typeof s.path !== "string" || s.path.length === 0)) {
+			throw new Error("config.secrets.path: must be a non-empty string");
+		}
 		// path only means anything to the file provider; the systemd-creds provider
 		// (the default) reads $CREDENTIALS_DIRECTORY and would silently ignore it.
 		// Reject the combination so an operator can't think a file path is in effect.

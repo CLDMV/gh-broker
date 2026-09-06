@@ -255,6 +255,12 @@ describe("loadConfig — secrets", () => {
 		c.secrets = { provider: "systemd-creds", path: "/etc/gh-broker/secrets.json" };
 		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets\.path is only used by the "file" provider/);
 	});
+
+	it("rejects an empty path (would be silently ignored by resolveSecretsPath)", () => {
+		const c = baseConfig();
+		c.secrets = { provider: "file", path: "" };
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets\.path: must be a non-empty string/);
+	});
 });
 
 describe("loadConfig — full valid config", () => {

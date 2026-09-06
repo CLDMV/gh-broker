@@ -38,6 +38,22 @@ export function uidOf(name) {
 	return Number.isFinite(uid) ? uid : undefined;
 }
 
+/**
+ * gidOf/uidOf that throw a clear error when the name can't be resolved. Used
+ * wherever ownership is set, so a broken getent/id lookup fails fast instead of
+ * silently leaving a path with the wrong owner/group (or running chown NaN:NaN).
+ */
+export function requireGid(name) {
+	const gid = gidOf(name);
+	if (gid === undefined) throw new Error(`gh-broker install: cannot resolve gid for group "${name}"`);
+	return gid;
+}
+export function requireUid(name) {
+	const uid = uidOf(name);
+	if (uid === undefined) throw new Error(`gh-broker install: cannot resolve uid for user "${name}"`);
+	return uid;
+}
+
 export function ensureGroup(name) {
 	if (!groupExists(name)) run("groupadd", ["--system", name]);
 }
@@ -96,7 +112,7 @@ export function systemdCredsEncrypt(name, plaintext, credFile) {
 
 /** Ensure the creds dir exists (0750 root:group) for the systemd-creds provider. */
 export function ensureCredsDir(configDir, svcGroup) {
-	mkdirp(join(configDir, "creds"), 0o750, 0, gidOf(svcGroup));
+	mkdirp(join(configDir, "creds"), 0o750, 0, requireGid(svcGroup));
 }
 
 /** Write a unit drop-in with LoadCredentialEncrypted lines for the given creds, and reload. */
@@ -145,8 +161,8 @@ function mkdirp(path, mode, uid, gid) {
 
 /** Create /etc/gh-broker (0750 root:group) and /opt/gh-broker (0755 svcUser:group). */
 export function ensureDirs(configDir, appDir, svcUser, svcGroup) {
-	const gid = gidOf(svcGroup);
-	const uid = uidOf(svcUser);
+	const gid = requireGid(svcGroup);
+	const uid = requireUid(svcUser);
 	mkdirp(configDir, 0o750, 0, gid);
 	mkdirp(appDir, 0o755, uid, gid);
 }
@@ -169,8 +185,8 @@ export function serviceActive() {
 
 /** Sync the built dist/ into the app dir and chown it to the service user. */
 export function deployDist(srcDir, destDir, svcUser, svcGroup) {
-	const gid = gidOf(svcGroup);
-	const uid = uidOf(svcUser);
+	const gid = requireGid(svcGroup);
+	const uid = requireUid(svcUser);
 	mkdirp(destDir, 0o755, uid, gid);
 	const dist = join(destDir, "dist");
 	if (has("rsync")) {
@@ -184,8 +200,8 @@ export function deployDist(srcDir, destDir, svcUser, svcGroup) {
 
 /** Write the token-free config, 0640 root:group. */
 export function writeConfigFile(path, obj, svcGroup) {
-	const gid = gidOf(svcGroup);
+	const gid = requireGid(svcGroup);
 	writeFileSync(path, JSON.stringify(obj, null, "\t") + "\n", { mode: 0o640 });
 	chmodSync(path, 0o640);
-	if (gid !== undefined) chownSync(path, 0, gid);
+	chownSync(path, 0, gid);
 }

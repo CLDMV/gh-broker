@@ -13,7 +13,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-	run, has, isRoot, userExists, gidOf,
+	run, has, isRoot, userExists, requireGid,
 	ensureServiceUser, createAgentUser, addUserToGroup,
 	pointNodeSymlinks, currentNodeBin, ensureDirs, installUnit,
 	enableService, restartService, serviceActive, deployDist, writeConfigFile,
@@ -239,7 +239,7 @@ async function main() {
 		for (const name of needed) {
 			if (!tokens[name]) tokens[name] = await resolveToken(name);
 		}
-		writeSecretsFile(paths.secrets, tokens, { gid: gidOf(SVC_GROUP) });
+		writeSecretsFile(paths.secrets, tokens, { gid: requireGid(SVC_GROUP) });
 		removeCredsDropin(); // no systemd-creds delivery under the file provider
 	}
 	writeConfigFile(paths.config, merged, SVC_GROUP);
