@@ -90,6 +90,18 @@ describe("loadSecretStore (file provider)", () => {
 		expect(() => store.resolve("not-a-cred-ref")).toThrow(/bad credential ref/);
 	});
 
+	it("rejects an owner cred name with a path separator (traversal guard)", () => {
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		expect(() => loadSecretStore(config({ cldmv: { read: "cred:../../etc/shadow", write: "cred:cldmv-write" } }))).toThrow(/unsafe credential name/);
+	});
+
+	it("rejects an unsafe cred name at resolve time", () => {
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		const store = loadSecretStore(config());
+		expect(() => store.resolve("cred:..")).toThrow(/unsafe credential name/);
+		expect(() => store.resolve("cred:a/b")).toThrow(/unsafe credential name/);
+	});
+
 	it("rejects an unknown provider", () => {
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
 		expect(() => loadSecretStore(config(undefined, { secrets: { provider: "vault", path: SECRETS } }))).toThrow(/unknown provider/);

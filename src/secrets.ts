@@ -31,9 +31,24 @@ export function loadSecretStore(config: Config): SecretStore {
 	}
 }
 
+const SAFE_CRED_NAME = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Credential names become filesystem path components (`join(dir, name)`) and are
+ * interpolated into systemd drop-in lines, so constrain them to a safe charset —
+ * no path separators, "..", colons, or control characters — to prevent reads
+ * outside $CREDENTIALS_DIRECTORY and malformed drop-ins.
+ */
+function assertSafeName(name: string): string {
+	if (name === "." || name === ".." || !SAFE_CRED_NAME.test(name)) {
+		throw new Error(`secrets: unsafe credential name "${name}" (allowed: letters, digits, ".", "_", "-")`);
+	}
+	return name;
+}
+
 function credName(ref: string): string {
 	if (!ref.startsWith(CRED_PREFIX)) throw new Error(`secrets: bad credential ref "${ref}"`);
-	return ref.slice(CRED_PREFIX.length);
+	return assertSafeName(ref.slice(CRED_PREFIX.length));
 }
 
 /** Eagerly read every referenced credential so a missing token fails at startup, not on first request. */
@@ -41,7 +56,7 @@ function validateRefs(config: Config, read: (name: string) => string): void {
 	for (const [owner, creds] of Object.entries(config.owners)) {
 		for (const ref of [creds.read, creds.write]) {
 			if (!ref.startsWith(CRED_PREFIX)) throw new Error(`secrets: owner "${owner}" ref must be "cred:<name>", got "${ref}"`);
-			read(ref.slice(CRED_PREFIX.length));
+			read(assertSafeName(ref.slice(CRED_PREFIX.length)));
 		}
 	}
 	if (config.app) {
@@ -50,7 +65,7 @@ function validateRefs(config: Config, read: (name: string) => string): void {
 		if (!config.app.privateKey.startsWith(CRED_PREFIX)) {
 			throw new Error(`secrets: config.app.privateKey must be a "cred:<name>" ref, got "${config.app.privateKey}"`);
 		}
-		read(config.app.privateKey.slice(CRED_PREFIX.length));
+		read(assertSafeName(config.app.privateKey.slice(CRED_PREFIX.length)));
 	}
 }
 

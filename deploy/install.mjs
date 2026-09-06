@@ -185,6 +185,10 @@ async function main() {
 	log(`  backend: ${provider}`);
 	merged.secrets = { provider, ...(merged.secrets?.path ? { path: merged.secrets.path } : {}) };
 
+	// The App private key (if config.app is ever set) is a multi-line PEM the
+	// single-line prompt can't accept — it must be supplied out-of-band.
+	const appKeyName = merged.app?.privateKey?.startsWith("cred:") ? merged.app.privateKey.slice("cred:".length) : undefined;
+
 	// Resolve a token's plaintext, only when needed: existing store → decrypt legacy
 	// .cred → --secrets-file → env GH_BROKER_SECRET_<NAME> → prompt (interactive only).
 	const resolveToken = async (name) => {
@@ -202,6 +206,9 @@ async function main() {
 		const fromEnv = process.env[envSecretKey(name)];
 		if (fromEnv) return fromEnv;
 		if (opts.nonInteractive) die(`missing credential "${name}" — provide via --secrets-file or env ${envSecretKey(name)}`);
+		if (name === appKeyName) {
+			die(`credential "${name}" is a GitHub App private key (multi-line PEM); the single-line prompt can't accept it — supply it via --secrets-file or env ${envSecretKey(name)}`);
+		}
 		const entered = await promptHidden(`  ${name} (input hidden): `);
 		if (!entered) die(`empty value for "${name}"`);
 		return entered;

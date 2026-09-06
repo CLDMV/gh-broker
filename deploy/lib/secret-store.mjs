@@ -47,11 +47,29 @@ export function removeSecretsFile(path) {
 	rmSync(path, { force: true });
 }
 
-/** The distinct cred names a config's owners + app reference (strips the "cred:" prefix). */
+const SAFE_CRED_NAME = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Constrain a credential name to a safe charset — it becomes a `.cred` filename
+ * and is interpolated into a systemd drop-in line written as root, so a name with
+ * path separators, "..", colons, or control characters must be rejected.
+ */
+export function assertSafeCredName(name) {
+	if (name === "." || name === ".." || !SAFE_CRED_NAME.test(name)) {
+		throw new Error(`gh-broker: unsafe credential name "${name}" (allowed: letters, digits, ".", "_", "-")`);
+	}
+	return name;
+}
+
+/**
+ * The distinct cred names a config's owners + app reference (strips the "cred:"
+ * prefix). Validates each name — this is the single source feeding the encrypted
+ * `.cred` filenames and the systemd drop-in, so hardening here covers both.
+ */
 export function referencedCredNames(config) {
 	const names = new Set();
 	const add = (ref) => {
-		if (typeof ref === "string" && ref.startsWith("cred:")) names.add(ref.slice("cred:".length));
+		if (typeof ref === "string" && ref.startsWith("cred:")) names.add(assertSafeCredName(ref.slice("cred:".length)));
 	};
 	for (const owner of Object.values(config.owners ?? {})) {
 		add(owner.read);

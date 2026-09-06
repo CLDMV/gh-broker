@@ -68,4 +68,9 @@ describe("referencedCredNames", () => {
 	it("returns [] with no owners", () => {
 		expect(referencedCredNames({})).toEqual([]);
 	});
+
+	it("rejects an unsafe cred name (path separator / traversal)", () => {
+		expect(() => referencedCredNames({ owners: { o: { read: "cred:../x", write: "cred:ok" } } })).toThrow(/unsafe credential name/);
+		expect(() => referencedCredNames({ owners: { o: { read: "cred:a/b", write: "cred:ok" } } })).toThrow(/unsafe credential name/);
+	});
 });
