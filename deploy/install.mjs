@@ -190,22 +190,32 @@ async function main() {
 	// single-line prompt can't accept — it must be supplied out-of-band.
 	const appKeyName = merged.app?.privateKey?.startsWith("cred:") ? merged.app.privateKey.slice("cred:".length) : undefined;
 
-	// Resolve a token's plaintext, only when needed: existing store → decrypt legacy
-	// .cred → --secrets-file → env GH_BROKER_SECRET_<NAME> → prompt (interactive only).
+	// A token the operator EXPLICITLY supplied for this run — --secrets-file, then
+	// env GH_BROKER_SECRET_<NAME>. Its presence is what makes a re-run ROTATE an
+	// existing credential rather than keep it. Only non-empty strings count.
+	const explicitToken = (name) => {
+		const fromImport = importTokens && importTokens[name];
+		if (typeof fromImport === "string" && fromImport) return fromImport;
+		const fromEnv = process.env[envSecretKey(name)];
+		if (typeof fromEnv === "string" && fromEnv) return fromEnv;
+		return undefined;
+	};
+
+	// Resolve a token's plaintext, only when needed. Precedence:
+	//   plaintext secrets file (file → creds migration) → explicit --secrets-file/env
+	//   (a new value = rotation) → decrypt an existing legacy .cred (migration/keep) →
+	//   prompt (interactive only). Explicit MUST beat decrypt, or a rotation would
+	//   just re-encrypt the old decrypted value. Every source yields a non-empty STRING.
 	const resolveToken = async (name) => {
-		// Every source must yield a non-empty STRING — a non-string (number/object) from
-		// a secrets file or --secrets-file must never reach encryption or the secrets file.
 		const fromFile = existingFile[name];
 		if (typeof fromFile === "string" && fromFile) return fromFile;
+		const explicit = explicitToken(name);
+		if (explicit) return explicit;
 		const dec = trySystemdCredDecrypt(name, join(credsDir, `${name}.cred`));
 		if (dec) {
 			log(`  ${name}: migrated from systemd-creds`);
 			return dec;
 		}
-		const fromImport = importTokens && importTokens[name];
-		if (typeof fromImport === "string" && fromImport) return fromImport;
-		const fromEnv = process.env[envSecretKey(name)];
-		if (fromEnv) return fromEnv;
 		if (opts.nonInteractive) die(`missing credential "${name}" — provide via --secrets-file or env ${envSecretKey(name)}`);
 		if (name === appKeyName) {
 			die(`credential "${name}" is a GitHub App private key (multi-line PEM); the single-line prompt can't accept it — supply it via --secrets-file or env ${envSecretKey(name)}`);
@@ -219,13 +229,17 @@ async function main() {
 		ensureCredsDir(configDir, SVC_GROUP);
 		for (const name of needed) {
 			const credFile = join(credsDir, `${name}.cred`);
-			// Keep an existing encrypted cred as-is; otherwise get the plaintext and encrypt it.
-			if (existsSync(credFile) && !existingFile[name]) {
+			const existed = existsSync(credFile);
+			// Re-encrypt (rotate) only when the operator supplies a new value — a
+			// plaintext entry (file → creds migration) or an explicit --secrets-file/env
+			// token. On a plain re-run with no new value, keep the existing cred as-is.
+			const rotate = Boolean(existingFile[name]) || explicitToken(name) !== undefined;
+			if (existed && !rotate) {
 				log(`  ${name}: existing systemd-creds kept`);
 				continue;
 			}
 			systemdCredsEncrypt(name, await resolveToken(name), credFile);
-			log(`  ${name}: encrypted (systemd-creds)`);
+			log(`  ${name}: ${existed ? "rotated" : "encrypted"} (systemd-creds)`);
 		}
 		writeCredsDropin(needed, credsDir);
 		// Now that creds are encrypted, a plaintext secrets file from a previous
