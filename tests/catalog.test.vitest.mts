@@ -37,11 +37,13 @@ describe("buildCatalog", () => {
 		expect(secrets.resolve).toHaveBeenCalledWith("cred:r");
 		const names = catalog.map((t) => t.name);
 		// get_me is served from upstream; not_exposed is dropped (fetched but absent);
-		// the three real custom verbs get local schemas; mystery_custom matches no
-		// branch and is silently skipped.
-		expect(names).toEqual(["get_me", "link_issue", "resolve_review_thread", "reply_review_thread"]);
+		// the two wired custom verbs get local schemas; link_issue is DEFERRED (its
+		// catalog branch is commented out) and mystery_custom matches no branch — both
+		// are silently skipped even when allowlisted.
+		expect(names).toEqual(["get_me", "resolve_review_thread", "reply_review_thread"]);
+		expect(names).not.toContain("link_issue");
 		expect(catalog[0]).toBe(upstreamTool);
-		expect(catalog.find((t) => t.name === "link_issue")?.inputSchema).toMatchObject({ type: "object" });
+		expect(catalog.find((t) => t.name === "resolve_review_thread")?.inputSchema).toMatchObject({ type: "object" });
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/allowlisted tool "not_exposed" is NOT exposed/));
 	});
 
@@ -49,13 +51,13 @@ describe("buildCatalog", () => {
 		upstream.listToolsFor.mockRejectedValue(new Error("401 bad token"));
 		const config = makeConfig([
 			{ name: "get_me", mode: "read" },
-			{ name: "link_issue", mode: "write", custom: true }
+			{ name: "resolve_review_thread", mode: "write", custom: true }
 		]);
 		const catalog = await buildCatalog(config, secrets as any, upstream as any);
 
 		const getMe = catalog.find((t) => t.name === "get_me");
 		expect(getMe).toEqual({ name: "get_me", description: "(read) proxied to the GitHub MCP", inputSchema: { type: "object" } });
-		expect(catalog.map((t) => t.name)).toContain("link_issue");
+		expect(catalog.map((t) => t.name)).toContain("resolve_review_thread");
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/could not fetch upstream tool schemas/));
 	});
 

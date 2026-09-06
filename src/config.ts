@@ -71,7 +71,39 @@ export function loadConfig(path: string): Config {
 		app = { appId: a.appId, privateKey: a.privateKey };
 	}
 
-	return { listen: c.listen, upstream: c.upstream, tools, owners, ...(app ? { app } : {}), ...(defaultOwner ? { defaultOwner } : {}) };
+	let secrets: Config["secrets"];
+	if (c.secrets !== undefined) {
+		if (typeof c.secrets !== "object" || c.secrets === null || Array.isArray(c.secrets)) throw new Error("config.secrets: must be an object");
+		const s = c.secrets as Record<string, unknown>;
+		if (s.provider !== undefined && s.provider !== "file" && s.provider !== "systemd-creds") {
+			throw new Error('config.secrets.provider: must be "systemd-creds" or "file"');
+		}
+		// Reject an empty path: resolveSecretsPath treats a falsy explicit path as
+		// "not provided" and falls back to env/default, so "" would be silently ignored.
+		if (s.path !== undefined && (typeof s.path !== "string" || s.path.length === 0)) {
+			throw new Error("config.secrets.path: must be a non-empty string");
+		}
+		// path only means anything to the file provider; the systemd-creds provider
+		// (the default) reads $CREDENTIALS_DIRECTORY and would silently ignore it.
+		// Reject the combination so an operator can't think a file path is in effect.
+		if (s.path !== undefined && (s.provider ?? "systemd-creds") !== "file") {
+			throw new Error('config.secrets.path is only used by the "file" provider — set provider to "file" or remove path');
+		}
+		secrets = {
+			...(s.provider === "file" || s.provider === "systemd-creds" ? { provider: s.provider } : {}),
+			...(typeof s.path === "string" ? { path: s.path } : {})
+		};
+	}
+
+	return {
+		listen: c.listen,
+		upstream: c.upstream,
+		tools,
+		owners,
+		...(app ? { app } : {}),
+		...(secrets ? { secrets } : {}),
+		...(defaultOwner ? { defaultOwner } : {})
+	};
 }
 
 /** Build a name→rule index for O(1) allowlist checks. */

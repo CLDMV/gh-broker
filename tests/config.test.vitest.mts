@@ -218,6 +218,51 @@ describe("loadConfig — app", () => {
 	});
 });
 
+describe("loadConfig — secrets", () => {
+	it("rejects an array (which typeof reports as 'object')", () => {
+		const c = baseConfig();
+		c.secrets = [];
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets: must be an object/);
+	});
+
+	it("rejects null", () => {
+		const c = baseConfig();
+		c.secrets = null;
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets: must be an object/);
+	});
+
+	it("rejects an unknown provider", () => {
+		const c = baseConfig();
+		c.secrets = { provider: "vault" };
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets\.provider/);
+	});
+
+	it("carries a valid secrets block through", () => {
+		const c = baseConfig();
+		c.secrets = { provider: "file", path: "/etc/gh-broker/secrets.json" };
+		const out = loadConfig(writeConfig(c));
+		expect(out.secrets).toEqual({ provider: "file", path: "/etc/gh-broker/secrets.json" });
+	});
+
+	it("rejects a path without the file provider (omitted → systemd-creds default)", () => {
+		const c = baseConfig();
+		c.secrets = { path: "/etc/gh-broker/secrets.json" };
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets\.path is only used by the "file" provider/);
+	});
+
+	it("rejects a path with the systemd-creds provider", () => {
+		const c = baseConfig();
+		c.secrets = { provider: "systemd-creds", path: "/etc/gh-broker/secrets.json" };
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets\.path is only used by the "file" provider/);
+	});
+
+	it("rejects an empty path (would be silently ignored by resolveSecretsPath)", () => {
+		const c = baseConfig();
+		c.secrets = { provider: "file", path: "" };
+		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.secrets\.path: must be a non-empty string/);
+	});
+});
+
 describe("loadConfig — full valid config", () => {
 	it("returns the normalized shape", () => {
 		const c = baseConfig();
