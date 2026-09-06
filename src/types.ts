@@ -1,9 +1,11 @@
 /**
  * Config + internal types for gh-broker.
  *
- * The on-disk config (`/etc/gh-broker/config.json`) holds no secrets — only the
- * tool allowlist and, per owner, the *names* of the credentials to use. Actual
- * PAT values are resolved at runtime from systemd-delivered creds (see secrets.ts).
+ * The on-disk config holds no secrets — only the tool allowlist and, per owner,
+ * the *names* of the credentials to use. Actual PAT values are resolved at
+ * runtime from a separate, agent-unreadable secrets store (see secrets.ts and
+ * docs/deploy-architecture.md). Keeping the config token-free is what makes it
+ * safe to copy between machines.
  */
 
 export type Mode = "read" | "write";
@@ -34,6 +36,21 @@ export interface AppConfig {
 	privateKey: string;
 }
 
+/**
+ * Where the actual token values live — chosen at install time. A provider seam:
+ *   - "systemd-creds" (default): encrypted, host-bound `.cred` files via
+ *     LoadCredentialEncrypted → $CREDENTIALS_DIRECTORY (encrypted at rest, not portable).
+ *   - "file": a JSON `{ "<name>": "<token>" }` map at an agent-unreadable path
+ *     (plaintext at rest, portable, platform-neutral).
+ * Further providers (OS keychain, DPAPI, encrypted vault) can be added here
+ * without touching call sites. Omit to use the systemd-creds provider.
+ */
+export interface SecretsConfig {
+	provider?: "systemd-creds" | "file";
+	/** For provider "file": path to the JSON secrets file. Defaults to <configDir>/secrets.json. */
+	path?: string;
+}
+
 export interface Config {
 	/** e.g. "unix:/run/gh-broker/gh-broker.sock" */
 	listen: string;
@@ -49,8 +66,14 @@ export interface Config {
 	 * owner-less call (the stricter original behaviour).
 	 */
 	defaultOwner?: string;
-	/** Optional GitHub App — enables `link_issue` (App-token-only mutation). */
+	/**
+	 * Optional GitHub App, reserved for `link_issue` (an App-token-only mutation).
+	 * `link_issue` is currently deferred — it is neither advertised nor dispatched —
+	 * so providing this does not enable any verb today.
+	 */
 	app?: AppConfig;
+	/** Optional secret-store backend selection. Defaults to the systemd-creds provider. */
+	secrets?: SecretsConfig;
 }
 
 /** Resolves a "cred:<name>" reference to a token, never logging it. */
