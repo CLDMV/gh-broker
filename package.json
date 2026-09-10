@@ -49,7 +49,7 @@
 	"homepage": "https://github.com/CLDMV/gh-broker#readme",
 	"devDependencies": {
 		"@cldmv/vitest-runner": "^1.2.0",
-		"@types/node": "^26.4.0",
+		"@types/node": "^26.4.1",
 		"@vitest/coverage-v8": "^4.1.11",
 		"esbuild": "^0.28.2",
 		"typescript": "^7.0.2",
@@ -57,7 +57,7 @@
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.30.0",
-		"@octokit/auth-app": "^8.3.0",
+		"@octokit/auth-app": "^8.3.1",
 		"@octokit/core": "^7.0.8"
 	},
 	"publishConfig": {
