@@ -9,7 +9,7 @@
 	},
 	"main": "./dist/index.mjs",
 	"engines": {
-		"node": ">=22.12.0"
+		"node": ">=20.19.0"
 	},
 	"scripts": {
 		"typecheck": "tsc -p tsconfig.json --noEmit",

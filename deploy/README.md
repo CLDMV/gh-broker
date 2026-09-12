@@ -4,7 +4,7 @@ One interactive installer does first-install and upgrade. Design and rationale: 
 
 ## 0. Host prerequisites
 
-- **Node ≥ 22.12** — the only real prerequisite; the installer runs under it (`sudo node deploy/install.mjs`). If node isn't installed yet, the optional Linux bootstrap `sudo ./deploy/install.sh` sets up a system-wide nvm + node + the `/usr/local/bin/node` symlink, then hands off to the Node installer.
+- **Node ≥ 20** — the only real prerequisite; the installer runs under it (`sudo node deploy/install.mjs`). If node isn't installed yet, the optional Linux bootstrap `sudo ./deploy/install.sh` sets up a system-wide nvm + node + the `/usr/local/bin/node` symlink, then hands off to the Node installer.
 - **`socat`** — the agent's stdio↔socket bridge. **`rsync`** — used to sync the build (falls back to a plain copy if absent). **`systemd`** with `systemctl`. Install what's missing (`apt install socat rsync` etc.).
 
 The installer maintains `/usr/local/bin/node` as the single node indirection (CLI and service resolve the same link). Bumping node is re-pointing that symlink — which the installer does on every run.
