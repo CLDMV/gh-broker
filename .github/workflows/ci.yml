@@ -186,12 +186,17 @@ jobs:
       node_version: ${{ github.event.inputs.node_version || 'lts/*' }}
       min_node_version: ${{ github.event.inputs.min_node_version || '22' }}
       max_node_major: ${{ github.event.inputs.max_node_major || '22' }}
-      # LTS-only matrix (even majors: 22, 24, …) on every event. Odd majors
-      # (23, 25, …) are non-LTS interim releases, and the native-binding test
-      # toolchain (vitest 4 / rolldown / vite 8) excludes them via `engines`
-      # (`>=22.12.0`), so a "full matrix" on them only re-discovers a
-      # known toolchain gap ("Cannot find native binding") rather than a real
-      # per-version regression. workflow_dispatch can still opt out (set false).
+      # LTS-only matrix (even majors: 22, 24, 26, …) on every event — odd
+      # majors are non-LTS interim releases and are skipped by this policy
+      # regardless of toolchain support. Node 23 and 25 specifically are
+      # also excluded by vitest 5's own `engines` range (`^22.12.0 ||
+      # ^24.0.0 || >=26.0.0`) — its rolldown/vite 8 deps are wider
+      # (`^20.19.0 || >=22.12.0`) and don't drive this. Later odd majors
+      # like 27 aren't excluded by vitest's range either; they're just
+      # skipped by the LTS-only policy above. So a "full matrix" on 23/25
+      # only re-discovers a known toolchain gap ("Cannot find native
+      # binding") rather than a real per-version regression.
+      # workflow_dispatch can still opt out (set false).
       lts_only_matrix: ${{ github.event.inputs.lts_only_matrix != 'false' }}
       package_manager: ${{ github.event.inputs.package_manager || 'npm' }}
       test_command: "npm test" # Use defaults: NODE_ENV=development, NODE_OPTIONS=--conditions=development
