@@ -189,12 +189,13 @@ jobs:
       # LTS-only matrix (even majors: 22, 24, 26, …) on every event — odd
       # majors are non-LTS interim releases and are skipped by this policy
       # regardless of toolchain support. Node 23 and 25 specifically are
-      # also excluded by the native-binding test toolchain (vitest 5 /
-      # rolldown / vite 8)'s `engines` range (`^22.12.0 || ^24.0.0 ||
-      # >=26.0.0` — later odd majors like 27 aren't covered by that range,
-      # they're just skipped by the LTS-only policy above), so a "full
-      # matrix" on 23/25 only re-discovers a known toolchain gap ("Cannot
-      # find native binding") rather than a real per-version regression.
+      # also excluded by vitest 5's own `engines` range (`^22.12.0 ||
+      # ^24.0.0 || >=26.0.0`) — its rolldown/vite 8 deps are wider
+      # (`^20.19.0 || >=22.12.0`) and don't drive this. Later odd majors
+      # like 27 aren't excluded by vitest's range either; they're just
+      # skipped by the LTS-only policy above. So a "full matrix" on 23/25
+      # only re-discovers a known toolchain gap ("Cannot find native
+      # binding") rather than a real per-version regression.
       # workflow_dispatch can still opt out (set false).
       lts_only_matrix: ${{ github.event.inputs.lts_only_matrix != 'false' }}
       package_manager: ${{ github.event.inputs.package_manager || 'npm' }}
