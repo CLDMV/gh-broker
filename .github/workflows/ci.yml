@@ -8,6 +8,9 @@
 #
 
 # Individual repo: .github/workflows/ci.yml
+# Node 26 matrix jobs need cldmv-runners' image to carry libatomic1 (see
+# CLDMV/.github#286 / v4.27.1); this comment is a real (non-empty) diff so
+# paths-gate doesn't treat the retrigger as docs_only and skip the matrix.
 name: 🧪 CI Tests & Build
 
 on:
