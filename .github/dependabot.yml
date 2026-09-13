@@ -77,6 +77,22 @@ updates:
               patterns:
                   - "vitest"
                   - "@vitest/*"
+          # @eslint/js peers eslint with a major-locked range ("^10.0.0"), so a
+          # future eslint major bump without @eslint/js moving too would hit
+          # the same npm ci ERESOLVE class as the vitest/coverage-v8 split.
+          # @cldmv/eslint-plugin-jsonv doesn't peer eslint directly but is
+          # bundled here to keep the lint-config family moving together.
+          eslint:
+              patterns:
+                  - "eslint"
+                  - "@eslint/*"
+                  - "@cldmv/eslint-plugin-*"
+          # @cldmv/prettier-plugin-jsonv peers prettier with a major-locked
+          # range ("^3.0.0") — same reasoning as the eslint group above.
+          prettier:
+              patterns:
+                  - "prettier"
+                  - "@cldmv/prettier-plugin-*"
           security:
               applies-to: security-updates
               patterns: ["*"]
