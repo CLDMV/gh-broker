@@ -68,6 +68,15 @@ updates:
       commit-message:
           prefix: "deps"
       groups:
+          # vitest and @vitest/coverage-v8 (and other @vitest/* packages) peer
+          # each other exactly, so bumping one without the other breaks
+          # `npm ci` with an ERESOLVE. Bump the whole family together in one
+          # PR. Must come before security/patch/minor below — Dependabot
+          # assigns each update to the FIRST matching group.
+          vitest:
+              patterns:
+                  - "vitest"
+                  - "@vitest/*"
           security:
               applies-to: security-updates
               patterns: ["*"]
