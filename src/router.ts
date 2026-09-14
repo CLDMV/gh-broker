@@ -24,14 +24,17 @@ export interface Upstream {
  * forwards to the hosted MCP or dispatches a custom verb. The token never leaves here.
  */
 export class Router {
+	private readonly config: Config;
+	private readonly secrets: SecretStore;
+	private readonly upstream: Upstream;
+	private readonly appAuth?: AppAuth;
 	private readonly rules: Map<string, ToolRule>;
 
-	constructor(
-		private readonly config: Config,
-		private readonly secrets: SecretStore,
-		private readonly upstream: Upstream,
-		private readonly appAuth?: AppAuth
-	) {
+	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth) {
+		this.config = config;
+		this.secrets = secrets;
+		this.upstream = upstream;
+		this.appAuth = appAuth;
 		this.rules = indexTools(config.tools);
 	}
 
