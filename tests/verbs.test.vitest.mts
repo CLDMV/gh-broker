@@ -7,6 +7,7 @@ import {
 	REPLY_REVIEW_THREAD_SCHEMA
 } from "../src/verbs/review_thread.ts";
 import { reportUnlabeled, REPORT_UNLABELED_SCHEMA } from "../src/verbs/report_unlabeled.ts";
+import { reportCiStatus, REPORT_CI_STATUS_SCHEMA } from "../src/verbs/report_ci_status.ts";
 
 describe("linkIssue", () => {
 	let graphql: ReturnType<typeof vi.fn>;
@@ -325,5 +326,277 @@ describe("reportUnlabeled", () => {
 	it("advertises a valid schema", () => {
 		expect(REPORT_UNLABELED_SCHEMA.required).toEqual(["owner"]);
 		expect(REPORT_UNLABELED_SCHEMA.additionalProperties).toBe(false);
+	});
+});
+
+describe("reportCiStatus", () => {
+	function octokitWith(handler: (route: string, params: any) => Promise<{ data: unknown; headers?: Record<string, string> }>): any {
+		return { request: vi.fn(handler) };
+	}
+	const pr = (sha: string) => ({ data: { head: { sha } } });
+	const runs = (workflow_runs: unknown[]) => ({ data: { workflow_runs }, headers: {} });
+	const jobs = (jobs_: unknown[]) => ({ data: { jobs: jobs_ }, headers: {} });
+	const run = (over: Partial<{ id: number; name: string; status: string; conclusion: string | null; html_url: string }> = {}) => ({
+		id: 1,
+		name: "CI",
+		status: "completed",
+		conclusion: "success",
+		html_url: "https://gh/run/1",
+		...over
+	});
+	const job = (over: Partial<{ id: number; name: string; status: string; conclusion: string | null; html_url: string; steps: unknown[] }> = {}) => ({
+		id: 100,
+		name: "test",
+		status: "completed",
+		conclusion: "success",
+		html_url: "https://gh/job/100",
+		steps: [],
+		...over
+	});
+	const step = (over: Partial<{ name: string; status: string; conclusion: string | null; number: number; started_at: string | null; completed_at: string | null }> = {}) => ({
+		name: "npm test",
+		status: "completed",
+		conclusion: "success",
+		number: 1,
+		started_at: "2026-01-01T00:00:00Z",
+		completed_at: "2026-01-01T00:00:05Z",
+		...over
+	});
+
+	it("tier 0: counts passed/failed/pending, no failures key, no job calls made", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") {
+				return runs([run({ id: 1, conclusion: "success" }), run({ id: 2, conclusion: "failure" }), run({ id: 3, status: "in_progress", conclusion: null })]);
+			}
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5 });
+		expect(out).toEqual({ pull: 5, summary: { passed: 1, failed: 1, pending: 1 } });
+		expect(octokit.request).not.toHaveBeenCalledWith("GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs", expect.anything());
+	});
+
+	it("tier 1: includes only the failing job of a failing run, with workflow/job/run info", async () => {
+		const octokit = octokitWith(async (route, params) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ id: 9, name: "CI", conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") {
+				expect(params.run_id).toBe(9);
+				return jobs([job({ id: 200, name: "lint", conclusion: "success" }), job({ id: 201, name: "test", conclusion: "failure" })]);
+			}
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 1 });
+		expect(out.summary).toEqual({ passed: 0, failed: 1, pending: 0 });
+		expect(out.failures).toEqual([{ workflow: "CI", job: "test", runId: 9, runUrl: "https://gh/run/1", conclusion: "failure" }]);
+	});
+
+	it("tier 2: attaches only the failing steps of a failing job, with computed durationMs", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") {
+				return jobs([
+					job({
+						conclusion: "failure",
+						steps: [step({ name: "setup", conclusion: "success" }), step({ name: "npm run coverage", number: 4, conclusion: "failure", started_at: "2026-01-01T00:00:00Z", completed_at: "2026-01-01T00:00:08.213Z" })]
+					})
+				]);
+			}
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 2 });
+		expect(out.failures?.[0]?.steps).toEqual([{ name: "npm run coverage", number: 4, conclusion: "failure", durationMs: 8213 }]);
+	});
+
+	it("tier 3: attaches a tail of the failing job's log", async () => {
+		const bigLog = Array.from({ length: 300 }, (_, i) => `line ${i}`).join("\n");
+		const octokit = octokitWith(async (route, params) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") return jobs([job({ id: 555, conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs") {
+				expect(params.job_id).toBe(555);
+				return { data: bigLog, headers: {} };
+			}
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 3, logLines: 5 });
+		expect(out.failures?.[0]?.logTail).toBe(Array.from({ length: 5 }, (_, i) => `line ${295 + i}`).join("\n"));
+	});
+
+	it("scans every open PR when pull is omitted, including only PRs with a failure", async () => {
+		const octokit = octokitWith(async (route, params) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [{ number: 1, head: { sha: "a" } }, { number: 2, head: { sha: "b" } }], headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") {
+				return runs(params.head_sha === "a" ? [run({ conclusion: "success" })] : [run({ conclusion: "failure" })]);
+			}
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r" });
+		expect(out).toEqual({ scanned: { pulls: 2 }, results: [{ pull: 2, summary: { passed: 0, failed: 1, pending: 0 } }] });
+	});
+
+	it("flags truncated:max-pulls when the open-PR list is exactly at the cap", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [{ number: 1, head: { sha: "a" } }, { number: 2, head: { sha: "b" } }], headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "success" })]);
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = (await reportCiStatus(octokit, { owner: "cldmv", repo: "r", maxPulls: 2 })) as any;
+		expect(out.truncated).toBe(true);
+		expect(out.truncatedReason).toBe("max-pulls");
+	});
+
+	it("stops mid-scan on a rate limit with no failures collected yet, single-pull mode", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ id: 1, conclusion: "failure" }), run({ id: 2, conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") {
+				throw Object.assign(new Error("rate limited"), { status: 403 });
+			}
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = (await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 1 })) as any;
+		expect(out.truncated).toBe(true);
+		expect(out.truncatedReason).toBe("rate-limited");
+		expect(out.summary.failed).toBe(2);
+		expect(out.failures).toBeUndefined();
+	});
+
+	it("stops mid-scan on a rate limit but preserves failures already collected from an earlier run", async () => {
+		const octokit = octokitWith(async (route, params) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ id: 1, conclusion: "failure" }), run({ id: 2, conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") {
+				if (params.run_id === 1) return jobs([job({ id: 201, name: "test", conclusion: "failure" })]);
+				throw Object.assign(new Error("rate limited"), { status: 403 });
+			}
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = (await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 1 })) as any;
+		expect(out.truncated).toBe(true);
+		expect(out.truncatedReason).toBe("rate-limited");
+		expect(out.failures).toEqual([{ workflow: "CI", job: "test", runId: 1, runUrl: "https://gh/run/1", conclusion: "failure" }]);
+	});
+
+	it("reports 'unknown' for a null job/step conclusion, and defaults to no steps when a job has none listed", async () => {
+		const jobNoSteps = job({ conclusion: null });
+		delete (jobNoSteps as any).steps;
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") return jobs([jobNoSteps]);
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 2 });
+		expect(out.failures).toEqual([{ workflow: "CI", job: "test", runId: 1, runUrl: "https://gh/run/1", conclusion: "unknown", steps: [] }]);
+	});
+
+	it("reports a null step conclusion as 'unknown' and a 0ms duration when timestamps are missing", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") {
+				return jobs([job({ conclusion: "failure", steps: [step({ conclusion: null, started_at: null, completed_at: null })] })]);
+			}
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 2 });
+		expect(out.failures?.[0]?.steps).toEqual([{ name: "npm test", number: 1, conclusion: "unknown", durationMs: 0 }]);
+	});
+
+	it("surfaces retryAfterSeconds on a single-pull rate limit that includes a Retry-After header", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") throw Object.assign(new Error("nope"), { status: 429, response: { headers: { "retry-after": "45" } } });
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = (await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5 })) as any;
+		expect(out.retryAfterSeconds).toBe(45);
+	});
+
+	it("surfaces retryAfterSeconds on a multi-pull rate limit that includes a Retry-After header", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [{ number: 1, head: { sha: "a" } }], headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") throw Object.assign(new Error("nope"), { status: 429, response: { headers: { "retry-after": "12" } } });
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = (await reportCiStatus(octokit, { owner: "cldmv", repo: "r" })) as any;
+		expect(out.retryAfterSeconds).toBe(12);
+	});
+
+	it("stops the whole multi-pull scan (not just one PR) when a PR's scan hits the call budget", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [{ number: 1, head: { sha: "a" } }, { number: 2, head: { sha: "b" } }], headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "success" })]);
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = (await reportCiStatus(octokit, { owner: "cldmv", repo: "r", maxApiCalls: 2 })) as any;
+		// pulls-list call (1) + PR#1's runs call (2) exhaust the budget before PR#2 is ever scanned.
+		expect(octokit.request).toHaveBeenCalledTimes(2);
+		expect(out.scanned.pulls).toBe(1);
+		expect(out.truncated).toBe(true);
+		expect(out.truncatedReason).toBe("max-api-calls");
+	});
+
+	it("returns a truncated result immediately when the PR lookup itself is rate-limited", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") throw Object.assign(new Error("nope"), { status: 429 });
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = (await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5 })) as any;
+		expect(out).toMatchObject({ pull: 5, summary: { passed: 0, failed: 0, pending: 0 }, truncated: true, truncatedReason: "rate-limited" });
+	});
+
+	it("returns an empty truncated result when the open-PR list itself is rate-limited", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls") throw Object.assign(new Error("nope"), { status: 429 });
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = (await reportCiStatus(octokit, { owner: "cldmv", repo: "r" })) as any;
+		expect(out).toMatchObject({ scanned: { pulls: 0 }, results: [], truncated: true, truncatedReason: "rate-limited" });
+	});
+
+	it("re-throws a genuine error (not a rate limit) from the PR lookup", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") throw Object.assign(new Error("not found"), { status: 404 });
+			throw new Error(`unexpected route ${route}`);
+		});
+		await expect(reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5 })).rejects.toThrow(/not found/);
+	});
+
+	it("re-throws a genuine error (not a rate limit) from inside a single PR's scan", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") throw Object.assign(new Error("server exploded"), { status: 500 });
+			throw new Error(`unexpected route ${route}`);
+		});
+		await expect(reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5 })).rejects.toThrow(/server exploded/);
+	});
+
+	it("re-throws a genuine error (not a rate limit) from the open-PR list", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls") throw Object.assign(new Error("server exploded"), { status: 500 });
+			throw new Error(`unexpected route ${route}`);
+		});
+		await expect(reportCiStatus(octokit, { owner: "cldmv", repo: "r" })).rejects.toThrow(/server exploded/);
+	});
+
+	it("clamps an out-of-range verbosity into 0-3", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") return jobs([job({ conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs") return { data: "log", headers: {} };
+			throw new Error(`unexpected route ${route}`);
+		});
+		// verbosity: 99 clamps to 3 (not silently dropped to 0) — proven by the log fetch actually happening.
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 99 as any });
+		expect(out.failures?.[0]?.logTail).toBe("log");
+	});
+
+	it("advertises a valid schema", () => {
+		expect(REPORT_CI_STATUS_SCHEMA.required).toEqual(["owner", "repo"]);
+		expect(REPORT_CI_STATUS_SCHEMA.additionalProperties).toBe(false);
 	});
 });

@@ -8,7 +8,7 @@ export interface AuditEntry {
 	owner?: string;
 	mode?: "read" | "write";
 	repo?: string;
-	decision: "forward" | "custom" | "deny" | "error";
+	decision: "forward" | "custom" | "augment" | "deny" | "error";
 	ok?: boolean;
 	detail?: string;
 }

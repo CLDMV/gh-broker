@@ -5,6 +5,7 @@ import type { UpstreamPool } from "./upstream.ts";
 // import { LINK_ISSUE_SCHEMA } from "./verbs/link_issue.ts";
 import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verbs/review_thread.ts";
 import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
+import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
@@ -68,6 +69,13 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 						"Report issues and/or PRs with no labels, for one repo or every non-archived repo an owner has. Bounded by maxRepos/perRepoLimit/maxApiCalls; returns truncated:true (with a reason) instead of failing outright if a cap or GitHub's rate limit is hit mid-scan. Runs on the read PAT.",
 					inputSchema: REPORT_UNLABELED_SCHEMA
 				});
+			} else if (rule.name === "report_ci_status") {
+				tools.push({
+					name: "report_ci_status",
+					description:
+						"Report CI health for a PR, or every open PR in a repo, at a chosen verbosity: 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log. Detail beyond tier 0 is only fetched for runs that are actually failing. Runs on the read PAT.",
+					inputSchema: REPORT_CI_STATUS_SCHEMA
+				});
 			}
 			continue;
 		}
@@ -77,7 +85,29 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 			console.error(`catalog: allowlisted tool "${rule.name}" is NOT exposed by the upstream (${config.upstream}) — skipping it. Check the tool name or the upstream toolset (e.g. use /mcp/x/all for non-default toolsets like labels).`);
 			continue;
 		}
-		tools.push(up ?? { name: rule.name, description: `(${rule.mode}) proxied to the GitHub MCP`, inputSchema: { type: "object" } });
+		const base = up ?? { name: rule.name, description: `(${rule.mode}) proxied to the GitHub MCP`, inputSchema: { type: "object" } };
+		if (rule.augment && rule.name === "pull_request_read") {
+			// Layer gh-broker's own extension params onto the real upstream schema — the
+			// forwarded call still needs pull_request_read's actual params (method,
+			// pullNumber, ...); this ADDS to that, it doesn't replace it. See router.ts's
+			// dispatchAugmented for why gh-broker can extend a proxied tool's contract.
+			const baseSchema = base.inputSchema as { properties?: Record<string, unknown>; [k: string]: unknown };
+			tools.push({
+				...base,
+				description: `${base.description} gh-broker extension: with method "get", pass "ciVerbosity" (0-3) to also compute CI status for the PR's current head — 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log; "logLines" tunes tier 3's tail length.`,
+				inputSchema: {
+					...baseSchema,
+					type: "object",
+					properties: {
+						...(baseSchema.properties ?? {}),
+						ciVerbosity: { type: "number", enum: [0, 1, 2, 3], description: 'gh-broker extension: also compute CI status at this verbosity (method "get" only)' },
+						logLines: { type: "number", description: "gh-broker extension: tier-3 log tail length" }
+					}
+				}
+			});
+			continue;
+		}
+		tools.push(base);
 	}
 	return tools;
 }

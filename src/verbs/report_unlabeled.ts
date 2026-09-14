@@ -1,4 +1,5 @@
 import type { Octokit } from "@octokit/core";
+import { CallBudget, CallBudgetExhausted, RateLimited, paginate } from "./rest-client.ts";
 
 /**
  * Custom verb: report_unlabeled — issues/PRs with no labels, for one repo or every
@@ -10,14 +11,11 @@ import type { Octokit } from "@octokit/core";
  * client-side. This composes plain REST reads (`octokit.request`) over the read PAT,
  * the same allowlist tier as everything it uses.
  *
- * Fan-out safety: scanning "every repo" can mean dozens of repos x hundreds of
- * issues/PRs each. Three independent caps bound the damage, and a rate-limit read on
- * every response means we back off before GitHub does it for us:
+ * Fan-out safety (see rest-client.ts for the shared rate-limit/budget mechanics):
+ * scanning "every repo" can mean dozens of repos x hundreds of issues/PRs each.
  *  - `maxRepos` caps how many repos get enumerated when `repo` is omitted.
  *  - `perRepoLimit` caps items fetched per repo, per resource type (issues, pulls).
- *  - `maxApiCalls` is a hard ceiling on total REST calls made by one invocation,
- *    regardless of the two caps above (a defense against a misconfigured caller
- *    raising both past what's sane for a single MCP call).
+ *  - `maxApiCalls` is a hard ceiling on total REST calls made by one invocation.
  * Hitting any cap — or GitHub's own rate limit — stops the scan and returns whatever
  * was found so far with `truncated: true`, rather than throwing partial work away.
  */
@@ -67,19 +65,6 @@ const DEFAULT_PER_REPO_LIMIT = 200;
 const HARD_PER_REPO_LIMIT = 1000;
 const DEFAULT_MAX_API_CALLS = 250;
 const HARD_MAX_API_CALLS = 1000;
-const PAGE_SIZE = 100;
-/**
- * Stop proactively once remaining requests drop to this fraction of the token's OWN
- * rate limit (read from `x-ratelimit-limit` on every response — GitHub's REST limit is
- * 5000/hr for an authenticated PAT/App token today, but this must not hardcode that:
- * it can differ by token type/tier, and hardcoding it silently stops working correctly
- * if GitHub changes the number). Leaves headroom for other broker traffic sharing the
- * same PAT, rather than waiting to actually get a 403.
- */
-const RATE_LIMIT_FLOOR_RATIO = 0.02;
-/** Absolute floor used when `x-ratelimit-limit` is missing/unparseable, or the
- *  ratio-based floor would round to something smaller than this. */
-const RATE_LIMIT_FLOOR_MIN = 20;
 
 interface RawRepo {
 	name: string;
@@ -96,77 +81,6 @@ interface RawIssueOrPull {
 	pull_request?: unknown;
 	/** Present only on items returned by the /pulls endpoint. */
 	draft?: boolean;
-}
-
-class RateLimited extends Error {
-	readonly retryAfterSeconds?: number;
-	constructor(retryAfterSeconds?: number) {
-		super("rate limited");
-		this.retryAfterSeconds = retryAfterSeconds;
-	}
-}
-
-class CallBudget {
-	private remaining: number;
-	constructor(max: number) {
-		this.remaining = max;
-	}
-	/** Throws CallBudgetExhausted once the budget is spent. */
-	spend(): void {
-		if (this.remaining <= 0) throw new CallBudgetExhausted();
-		this.remaining--;
-	}
-}
-
-class CallBudgetExhausted extends Error {
-	constructor() {
-		super("call budget exhausted");
-	}
-}
-
-/** Runs one octokit.request call, charging the budget and checking rate-limit headers. */
-async function req<T>(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>): Promise<T[]> {
-	budget.spend();
-	try {
-		const res = await octokit.request(route, params);
-		const headers = res.headers as Record<string, string> | undefined;
-		const remainingHeader = headers?.["x-ratelimit-remaining"];
-		if (remainingHeader !== undefined) {
-			const remaining = Number(remainingHeader);
-			const limit = Number(headers?.["x-ratelimit-limit"]);
-			const floor = Number.isFinite(limit) ? Math.max(RATE_LIMIT_FLOOR_MIN, Math.ceil(limit * RATE_LIMIT_FLOOR_RATIO)) : RATE_LIMIT_FLOOR_MIN;
-			if (remaining <= floor) throw new RateLimited();
-		}
-		return res.data as T[];
-	} catch (err) {
-		if (err instanceof RateLimited) throw err;
-		const status = (err as { status?: number; response?: { headers?: Record<string, string> } }).status;
-		if (status === 403 || status === 429) {
-			const retryAfter = (err as { response?: { headers?: Record<string, string> } }).response?.headers?.["retry-after"];
-			throw new RateLimited(retryAfter ? Number(retryAfter) : undefined);
-		}
-		throw err;
-	}
-}
-
-/** Paginates a listing endpoint up to `limit` items, stopping at a short last page. */
-async function paginate<T>(
-	octokit: Octokit,
-	budget: CallBudget,
-	route: string,
-	params: Record<string, unknown>,
-	limit: number
-): Promise<T[]> {
-	const out: T[] = [];
-	let page = 1;
-	while (out.length < limit) {
-		const batch = await req<T>(octokit, budget, route, { ...params, per_page: PAGE_SIZE, page });
-		if (batch.length === 0) break;
-		out.push(...batch);
-		if (batch.length < PAGE_SIZE) break;
-		page++;
-	}
-	return out.length > limit ? out.slice(0, limit) : out;
 }
 
 /** Lists non-archived repo names for an owner — tries the org endpoint, falls back to user. */

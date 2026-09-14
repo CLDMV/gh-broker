@@ -10,11 +10,18 @@
 
 export type Mode = "read" | "write";
 
-/** One entry in the default-deny allowlist. `custom` verbs are handled locally, not proxied. */
+/**
+ * One entry in the default-deny allowlist. `custom` verbs are handled locally, not
+ * proxied. `augment` tools ARE proxied (forwarded to the hosted MCP) but the router
+ * post-processes the response afterward — gh-broker's own MCP contract for a proxied
+ * tool is not required to match the hosted MCP's exact schema/response verbatim (see
+ * router.ts's dispatchAugmented). `custom` and `augment` are mutually exclusive.
+ */
 export interface ToolRule {
 	name: string;
 	mode: Mode;
 	custom?: boolean;
+	augment?: boolean;
 }
 
 /** Credential *references* (e.g. "cred:cldmv-read"), resolved via the SecretStore. */
