@@ -409,20 +409,43 @@ describe("reportCiStatus", () => {
 		expect(out.failures?.[0]?.steps).toEqual([{ name: "npm run coverage", number: 4, conclusion: "failure", durationMs: 8213 }]);
 	});
 
-	it("tier 3: attaches a tail of the failing job's log", async () => {
-		const bigLog = Array.from({ length: 300 }, (_, i) => `line ${i}`).join("\n");
-		const octokit = octokitWith(async (route, params) => {
+	it("tier 3: attaches the failing job's log via the injected fetchFailedJobLogs, one call per failing run", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ id: 9, conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") return jobs([job({ id: 555, conclusion: "failure" }), job({ id: 556, conclusion: "success" })]);
+			throw new Error(`unexpected route ${route}`);
+		});
+		const fetchFailedJobLogs = vi.fn(async (runId: number, tailLines: number) => {
+			expect(runId).toBe(9);
+			expect(tailLines).toBe(5);
+			return new Map([[555, "tailed log content"]]);
+		});
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 3, logLines: 5 }, fetchFailedJobLogs);
+		expect(fetchFailedJobLogs).toHaveBeenCalledTimes(1); // once per failing RUN, not per job
+		expect(out.failures?.[0]?.logTail).toBe("tailed log content");
+	});
+
+	it("tier 3: leaves logTail unset for a job with no entry in the fetched map", async () => {
+		const octokit = octokitWith(async (route) => {
 			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
 			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "failure" })]);
 			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") return jobs([job({ id: 555, conclusion: "failure" })]);
-			if (route === "GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs") {
-				expect(params.job_id).toBe(555);
-				return { data: bigLog, headers: {} };
-			}
 			throw new Error(`unexpected route ${route}`);
 		});
-		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 3, logLines: 5 });
-		expect(out.failures?.[0]?.logTail).toBe(Array.from({ length: 5 }, (_, i) => `line ${295 + i}`).join("\n"));
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 3 }, async () => new Map());
+		expect(out.failures?.[0]?.logTail).toBeUndefined();
+	});
+
+	it("tier 3: skips fetching logs entirely when no fetcher is provided", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
+			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") return jobs([job({ id: 555, conclusion: "failure" })]);
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 3 });
+		expect(out.failures?.[0]?.logTail).toBeUndefined();
 	});
 
 	it("scans every open PR when pull is omitted, including only PRs with a failure", async () => {
@@ -586,12 +609,11 @@ describe("reportCiStatus", () => {
 		const octokit = octokitWith(async (route) => {
 			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
 			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "failure" })]);
-			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") return jobs([job({ conclusion: "failure" })]);
-			if (route === "GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs") return { data: "log", headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") return jobs([job({ id: 555, conclusion: "failure" })]);
 			throw new Error(`unexpected route ${route}`);
 		});
 		// verbosity: 99 clamps to 3 (not silently dropped to 0) — proven by the log fetch actually happening.
-		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 99 as any });
+		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 99 as any }, async () => new Map([[555, "log"]]));
 		expect(out.failures?.[0]?.logTail).toBe("log");
 	});
 

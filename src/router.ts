@@ -13,7 +13,7 @@ import {
 	type ReplyReviewThreadInput
 } from "./verbs/review_thread.ts";
 import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlabeled.ts";
-import { reportCiStatus, ciStatusForHeadSha, type ReportCiStatusInput } from "./verbs/report_ci_status.ts";
+import { reportCiStatus, ciStatusForHeadSha, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
@@ -120,12 +120,39 @@ export class Router {
 			}
 			case "report_ci_status": {
 				const octokit = new Octokit({ auth: token });
-				const out = await reportCiStatus(octokit, args as unknown as ReportCiStatusInput);
+				const reportArgs = args as unknown as ReportCiStatusInput;
+				const out = await reportCiStatus(octokit, reportArgs, this.makeJobLogsFetcher(owner, reportArgs.repo, token));
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			default:
 				throw new Error(`custom verb "${tool}" not implemented`);
 		}
+	}
+
+	/**
+	 * A failing-run's job logs, via the hosted MCP's own `get_job_logs` tool
+	 * (`failed_only: true` fetches every failing job in the run in one call) rather
+	 * than a hand-rolled REST call — see report_ci_status.ts's FailedJobLogsFetcher
+	 * doc comment for why. Best-effort: any failure here (bad shape, upstream error)
+	 * just yields an empty map — report_ci_status treats a lookup miss as "no
+	 * logTail for this job", never a hard failure of the whole report.
+	 */
+	private makeJobLogsFetcher(owner: string, repo: string, token: string): FailedJobLogsFetcher {
+		return async (runId, tailLines) => {
+			const map = new Map<number, string>();
+			try {
+				const result = await this.upstream.forward("get_job_logs", { owner, repo, run_id: runId, failed_only: true, return_content: true, tail_lines: tailLines }, token);
+				const textBlock = result.content?.find((c) => (c as { type?: string }).type === "text") as { text?: string } | undefined;
+				if (!textBlock?.text) return map;
+				const parsed = JSON.parse(textBlock.text) as { logs?: Array<{ job_id?: unknown; logs_content?: unknown }> };
+				for (const entry of parsed.logs ?? []) {
+					if (typeof entry.job_id === "number" && typeof entry.logs_content === "string") map.set(entry.job_id, entry.logs_content);
+				}
+			} catch {
+				/* best-effort — see doc comment */
+			}
+			return map;
+		};
 	}
 
 	/**
@@ -163,10 +190,12 @@ export class Router {
 				const p = pr as { number?: unknown; head?: { sha?: unknown } };
 				if (typeof p.number !== "number" || typeof p.head?.sha !== "string") return result;
 
+				const repo = String(upstreamArgs.repo ?? "");
 				const octokit = new Octokit({ auth: token });
-				const ci = await ciStatusForHeadSha(octokit, owner, String(upstreamArgs.repo ?? ""), p.number, p.head.sha, {
+				const ci = await ciStatusForHeadSha(octokit, owner, repo, p.number, p.head.sha, {
 					verbosity: Number(ciVerbosity),
-					logLines: logLines !== undefined ? Number(logLines) : undefined
+					logLines: logLines !== undefined ? Number(logLines) : undefined,
+					fetchFailedJobLogs: this.makeJobLogsFetcher(owner, repo, token)
 				});
 				textBlock.text = JSON.stringify({ ...(pr as object), ci });
 				return result;
