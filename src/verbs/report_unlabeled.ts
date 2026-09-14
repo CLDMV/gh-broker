@@ -68,10 +68,18 @@ const HARD_PER_REPO_LIMIT = 1000;
 const DEFAULT_MAX_API_CALLS = 250;
 const HARD_MAX_API_CALLS = 1000;
 const PAGE_SIZE = 100;
-/** Stop proactively once GitHub reports this few requests left in the primary rate limit,
- *  rather than waiting to actually get a 403 — leaves headroom for other broker traffic
- *  sharing the same PAT. */
-const RATE_LIMIT_FLOOR = 100;
+/**
+ * Stop proactively once remaining requests drop to this fraction of the token's OWN
+ * rate limit (read from `x-ratelimit-limit` on every response — GitHub's REST limit is
+ * 5000/hr for an authenticated PAT/App token today, but this must not hardcode that:
+ * it can differ by token type/tier, and hardcoding it silently stops working correctly
+ * if GitHub changes the number). Leaves headroom for other broker traffic sharing the
+ * same PAT, rather than waiting to actually get a 403.
+ */
+const RATE_LIMIT_FLOOR_RATIO = 0.02;
+/** Absolute floor used when `x-ratelimit-limit` is missing/unparseable, or the
+ *  ratio-based floor would round to something smaller than this. */
+const RATE_LIMIT_FLOOR_MIN = 20;
 
 interface RawRepo {
 	name: string;
@@ -91,8 +99,10 @@ interface RawIssueOrPull {
 }
 
 class RateLimited extends Error {
-	constructor(public readonly retryAfterSeconds?: number) {
+	readonly retryAfterSeconds?: number;
+	constructor(retryAfterSeconds?: number) {
 		super("rate limited");
+		this.retryAfterSeconds = retryAfterSeconds;
 	}
 }
 
@@ -119,9 +129,13 @@ async function req<T>(octokit: Octokit, budget: CallBudget, route: string, param
 	budget.spend();
 	try {
 		const res = await octokit.request(route, params);
-		const remainingHeader = (res.headers as Record<string, string> | undefined)?.["x-ratelimit-remaining"];
-		if (remainingHeader !== undefined && Number(remainingHeader) <= RATE_LIMIT_FLOOR) {
-			throw new RateLimited();
+		const headers = res.headers as Record<string, string> | undefined;
+		const remainingHeader = headers?.["x-ratelimit-remaining"];
+		if (remainingHeader !== undefined) {
+			const remaining = Number(remainingHeader);
+			const limit = Number(headers?.["x-ratelimit-limit"]);
+			const floor = Number.isFinite(limit) ? Math.max(RATE_LIMIT_FLOOR_MIN, Math.ceil(limit * RATE_LIMIT_FLOOR_RATIO)) : RATE_LIMIT_FLOOR_MIN;
+			if (remaining <= floor) throw new RateLimited();
 		}
 		return res.data as T[];
 	} catch (err) {

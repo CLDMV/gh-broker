@@ -199,9 +199,11 @@ describe("reportUnlabeled", () => {
 		expect(out.unlabeled).toHaveLength(1);
 	});
 
-	it("stops and reports truncated when the rate-limit header drops at/below the floor", async () => {
+	it("stops and reports truncated when remaining drops at/below 2% of the token's own limit (5000/hr PAT)", async () => {
 		const octokit = octokitWith(async (route) => {
-			if (route === "GET /repos/{owner}/{repo}/issues") return { data: [unlabeledIssue], headers: { "x-ratelimit-remaining": "50" } };
+			if (route === "GET /repos/{owner}/{repo}/issues") {
+				return { data: [unlabeledIssue], headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "50" } };
+			}
 			throw new Error(`unexpected route ${route}`);
 		});
 		const out = await reportUnlabeled(octokit, { owner: "cldmv", repo: "r", target: "issues" });
@@ -209,6 +211,41 @@ describe("reportUnlabeled", () => {
 		expect(out.truncatedReason).toBe("rate-limited");
 		expect(out.retryAfterSeconds).toBeUndefined();
 		expect(out.unlabeled).toEqual([]);
+	});
+
+	it("does NOT stop when remaining is comfortably above 2% of a 5000/hr limit", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/issues") {
+				return { data: [unlabeledIssue], headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "4800" } };
+			}
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportUnlabeled(octokit, { owner: "cldmv", repo: "r", target: "issues" });
+		expect(out.truncated).toBeUndefined();
+		expect(out.unlabeled).toHaveLength(1);
+	});
+
+	it("uses the absolute floor for a low-limit token (e.g. unauthenticated, 60/hr) instead of a near-zero ratio", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/issues") {
+				// 2% of 60 is ~1, but the absolute floor (20) takes over — 15 remaining still trips it.
+				return { data: [unlabeledIssue], headers: { "x-ratelimit-limit": "60", "x-ratelimit-remaining": "15" } };
+			}
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportUnlabeled(octokit, { owner: "cldmv", repo: "r", target: "issues" });
+		expect(out.truncated).toBe(true);
+		expect(out.truncatedReason).toBe("rate-limited");
+	});
+
+	it("falls back to the absolute floor when x-ratelimit-limit is missing", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /repos/{owner}/{repo}/issues") return { data: [unlabeledIssue], headers: { "x-ratelimit-remaining": "10" } };
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await reportUnlabeled(octokit, { owner: "cldmv", repo: "r", target: "issues" });
+		expect(out.truncated).toBe(true);
+		expect(out.truncatedReason).toBe("rate-limited");
 	});
 
 	it("stops and reports truncated with retryAfterSeconds on a 403", async () => {
