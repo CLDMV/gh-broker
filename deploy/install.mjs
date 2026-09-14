@@ -47,19 +47,6 @@ function readJson(path) {
 	}
 }
 
-/** A uid's home directory, read directly from /etc/passwd — no shell-out, no username needed. */
-function homeDirOf(uid) {
-	try {
-		for (const line of readFileSync("/etc/passwd", "utf8").split("\n")) {
-			const f = line.split(":");
-			if (Number(f[2]) === uid) return f[5];
-		}
-	} catch {
-		/* fall through */
-	}
-	return undefined;
-}
-
 const HELP = `gh-broker installer — install and upgrade in one command.
 
 Usage: sudo node deploy/install.mjs [agent-user] [flags]
@@ -128,7 +115,7 @@ async function main() {
 	}
 
 	step("prerequisites");
-	for (const cmd of ["systemctl", "useradd", "getent"]) if (!has(cmd)) die(`missing required command: ${cmd}`);
+	for (const cmd of ["systemctl", "useradd", "getent", "sudo"]) if (!has(cmd)) die(`missing required command: ${cmd}`);
 	for (const cmd of ["socat", "rsync"]) if (!has(cmd)) log(`  note: '${cmd}' not found — ${cmd === "socat" ? "the agent socket bridge needs it" : "will fall back to a plain copy"}`);
 
 	// --- agent user ---
@@ -153,19 +140,20 @@ async function main() {
 	// the repo checkout itself — not the deploy target (/opt/gh-broker, a directory
 	// the installer owns outright and correctly chowns to the gh-broker service user
 	// via deployDist() below). The checkout already has an owner: whoever owns this
-	// very script file. Build AS that owner (Node's spawnSync uid/gid options drop
-	// root's privileges for the child process) so generated files are correct from
-	// the moment they're created — never chown, which is neither cross-platform nor
-	// necessary when nothing is ever created with the wrong owner to begin with.
+	// very script file. Build AS that owner via `sudo -u '#<uid>'` — sudo resolves
+	// that uid's home directory, primary group, AND full supplementary groups itself
+	// (exactly like a real login), so generated files are correct from the moment
+	// they're created — never chown, which is neither cross-platform nor necessary
+	// once nothing is ever created with the wrong owner to begin with.
 	const nodeModulesDir = join(REPO, "node_modules");
-	const { uid: buildUid, gid: buildGid } = statSync(fileURLToPath(import.meta.url));
-	const buildEnv = { ...process.env, HOME: homeDirOf(buildUid) ?? process.env.HOME };
+	const buildUid = statSync(fileURLToPath(import.meta.url)).uid;
+	const asBuildOwner = (cmd, args) => run("sudo", ["-u", `#${buildUid}`, cmd, ...args], { cwd: REPO, stdio: "inherit" });
 
 	// A prior root-run build (an older version of this script, or a manual `sudo npm
 	// run build`) can leave dist/ or node_modules/ owned by root instead. Detect that
 	// and rebuild rather than reuse it — root can always remove a root-owned
-	// directory (regular DAC checks don't apply to it), where the privilege-dropped
-	// build subprocess below could not. This makes re-running the installer
+	// directory (regular DAC checks don't apply to it), where the build subprocess
+	// (running as the checkout owner) could not. This makes re-running the installer
 	// self-healing with no separate manual fix ever required.
 	const distStale = existsSync(DIST_ENTRY) && statSync(DIST_ENTRY).uid !== buildUid;
 	const modulesStale = existsSync(nodeModulesDir) && statSync(nodeModulesDir).uid !== buildUid;
@@ -174,8 +162,8 @@ async function main() {
 		if (!has("npm")) die(`dist/ is missing and 'npm' is not installed — build the bundle first (npm run build) or install npm, then re-run`);
 		if (distStale) rmSync(DIST, { recursive: true, force: true });
 		if (modulesStale) rmSync(nodeModulesDir, { recursive: true, force: true });
-		if (!existsSync(nodeModulesDir)) run("npm", ["ci"], { cwd: REPO, stdio: "inherit", uid: buildUid, gid: buildGid, env: buildEnv });
-		run("npm", ["run", "build"], { cwd: REPO, stdio: "inherit", uid: buildUid, gid: buildGid, env: buildEnv });
+		if (!existsSync(nodeModulesDir)) asBuildOwner("npm", ["ci"]);
+		asBuildOwner("npm", ["run", "build"]);
 	}
 
 	// --- resolve deployed paths from the daemon itself (one resolver, no drift) ---
