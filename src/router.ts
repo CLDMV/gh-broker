@@ -13,7 +13,7 @@ import {
 	type ReplyReviewThreadInput
 } from "./verbs/review_thread.ts";
 import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlabeled.ts";
-import { reportCiStatus, type ReportCiStatusInput } from "./verbs/report_ci_status.ts";
+import { reportCiStatus, ciStatusForHeadSha, type ReportCiStatusInput } from "./verbs/report_ci_status.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
@@ -66,14 +66,17 @@ export class Router {
 		const token = this.secrets.resolve(rule.mode === "write" ? creds.write : creds.read);
 		const repo = typeof args.repo === "string" ? `${owner}/${args.repo}` : owner;
 
+		const decision = rule.custom ? "custom" : rule.augment ? "augment" : "forward";
 		try {
 			const out = rule.custom
 				? await this.dispatchCustom(tool, args, owner, token)
-				: await this.upstream.forward(tool, args, token);
-			audit({ tool, owner, mode: rule.mode, repo, decision: rule.custom ? "custom" : "forward", ok: true });
+				: rule.augment
+					? await this.dispatchAugmented(tool, args, owner, token)
+					: await this.upstream.forward(tool, args, token);
+			audit({ tool, owner, mode: rule.mode, repo, decision, ok: true });
 			return out;
 		} catch (err) {
-			audit({ tool, owner, mode: rule.mode, repo, decision: rule.custom ? "custom" : "forward", ok: false, detail: (err as Error).message });
+			audit({ tool, owner, mode: rule.mode, repo, decision, ok: false, detail: (err as Error).message });
 			throw err;
 		}
 	}
@@ -119,6 +122,54 @@ export class Router {
 			}
 			default:
 				throw new Error(`custom verb "${tool}" not implemented`);
+		}
+	}
+
+	/**
+	 * Forwards to the hosted MCP like a plain proxy, then post-processes the result.
+	 * gh-broker presents its own MCP contract — a proxied tool's response is not
+	 * required to match the hosted MCP's shape verbatim (see [[broker-owns-its-mcp-contract]]
+	 * in project memory). `ciVerbosity`/`logLines` are gh-broker's own extension
+	 * params, stripped before forwarding since the upstream schema doesn't know them.
+	 *
+	 * Opt-in only: with no `ciVerbosity`, this is byte-identical to a plain forward —
+	 * augmenting every `pull_request_read` call by default would add an unrequested
+	 * API call (and cost) to every ordinary PR read.
+	 *
+	 * Best-effort: if the upstream response isn't the JSON-text shape expected (a
+	 * format this broker doesn't control), the original result is returned unmodified
+	 * rather than thrown — a shape mismatch should degrade to "no CI data added," not
+	 * break an otherwise-successful PR read.
+	 */
+	private async dispatchAugmented(tool: string, args: Record<string, unknown>, owner: string, token: string): Promise<CallToolResult> {
+		switch (tool) {
+			case "pull_request_read": {
+				const { ciVerbosity, logLines, ...upstreamArgs } = args as Record<string, unknown> & { ciVerbosity?: number; logLines?: number };
+				const result = await this.upstream.forward(tool, upstreamArgs, token);
+				if (ciVerbosity === undefined) return result;
+				if ((upstreamArgs.method ?? "get") !== "get") return result; // only the single-PR "get" shape is augmentable
+
+				const textBlock = result.content?.find((c) => (c as { type?: string }).type === "text") as { text?: string } | undefined;
+				if (!textBlock?.text) return result;
+				let pr: unknown;
+				try {
+					pr = JSON.parse(textBlock.text);
+				} catch {
+					return result;
+				}
+				const p = pr as { number?: unknown; head?: { sha?: unknown } };
+				if (typeof p.number !== "number" || typeof p.head?.sha !== "string") return result;
+
+				const octokit = new Octokit({ auth: token });
+				const ci = await ciStatusForHeadSha(octokit, owner, String(upstreamArgs.repo ?? ""), p.number, p.head.sha, {
+					verbosity: Number(ciVerbosity),
+					logLines: logLines !== undefined ? Number(logLines) : undefined
+				});
+				textBlock.text = JSON.stringify({ ...(pr as object), ci });
+				return result;
+			}
+			default:
+				return this.upstream.forward(tool, args, token);
 		}
 	}
 }

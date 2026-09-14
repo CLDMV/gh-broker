@@ -121,9 +121,28 @@ describe("loadConfig — tools", () => {
 		];
 		const out = loadConfig(writeConfig(c));
 		expect(out.tools).toEqual([
-			{ name: "get_me", mode: "read", custom: false },
-			{ name: "link_issue", mode: "write", custom: true }
+			{ name: "get_me", mode: "read", custom: false, augment: false },
+			{ name: "link_issue", mode: "write", custom: true, augment: false }
 		]);
+	});
+
+	it("carries the augment flag through, defaulting to false", () => {
+		const c = baseConfig();
+		c.tools = [
+			{ name: "get_me", mode: "read" },
+			{ name: "pull_request_read", mode: "read", augment: true }
+		];
+		const out = loadConfig(writeConfig(c));
+		expect(out.tools).toEqual([
+			{ name: "get_me", mode: "read", custom: false, augment: false },
+			{ name: "pull_request_read", mode: "read", custom: false, augment: true }
+		]);
+	});
+
+	it("rejects a tool marked both custom and augment", () => {
+		const c = baseConfig();
+		c.tools = [{ name: "weird", mode: "read", custom: true, augment: true }];
+		expect(() => loadConfig(writeConfig(c))).toThrow(/custom and augment are mutually exclusive/);
 	});
 });
 
@@ -272,7 +291,7 @@ describe("loadConfig — full valid config", () => {
 		expect(out).toEqual({
 			listen: "unix:/run/gh-broker/gh-broker.sock",
 			upstream: "https://api.githubcopilot.com/mcp/",
-			tools: [{ name: "get_me", mode: "read", custom: false }],
+			tools: [{ name: "get_me", mode: "read", custom: false, augment: false }],
 			owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
 			app: { appId: 7, privateKey: "cred:app" },
 			defaultOwner: "cldmv"

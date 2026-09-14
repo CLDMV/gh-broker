@@ -212,8 +212,30 @@ async function computeForPull(
 	return result;
 }
 
+function clampVerbosity(v: number | undefined): Verbosity {
+	return Math.min(Math.max(v ?? 0, 0), 3) as Verbosity;
+}
+
+/**
+ * CI status for a PR whose head sha is already known — skips the PR lookup
+ * `reportCiStatus` would otherwise make. Used by router.ts's `pull_request_read`
+ * augmentation, which already has the PR (and its head sha) from the forwarded
+ * upstream response.
+ */
+export async function ciStatusForHeadSha(
+	octokit: Octokit,
+	owner: string,
+	repo: string,
+	pullNumber: number,
+	headSha: string,
+	opts: { verbosity?: number; logLines?: number; maxApiCalls?: number } = {}
+): Promise<CiStatusResult> {
+	const budget = new CallBudget(Math.min(opts.maxApiCalls ?? DEFAULT_MAX_API_CALLS, HARD_MAX_API_CALLS));
+	return computeForPull(octokit, budget, owner, repo, pullNumber, headSha, clampVerbosity(opts.verbosity), Math.min(opts.logLines ?? DEFAULT_LOG_LINES, HARD_LOG_LINES));
+}
+
 export async function reportCiStatus(octokit: Octokit, input: ReportCiStatusInput): Promise<CiStatusResult | ReportCiStatusResult> {
-	const verbosity = Math.min(Math.max(input.verbosity ?? 0, 0), 3) as Verbosity;
+	const verbosity = clampVerbosity(input.verbosity);
 	const logLines = Math.min(input.logLines ?? DEFAULT_LOG_LINES, HARD_LOG_LINES);
 	const maxApiCalls = Math.min(input.maxApiCalls ?? DEFAULT_MAX_API_CALLS, HARD_MAX_API_CALLS);
 	const budget = new CallBudget(maxApiCalls);

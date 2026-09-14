@@ -26,7 +26,8 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "resolve_review_thread", mode: "write", custom: true },
 			{ name: "reply_review_thread", mode: "write", custom: true },
 			{ name: "report_unlabeled", mode: "read", custom: true },
-			{ name: "report_ci_status", mode: "read", custom: true }
+			{ name: "report_ci_status", mode: "read", custom: true },
+			{ name: "pull_request_read", mode: "read", augment: true }
 		],
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
 		...overrides
@@ -179,6 +180,82 @@ describe("Router.call", () => {
 			expect(out).toEqual({
 				content: [{ type: "text", text: JSON.stringify({ pull: 5, summary: { passed: 0, failed: 0, pending: 0 } }) }]
 			});
+		});
+	});
+
+	describe("augmented tools", () => {
+		it("forwards untouched when ciVerbosity is absent (opt-in only)", async () => {
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get" });
+			expect(out).toEqual({ content: [{ type: "text", text: "ok" }] });
+			expect(Octokit).not.toHaveBeenCalled();
+		});
+
+		it("forwards untouched when method isn't get, even with ciVerbosity present", async () => {
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get_diff", ciVerbosity: 1 });
+			expect(out).toEqual({ content: [{ type: "text", text: "ok" }] });
+			expect(upstream.forward).toHaveBeenCalledWith("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get_diff" }, "token:cred:cldmv-read");
+		});
+
+		it("injects a ci field computed from the PR's head sha when ciVerbosity is given", async () => {
+			upstream.forward.mockResolvedValue({ content: [{ type: "text", text: JSON.stringify({ number: 5, head: { sha: "abc123" } }) }] });
+			requestMock.mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get", ciVerbosity: 0 });
+			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
+			// Strips gh-broker's own params before forwarding upstream.
+			expect(upstream.forward).toHaveBeenCalledWith("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get" }, "token:cred:cldmv-read");
+			expect(out).toEqual({
+				content: [{ type: "text", text: JSON.stringify({ number: 5, head: { sha: "abc123" }, ci: { pull: 5, summary: { passed: 0, failed: 0, pending: 0 } } }) }]
+			});
+		});
+
+		it("defaults to method 'get' (augments) when method is omitted entirely, and forwards a given logLines", async () => {
+			upstream.forward.mockResolvedValue({ content: [{ type: "text", text: JSON.stringify({ number: 5, head: { sha: "abc123" } }) }] });
+			requestMock.mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out: any = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, ciVerbosity: 0, logLines: 50 });
+			expect(JSON.parse(out.content[0].text).ci).toEqual({ pull: 5, summary: { passed: 0, failed: 0, pending: 0 } });
+		});
+
+		it("returns the upstream result untouched when there is no text content block at all", async () => {
+			upstream.forward.mockResolvedValue({ content: [] });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get", ciVerbosity: 0 });
+			expect(out).toEqual({ content: [] });
+			expect(Octokit).not.toHaveBeenCalled();
+		});
+
+		it("resolves a missing repo arg to an empty string rather than throwing", async () => {
+			upstream.forward.mockResolvedValue({ content: [{ type: "text", text: JSON.stringify({ number: 5, head: { sha: "abc123" } }) }] });
+			requestMock.mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out: any = await r.call("pull_request_read", { owner: "cldmv", pullNumber: 5, method: "get", ciVerbosity: 0 });
+			expect(JSON.parse(out.content[0].text).ci).toEqual({ pull: 5, summary: { passed: 0, failed: 0, pending: 0 } });
+		});
+
+		it("returns the upstream result untouched when its content isn't the expected JSON-text shape", async () => {
+			upstream.forward.mockResolvedValue({ content: [{ type: "text", text: "not json" }] });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get", ciVerbosity: 0 });
+			expect(out).toEqual({ content: [{ type: "text", text: "not json" }] });
+			expect(Octokit).not.toHaveBeenCalled();
+		});
+
+		it("just forwards an augment-flagged tool with no dispatchAugmented case for it", async () => {
+			const cfg = makeConfig({ tools: [{ name: "weird_augment", mode: "read", augment: true }] });
+			const r = new Router(cfg, secrets as any, upstream as any);
+			const out = await r.call("weird_augment", { owner: "cldmv" });
+			expect(out).toEqual({ content: [{ type: "text", text: "ok" }] });
+		});
+
+		it("returns the upstream result untouched when the parsed PR is missing number/head.sha", async () => {
+			upstream.forward.mockResolvedValue({ content: [{ type: "text", text: JSON.stringify({ title: "no head here" }) }] });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get", ciVerbosity: 0 });
+			expect(out).toEqual({ content: [{ type: "text", text: JSON.stringify({ title: "no head here" }) }] });
+			expect(Octokit).not.toHaveBeenCalled();
 		});
 	});
 });
