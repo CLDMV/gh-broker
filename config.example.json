@@ -248,6 +248,11 @@
 			"name": "report_unlabeled",
 			"mode": "read",
 			"custom": true
+		},
+		{
+			"name": "report_ci_status",
+			"mode": "read",
+			"custom": true
 		}
 	],
 	"owners": {

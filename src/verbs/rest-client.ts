@@ -44,19 +44,8 @@ export class CallBudget {
 	}
 }
 
-/**
- * Runs one octokit.request call, charging the budget and checking rate-limit
- * headers. `extract` pulls the item array out of the response body — plain for
- * bare-array endpoints (issues/pulls/repos), overridden for endpoints that wrap
- * the array in a named field (e.g. Actions: `{ workflow_runs: [...] }`).
- */
-export async function req<T>(
-	octokit: Octokit,
-	budget: CallBudget,
-	route: string,
-	params: Record<string, unknown>,
-	extract: (data: unknown) => T[] = (d) => d as T[]
-): Promise<T[]> {
+/** Runs one octokit.request call, charging the budget and enforcing the rate-limit floor. */
+async function doRequest(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>): Promise<{ data: unknown }> {
 	budget.spend();
 	try {
 		const res = await octokit.request(route, params);
@@ -68,7 +57,7 @@ export async function req<T>(
 			const floor = Number.isFinite(limit) ? Math.max(RATE_LIMIT_FLOOR_MIN, Math.ceil(limit * RATE_LIMIT_FLOOR_RATIO)) : RATE_LIMIT_FLOOR_MIN;
 			if (remaining <= floor) throw new RateLimited();
 		}
-		return extract(res.data);
+		return res;
 	} catch (err) {
 		if (err instanceof RateLimited) throw err;
 		const status = (err as { status?: number; response?: { headers?: Record<string, string> } }).status;
@@ -78,6 +67,29 @@ export async function req<T>(
 		}
 		throw err;
 	}
+}
+
+/**
+ * Runs one octokit.request call expected to return a listing. `extract` pulls the
+ * item array out of the response body — plain for bare-array endpoints
+ * (issues/pulls/repos), overridden for endpoints that wrap the array in a named
+ * field (e.g. Actions: `{ workflow_runs: [...] }`).
+ */
+export async function req<T>(
+	octokit: Octokit,
+	budget: CallBudget,
+	route: string,
+	params: Record<string, unknown>,
+	extract: (data: unknown) => T[] = (d) => d as T[]
+): Promise<T[]> {
+	const res = await doRequest(octokit, budget, route, params);
+	return extract(res.data);
+}
+
+/** Runs one octokit.request call expected to return a single resource (not a listing). */
+export async function reqOne<T>(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>): Promise<T> {
+	const res = await doRequest(octokit, budget, route, params);
+	return res.data as T;
 }
 
 /** Paginates a listing endpoint up to `limit` items, stopping at a short last page. */

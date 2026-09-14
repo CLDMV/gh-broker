@@ -13,6 +13,7 @@ import {
 	type ReplyReviewThreadInput
 } from "./verbs/review_thread.ts";
 import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlabeled.ts";
+import { reportCiStatus, type ReportCiStatusInput } from "./verbs/report_ci_status.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
@@ -109,6 +110,11 @@ export class Router {
 			case "report_unlabeled": {
 				const octokit = new Octokit({ auth: token });
 				const out = await reportUnlabeled(octokit, args as unknown as ReportUnlabeledInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "report_ci_status": {
+				const octokit = new Octokit({ auth: token });
+				const out = await reportCiStatus(octokit, args as unknown as ReportCiStatusInput);
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			default:

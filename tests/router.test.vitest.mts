@@ -25,7 +25,8 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "link_issue", mode: "write", custom: true },
 			{ name: "resolve_review_thread", mode: "write", custom: true },
 			{ name: "reply_review_thread", mode: "write", custom: true },
-			{ name: "report_unlabeled", mode: "read", custom: true }
+			{ name: "report_unlabeled", mode: "read", custom: true },
+			{ name: "report_ci_status", mode: "read", custom: true }
 		],
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
 		...overrides
@@ -167,6 +168,16 @@ describe("Router.call", () => {
 			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
 			expect(out).toEqual({
 				content: [{ type: "text", text: JSON.stringify({ scanned: { repos: 1, issues: 0, pulls: 0 }, unlabeled: [] }) }]
+			});
+		});
+
+		it("report_ci_status runs on a read-PAT Octokit and returns the JSON report as text", async () => {
+			requestMock.mockResolvedValueOnce({ data: { head: { sha: "abc" } }, headers: {} }).mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("report_ci_status", { owner: "cldmv", repo: "gh-broker", pull: 5 });
+			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
+			expect(out).toEqual({
+				content: [{ type: "text", text: JSON.stringify({ pull: 5, summary: { passed: 0, failed: 0, pending: 0 } }) }]
 			});
 		});
 	});

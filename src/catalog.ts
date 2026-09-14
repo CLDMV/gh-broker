@@ -5,6 +5,7 @@ import type { UpstreamPool } from "./upstream.ts";
 // import { LINK_ISSUE_SCHEMA } from "./verbs/link_issue.ts";
 import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verbs/review_thread.ts";
 import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
+import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
@@ -67,6 +68,13 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 					description:
 						"Report issues and/or PRs with no labels, for one repo or every non-archived repo an owner has. Bounded by maxRepos/perRepoLimit/maxApiCalls; returns truncated:true (with a reason) instead of failing outright if a cap or GitHub's rate limit is hit mid-scan. Runs on the read PAT.",
 					inputSchema: REPORT_UNLABELED_SCHEMA
+				});
+			} else if (rule.name === "report_ci_status") {
+				tools.push({
+					name: "report_ci_status",
+					description:
+						"Report CI health for a PR, or every open PR in a repo, at a chosen verbosity: 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log. Detail beyond tier 0 is only fetched for runs that are actually failing. Runs on the read PAT.",
+					inputSchema: REPORT_CI_STATUS_SCHEMA
 				});
 			}
 			continue;

@@ -56,6 +56,15 @@ describe("buildCatalog", () => {
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
 	});
 
+	it("advertises report_ci_status with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const config = makeConfig([{ name: "report_ci_status", mode: "read", custom: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "report_ci_status" });
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo"] });
+	});
+
 	it("falls back to minimal schemas when the upstream fetch fails", async () => {
 		upstream.listToolsFor.mockRejectedValue(new Error("401 bad token"));
 		const config = makeConfig([
