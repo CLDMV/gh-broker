@@ -4,6 +4,7 @@ import type { UpstreamPool } from "./upstream.ts";
 // DEFERRED: link_issue (addClosingIssueReference) is App-token-only and not wired in — see docs.
 // import { LINK_ISSUE_SCHEMA } from "./verbs/link_issue.ts";
 import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verbs/review_thread.ts";
+import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
@@ -59,6 +60,13 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 					description:
 						"Post a reply inside a pull-request review thread — e.g. respond to a Copilot review comment. Takes the thread node id from pull_request_read get_review_comments. Runs on the write PAT (Pull requests: write).",
 					inputSchema: REPLY_REVIEW_THREAD_SCHEMA
+				});
+			} else if (rule.name === "report_unlabeled") {
+				tools.push({
+					name: "report_unlabeled",
+					description:
+						"Report issues and/or PRs with no labels, for one repo or every non-archived repo an owner has. Bounded by maxRepos/perRepoLimit/maxApiCalls; returns truncated:true (with a reason) instead of failing outright if a cap or GitHub's rate limit is hit mid-scan. Runs on the read PAT.",
+					inputSchema: REPORT_UNLABELED_SCHEMA
 				});
 			}
 			continue;
