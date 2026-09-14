@@ -158,4 +158,4 @@ npm run build
 
 Apache-2.0 © Shinrai / CLDMV
 
-Private (not published) — it's an internal security daemon.
+Published on npm as [`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker). It's a systemd daemon, not a typical CLI tool — install it with [`deploy/install.mjs`](deploy/README.md), not `npm install -g`.
