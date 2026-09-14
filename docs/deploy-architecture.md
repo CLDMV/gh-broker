@@ -57,7 +57,7 @@ The symlink is the single indirection: the CLI (via `PATH`) and the service reso
 
 ## Tooling: Node, with one optional shell bootstrap
 
-All install/deploy *logic* is Node (`deploy/install.mjs` + `deploy/lib/*.mjs`): config merge and validation (validation reuses the daemon's own loader via `node dist/index.mjs --check`), the interactive prompts, the privileged system operations (shelled out to `useradd` / `systemctl` / `rsync`), and the smoke test (a real MCP client over the socket). One language, testable with the repo's vitest suite.
+All install/deploy *logic* is Node (`deploy/install.mjs` + `deploy/lib/*.mjs`): config merge and validation (validation reuses the daemon's own loader via `node dist/index.mjs --check`), the interactive prompts, the privileged system operations (shelled out to `useradd` / `systemctl` / `rsync`), building `dist/`/`node_modules/` as the checkout's own owner via `sudo -u '#<uid>'` rather than leaving them root-owned, and the smoke test (a real MCP client over the socket). One language, testable with the repo's vitest suite.
 
 The only thing that can't be Node is bootstrapping node itself. So the entrypoint is **`sudo node deploy/install.mjs`** with node ≥20 as the one prerequisite — which runs on any platform node runs on. For zero-prerequisite convenience on Linux, an **optional** `deploy/install.sh` (~20 lines) sets up nvm + node + the symlink if node is absent, then `exec`s the Node installer. It is a convenience, not the real installer.
 
@@ -65,7 +65,7 @@ The only thing that can't be Node is bootstrapping node itself. So the entrypoin
 
 `sudo node deploy/install.mjs` is idempotent — first install and later upgrade are one command:
 
-1. detect platform + check prerequisites (`socat`, `rsync`, `systemctl`),
+1. detect platform + check prerequisites (`socat`, `rsync`, `systemctl`, `sudo`),
 2. **create or confirm the agent user** — hard stop if it can't (no silent warn-and-continue),
 3. ensure node on a stable path + the `/usr/local/bin/node` symlink,
 4. **regenerate the config** via `merge(example, current)`,
