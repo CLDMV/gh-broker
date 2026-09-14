@@ -139,20 +139,25 @@ async function main() {
 	if (!existsSync(DIST_ENTRY)) {
 		step("build (dist not found)");
 		if (!has("npm")) die(`dist/ is missing and 'npm' is not installed — build the bundle first (npm run build) or install npm, then re-run`);
-		const hadNodeModules = existsSync(join(REPO, "node_modules"));
-		if (!hadNodeModules) run("npm", ["ci"], { cwd: REPO, stdio: "inherit" });
+		if (!existsSync(join(REPO, "node_modules"))) run("npm", ["ci"], { cwd: REPO, stdio: "inherit" });
 		run("npm", ["run", "build"], { cwd: REPO, stdio: "inherit" });
+	}
 
-		// This build ran as root (the installer requires root), inside the REPO's own
-		// working tree — NOT the deploy target (/opt/gh-broker, chowned separately by
-		// deployDist() below). Left alone, dist/ (and node_modules/ on a first install)
-		// end up root-owned in the agent user's own checkout, breaking their next
-		// non-root `npm run build`/`rm -rf dist` with EACCES. Restore ownership.
-		const group = primaryGroupOf(agentUser);
-		const owner = group ? `${agentUser}:${group}` : agentUser;
-		const restored = run("chown", ["-R", owner, join(REPO, "dist")], { allowFail: true });
-		if (restored.status !== 0) log(`  warning: could not restore ownership of dist/ to ${owner} — you may need to fix it manually`);
-		if (!hadNodeModules) run("chown", ["-R", owner, join(REPO, "node_modules")], { allowFail: true });
+	// This installer requires root, and a build above runs inside the REPO's own
+	// working tree — NOT the deploy target (/opt/gh-broker, chowned separately by
+	// deployDist() below). Left alone, dist/ (and node_modules/ on a first install)
+	// end up root-owned in the agent user's own checkout, breaking their next
+	// non-root `npm run build`/`rm -rf dist` with EACCES. Unconditional (not just
+	// "if we just built") and idempotent, so simply RE-RUNNING the installer heals
+	// ownership left behind by an older version of this script too — no separate
+	// manual chown/rm ever required.
+	const restoreOwner = agentUser;
+	const restoreGroup = primaryGroupOf(agentUser);
+	const owner = restoreGroup ? `${restoreOwner}:${restoreGroup}` : restoreOwner;
+	for (const dir of [join(REPO, "dist"), join(REPO, "node_modules")]) {
+		if (!existsSync(dir)) continue;
+		const restored = run("chown", ["-R", owner, dir], { allowFail: true });
+		if (restored.status !== 0) log(`  warning: could not restore ownership of ${dir} to ${owner} — you may need to fix it manually`);
 	}
 
 	// --- resolve deployed paths from the daemon itself (one resolver, no drift) ---
