@@ -12,15 +12,14 @@ import type { Config, SecretStore } from "./types.ts";
  * lives only in the broker (systemd-creds), never in the agent.
  */
 export class AppAuth {
+	private readonly config: Config;
 	private readonly appId: number;
 	private readonly privateKey: string;
 	private readonly cache = new Map<number, Octokit>();
 
-	constructor(
-		private readonly config: Config,
-		secrets: SecretStore
-	) {
+	constructor(config: Config, secrets: SecretStore) {
 		if (!config.app) throw new Error("AppAuth: no app config");
+		this.config = config;
 		this.appId = config.app.appId;
 		this.privateKey = secrets.resolve(config.app.privateKey);
 	}
