@@ -3,11 +3,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Octokit is `new`-ed inside dispatchCustom for the review-thread verbs, so mock it
 // to hand back a controllable graphql fn. link_issue instead uses the injected
 // appAuth's octokit (also wired to graphqlMock below).
-const { graphqlMock } = vi.hoisted(() => ({ graphqlMock: vi.fn() }));
+const { graphqlMock, requestMock } = vi.hoisted(() => ({ graphqlMock: vi.fn(), requestMock: vi.fn() }));
 vi.mock("@octokit/core", () => ({
-	// Constructable mock (arrow fns can't be `new`-ed) — every instance shares graphqlMock.
+	// Constructable mock (arrow fns can't be `new`-ed) — every instance shares graphqlMock/requestMock.
 	Octokit: vi.fn(function (this: any) {
 		this.graphql = graphqlMock;
+		this.request = requestMock;
 	})
 }));
 
@@ -23,7 +24,8 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "create_pull_request", mode: "write" },
 			{ name: "link_issue", mode: "write", custom: true },
 			{ name: "resolve_review_thread", mode: "write", custom: true },
-			{ name: "reply_review_thread", mode: "write", custom: true }
+			{ name: "reply_review_thread", mode: "write", custom: true },
+			{ name: "report_unlabeled", mode: "read", custom: true }
 		],
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
 		...overrides
@@ -156,6 +158,16 @@ describe("Router.call", () => {
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
 			const out = await r.call("reply_review_thread", { owner: "cldmv", threadId: "PRRT_1", body: "thanks" });
 			expect(out).toEqual({ content: [{ type: "text", text: "replied: https://gh/c/1" }] });
+		});
+
+		it("report_unlabeled runs on a read-PAT Octokit and returns the JSON report as text", async () => {
+			requestMock.mockResolvedValue({ data: [], headers: {} });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("report_unlabeled", { owner: "cldmv", repo: "gh-broker" });
+			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
+			expect(out).toEqual({
+				content: [{ type: "text", text: JSON.stringify({ scanned: { repos: 1, issues: 0, pulls: 0 }, unlabeled: [] }) }]
+			});
 		});
 	});
 });

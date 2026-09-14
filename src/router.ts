@@ -12,6 +12,7 @@ import {
 	type ResolveReviewThreadInput,
 	type ReplyReviewThreadInput
 } from "./verbs/review_thread.ts";
+import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlabeled.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
@@ -104,6 +105,11 @@ export class Router {
 				const octokit = new Octokit({ auth: token });
 				const out = await replyReviewThread(octokit, args as unknown as ReplyReviewThreadInput);
 				return { content: [{ type: "text", text: `replied: ${out.url}` }] };
+			}
+			case "report_unlabeled": {
+				const octokit = new Octokit({ auth: token });
+				const out = await reportUnlabeled(octokit, args as unknown as ReportUnlabeledInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			default:
 				throw new Error(`custom verb "${tool}" not implemented`);

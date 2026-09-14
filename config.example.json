@@ -243,6 +243,11 @@
 			"name": "reply_review_thread",
 			"mode": "write",
 			"custom": true
+		},
+		{
+			"name": "report_unlabeled",
+			"mode": "read",
+			"custom": true
 		}
 	],
 	"owners": {
