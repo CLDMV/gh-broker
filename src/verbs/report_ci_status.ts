@@ -6,11 +6,23 @@ import { CallBudget, CallBudgetExhausted, RateLimited, paginate, reqOne } from "
  * at a verbosity the caller chooses: counts only by default, escalating to
  * run/job detail, failing-step detail, and finally a tail of the failing job's log.
  *
- * Built on the GitHub Actions REST API (`/actions/runs`, `/actions/runs/{id}/jobs`,
- * `/actions/jobs/{id}/logs`), NOT the Checks API (`get_check_runs`, already proxied
- * via `pull_request_read`) — verified live that the configured read PAT has Actions
- * access but not Checks access (fine-grained PAT permissions are separate scopes).
- * Building on Actions avoids needing a PAT permission change to ship this.
+ * Run/job/step classification is built on the GitHub Actions REST API
+ * (`/actions/runs`, `/actions/runs/{id}/jobs`), NOT the Checks API
+ * (`get_check_runs`, already proxied via `pull_request_read`) — verified live that
+ * the configured read PAT has Actions access but not Checks access (fine-grained
+ * PAT permissions are separate scopes). Building on Actions avoids needing a PAT
+ * permission change to ship this.
+ *
+ * Tier 3's log fetch instead goes through the hosted MCP's own `get_job_logs` tool
+ * (`fetchFailedJobLogs`, injected by the caller — router.ts has the upstream/token
+ * this verb doesn't) rather than a hand-rolled REST call: `get_job_logs` already
+ * does exactly this (`run_id` + `failed_only: true` fetches every failing job in a
+ * run in one call, with its own `tail_lines`), so there's no reason to duplicate
+ * it. One call per failing RUN, not per failing job. This means tier-3 log fetches
+ * are NOT counted by the CallBudget below (that only tracks direct `octokit.request`
+ * calls and their rate-limit headers) — an accepted gap, not an oversight: an
+ * upstream-forwarded MCP call exposes no rate-limit headers to inspect, and the
+ * fan-out is already bounded (one call per ACTUALLY-failing run, not per PR).
  *
  * Classification (run/job/step all share this): `status !== "completed"` is
  * "pending"; a completed run/job/step is "failed" unless its conclusion is
@@ -24,6 +36,15 @@ import { CallBudget, CallBudgetExhausted, RateLimited, paginate, reqOne } from "
  */
 
 export type Verbosity = 0 | 1 | 2 | 3;
+
+/**
+ * Fetches every failing job's log (already tailed to `tailLines`) for one workflow
+ * run, keyed by job id — the shape `get_job_logs` returns with `failed_only: true`.
+ * Injected by the caller (router.ts), which holds the upstream/token this verb
+ * doesn't. Absent (or a lookup miss for a given job) just means no `logTail` on
+ * that failure — best-effort, never a hard failure of the whole report.
+ */
+export type FailedJobLogsFetcher = (runId: number, tailLines: number) => Promise<Map<number, string>>;
 
 export interface ReportCiStatusInput {
 	owner: string;
@@ -144,11 +165,6 @@ function truncationFrom(err: unknown): Truncation | undefined {
 	return undefined;
 }
 
-async function fetchJobLogTail(octokit: Octokit, budget: CallBudget, owner: string, repo: string, jobId: number, logLines: number): Promise<string> {
-	const text = await reqOne<string>(octokit, budget, "GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs", { owner, repo, job_id: jobId });
-	return text.split("\n").slice(-logLines).join("\n");
-}
-
 async function computeForPull(
 	octokit: Octokit,
 	budget: CallBudget,
@@ -157,7 +173,8 @@ async function computeForPull(
 	pullNumber: number,
 	headSha: string,
 	verbosity: Verbosity,
-	logLines: number
+	logLines: number,
+	fetchFailedJobLogs?: FailedJobLogsFetcher
 ): Promise<CiStatusResult> {
 	const summary: CiSummary = { passed: 0, failed: 0, pending: 0 };
 	const failures: CiFailure[] = [];
@@ -188,6 +205,9 @@ async function computeForPull(
 					100,
 					(d) => (d as { jobs: RawJob[] }).jobs
 				);
+				// One get_job_logs call per FAILING RUN (not per job) — failed_only:true
+				// already returns every failing job's log in that run at once.
+				const logsByJobId = verbosity >= 3 && fetchFailedJobLogs ? await fetchFailedJobLogs(run.id, logLines) : undefined;
 				for (const job of jobs) {
 					if (classify(job.status, job.conclusion) !== "failed") continue;
 					const failure: CiFailure = { workflow: run.name, job: job.name, runId: run.id, runUrl: run.html_url, conclusion: job.conclusion ?? "unknown" };
@@ -196,7 +216,8 @@ async function computeForPull(
 							.filter((s) => classify(s.status, s.conclusion) === "failed")
 							.map((s) => ({ name: s.name, number: s.number, conclusion: s.conclusion ?? "unknown", durationMs: stepDurationMs(s) }));
 					}
-					if (verbosity >= 3) failure.logTail = await fetchJobLogTail(octokit, budget, owner, repo, job.id, logLines);
+					const logTail = logsByJobId?.get(job.id);
+					if (logTail !== undefined) failure.logTail = logTail;
 					failures.push(failure);
 				}
 			}
@@ -228,13 +249,27 @@ export async function ciStatusForHeadSha(
 	repo: string,
 	pullNumber: number,
 	headSha: string,
-	opts: { verbosity?: number; logLines?: number; maxApiCalls?: number } = {}
+	opts: { verbosity?: number; logLines?: number; maxApiCalls?: number; fetchFailedJobLogs?: FailedJobLogsFetcher } = {}
 ): Promise<CiStatusResult> {
 	const budget = new CallBudget(Math.min(opts.maxApiCalls ?? DEFAULT_MAX_API_CALLS, HARD_MAX_API_CALLS));
-	return computeForPull(octokit, budget, owner, repo, pullNumber, headSha, clampVerbosity(opts.verbosity), Math.min(opts.logLines ?? DEFAULT_LOG_LINES, HARD_LOG_LINES));
+	return computeForPull(
+		octokit,
+		budget,
+		owner,
+		repo,
+		pullNumber,
+		headSha,
+		clampVerbosity(opts.verbosity),
+		Math.min(opts.logLines ?? DEFAULT_LOG_LINES, HARD_LOG_LINES),
+		opts.fetchFailedJobLogs
+	);
 }
 
-export async function reportCiStatus(octokit: Octokit, input: ReportCiStatusInput): Promise<CiStatusResult | ReportCiStatusResult> {
+export async function reportCiStatus(
+	octokit: Octokit,
+	input: ReportCiStatusInput,
+	fetchFailedJobLogs?: FailedJobLogsFetcher
+): Promise<CiStatusResult | ReportCiStatusResult> {
 	const verbosity = clampVerbosity(input.verbosity);
 	const logLines = Math.min(input.logLines ?? DEFAULT_LOG_LINES, HARD_LOG_LINES);
 	const maxApiCalls = Math.min(input.maxApiCalls ?? DEFAULT_MAX_API_CALLS, HARD_MAX_API_CALLS);
@@ -248,7 +283,7 @@ export async function reportCiStatus(octokit: Octokit, input: ReportCiStatusInpu
 				repo: input.repo,
 				pull_number: pullNumber
 			});
-			return await computeForPull(octokit, budget, input.owner, input.repo, pullNumber, pr.head.sha, verbosity, logLines);
+			return await computeForPull(octokit, budget, input.owner, input.repo, pullNumber, pr.head.sha, verbosity, logLines, fetchFailedJobLogs);
 		} catch (err) {
 			const t = truncationFrom(err);
 			if (t) return { pull: pullNumber, summary: { passed: 0, failed: 0, pending: 0 }, ...t };
@@ -270,7 +305,7 @@ export async function reportCiStatus(octokit: Octokit, input: ReportCiStatusInpu
 	let scanned = 0;
 	let aggregateTruncation: Truncation | undefined;
 	for (const p of pulls) {
-		const r = await computeForPull(octokit, budget, input.owner, input.repo, p.number, p.head.sha, verbosity, logLines);
+		const r = await computeForPull(octokit, budget, input.owner, input.repo, p.number, p.head.sha, verbosity, logLines, fetchFailedJobLogs);
 		if (r.truncated) {
 			// Didn't finish evaluating this PR — don't count it as scanned, but surface
 			// it (and stop entirely: the budget/rate limit is gone for the next PR too).
