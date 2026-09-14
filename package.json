@@ -61,7 +61,7 @@
 		"@octokit/core": "^7.0.8"
 	},
 	"publishConfig": {
-		"access": "restricted"
+		"access": "public"
 	},
 	"allowScripts": {
 		"esbuild": true
