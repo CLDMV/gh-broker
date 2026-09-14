@@ -9,7 +9,7 @@
  * --non-interactive for a single unattended command. See --help and
  * docs/deploy-architecture.md.
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
@@ -45,6 +45,19 @@ function readJson(path) {
 	} catch {
 		return null;
 	}
+}
+
+/** A uid's home directory, read directly from /etc/passwd — no shell-out, no username needed. */
+function homeDirOf(uid) {
+	try {
+		for (const line of readFileSync("/etc/passwd", "utf8").split("\n")) {
+			const f = line.split(":");
+			if (Number(f[2]) === uid) return f[5];
+		}
+	} catch {
+		/* fall through */
+	}
+	return undefined;
 }
 
 const HELP = `gh-broker installer — install and upgrade in one command.
@@ -136,33 +149,33 @@ async function main() {
 	}
 
 	// --- build if needed ---
-	if (!existsSync(DIST_ENTRY)) {
-		step("build (dist not found)");
-		if (!has("npm")) die(`dist/ is missing and 'npm' is not installed — build the bundle first (npm run build) or install npm, then re-run`);
-		if (!existsSync(join(REPO, "node_modules"))) run("npm", ["ci"], { cwd: REPO, stdio: "inherit" });
-		run("npm", ["run", "build"], { cwd: REPO, stdio: "inherit" });
-	}
+	// This installer requires root, but dist/ and node_modules/ are generated INSIDE
+	// the repo checkout itself — not the deploy target (/opt/gh-broker, a directory
+	// the installer owns outright and correctly chowns to the gh-broker service user
+	// via deployDist() below). The checkout already has an owner: whoever owns this
+	// very script file. Build AS that owner (Node's spawnSync uid/gid options drop
+	// root's privileges for the child process) so generated files are correct from
+	// the moment they're created — never chown, which is neither cross-platform nor
+	// necessary when nothing is ever created with the wrong owner to begin with.
+	const nodeModulesDir = join(REPO, "node_modules");
+	const { uid: buildUid, gid: buildGid } = statSync(fileURLToPath(import.meta.url));
+	const buildEnv = { ...process.env, HOME: homeDirOf(buildUid) ?? process.env.HOME };
 
-	// This installer requires root, and a build above runs inside the REPO's own
-	// working tree — NOT the deploy target (/opt/gh-broker, chowned separately by
-	// deployDist() below). Left alone, dist/ (and node_modules/ on a first install)
-	// end up root-owned in the agent user's own checkout, breaking their next
-	// non-root `npm run build`/`rm -rf dist` with EACCES. Unconditional (not just
-	// "if we just built") and idempotent, so simply RE-RUNNING the installer heals
-	// ownership left behind by an older version of this script too — no separate
-	// manual chown/rm ever required.
-	//
-	// Owner (uid) only — deliberately NOT `chown user:group`. The repo checkout
-	// commonly has its own group already correct via a setgid directory bit (new
-	// files inherit the DIRECTORY's group, not the creating process's), and that
-	// group is very often a SECONDARY group of the agent user, not their primary
-	// one — `id -gn <user>` returns the wrong group in exactly that layout. Only
-	// the owner is actually broken (root, from running under sudo); leave the
-	// group alone rather than guess it.
-	for (const dir of [join(REPO, "dist"), join(REPO, "node_modules")]) {
-		if (!existsSync(dir)) continue;
-		const restored = run("chown", ["-R", agentUser, dir], { allowFail: true });
-		if (restored.status !== 0) log(`  warning: could not restore ownership of ${dir} to ${agentUser} — you may need to fix it manually`);
+	// A prior root-run build (an older version of this script, or a manual `sudo npm
+	// run build`) can leave dist/ or node_modules/ owned by root instead. Detect that
+	// and rebuild rather than reuse it — root can always remove a root-owned
+	// directory (regular DAC checks don't apply to it), where the privilege-dropped
+	// build subprocess below could not. This makes re-running the installer
+	// self-healing with no separate manual fix ever required.
+	const distStale = existsSync(DIST_ENTRY) && statSync(DIST_ENTRY).uid !== buildUid;
+	const modulesStale = existsSync(nodeModulesDir) && statSync(nodeModulesDir).uid !== buildUid;
+	if (!existsSync(DIST_ENTRY) || distStale || modulesStale) {
+		step(distStale || modulesStale ? "build (owned by a different user — rebuilding)" : "build (dist not found)");
+		if (!has("npm")) die(`dist/ is missing and 'npm' is not installed — build the bundle first (npm run build) or install npm, then re-run`);
+		if (distStale) rmSync(DIST, { recursive: true, force: true });
+		if (modulesStale) rmSync(nodeModulesDir, { recursive: true, force: true });
+		if (!existsSync(nodeModulesDir)) run("npm", ["ci"], { cwd: REPO, stdio: "inherit", uid: buildUid, gid: buildGid, env: buildEnv });
+		run("npm", ["run", "build"], { cwd: REPO, stdio: "inherit", uid: buildUid, gid: buildGid, env: buildEnv });
 	}
 
 	// --- resolve deployed paths from the daemon itself (one resolver, no drift) ---
