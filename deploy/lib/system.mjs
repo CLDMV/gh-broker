@@ -37,11 +37,6 @@ export function uidOf(name) {
 	const uid = Number(r.stdout.trim());
 	return Number.isFinite(uid) ? uid : undefined;
 }
-/** The user's primary group name (e.g. for restoring ownership after a root-run build). */
-export function primaryGroupOf(name) {
-	const r = run("id", ["-gn", name], { allowFail: true });
-	return r.status === 0 ? r.stdout.trim() : undefined;
-}
 
 /**
  * gidOf/uidOf that throw a clear error when the name can't be resolved. Used

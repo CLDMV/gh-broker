@@ -13,7 +13,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-	run, has, isRoot, userExists, requireGid, primaryGroupOf,
+	run, has, isRoot, userExists, requireGid,
 	ensureServiceUser, createAgentUser, addUserToGroup,
 	pointNodeSymlinks, currentNodeBin, ensureDirs, installUnit,
 	enableService, restartService, serviceActive, deployDist, writeConfigFile,
@@ -151,13 +151,18 @@ async function main() {
 	// "if we just built") and idempotent, so simply RE-RUNNING the installer heals
 	// ownership left behind by an older version of this script too — no separate
 	// manual chown/rm ever required.
-	const restoreOwner = agentUser;
-	const restoreGroup = primaryGroupOf(agentUser);
-	const owner = restoreGroup ? `${restoreOwner}:${restoreGroup}` : restoreOwner;
+	//
+	// Owner (uid) only — deliberately NOT `chown user:group`. The repo checkout
+	// commonly has its own group already correct via a setgid directory bit (new
+	// files inherit the DIRECTORY's group, not the creating process's), and that
+	// group is very often a SECONDARY group of the agent user, not their primary
+	// one — `id -gn <user>` returns the wrong group in exactly that layout. Only
+	// the owner is actually broken (root, from running under sudo); leave the
+	// group alone rather than guess it.
 	for (const dir of [join(REPO, "dist"), join(REPO, "node_modules")]) {
 		if (!existsSync(dir)) continue;
-		const restored = run("chown", ["-R", owner, dir], { allowFail: true });
-		if (restored.status !== 0) log(`  warning: could not restore ownership of ${dir} to ${owner} — you may need to fix it manually`);
+		const restored = run("chown", ["-R", agentUser, dir], { allowFail: true });
+		if (restored.status !== 0) log(`  warning: could not restore ownership of ${dir} to ${agentUser} — you may need to fix it manually`);
 	}
 
 	// --- resolve deployed paths from the daemon itself (one resolver, no drift) ---
