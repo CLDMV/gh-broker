@@ -53,7 +53,6 @@ jobs:
             # whose rulesets are merge-only. gh-broker pins "squash" explicitly; the
             # action narrows to a method the branch actually permits, so this is safe
             # even if the ruleset is merge-only.
-            merge_method: "squash"
             # also_for_actors: "renovate[bot]"   # extend if you adopt Renovate
         secrets:
             BOT_APP_CLIENT_ID: ${{ secrets.CLDMV_BOT_APP_CLIENT_ID }}
