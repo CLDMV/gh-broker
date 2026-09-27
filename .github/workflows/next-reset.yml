@@ -32,6 +32,9 @@ concurrency:
     group: next-reset-${{ github.repository }}
     cancel-in-progress: false
 
+permissions:
+    contents: read
+
 jobs:
     sync:
         permissions:

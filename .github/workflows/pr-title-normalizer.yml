@@ -33,6 +33,9 @@ concurrency:
     group: pr-title-normalizer-${{ github.event.pull_request.number }}
     cancel-in-progress: true
 
+permissions:
+    contents: read
+
 jobs:
     normalize:
         permissions:

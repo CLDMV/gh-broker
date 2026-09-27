@@ -37,6 +37,9 @@ concurrency:
     group: next-release-${{ github.repository }}
     cancel-in-progress: false
 
+permissions:
+    contents: read
+
 jobs:
     release:
         permissions:
@@ -50,6 +53,12 @@ jobs:
             # Map your repo/org secrets to the expected names.
             BOT_APP_CLIENT_ID: ${{ secrets.CLDMV_BOT_APP_CLIENT_ID }}
             BOT_APP_PRIVATE_KEY: ${{ secrets.CLDMV_BOT_APP_PRIVATE_KEY }}
+            # Optional: only needed if you also use reusable-lint-format.yml /
+            # reusable-coverage-badge.yml (or otherwise sign a commit locally as
+            # this identity). Passed through so the release-PR changelog
+            # recognizes that identity as a bot instead of listing it as a
+            # contributor — see CLDMV_BOT_NAME/CLDMV_BOT_EMAIL in your other
+            # workflows for the same values.
             BOT_NAME: ${{ secrets.CLDMV_BOT_NAME }}
             BOT_EMAIL: ${{ secrets.CLDMV_BOT_EMAIL }}
             # Optional release-PR notifier webhooks — each is independently

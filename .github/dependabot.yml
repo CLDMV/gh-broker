@@ -69,10 +69,13 @@ updates:
           prefix: "deps"
       groups:
           # vitest and @vitest/coverage-v8 (and other @vitest/* packages) peer
-          # each other exactly, so bumping one without the other breaks
-          # `npm ci` with an ERESOLVE. Bump the whole family together in one
-          # PR. Must come before security/patch/minor below — Dependabot
-          # assigns each update to the FIRST matching group.
+          # each other EXACTLY, so a partial bump (e.g. vitest to 5.0.0 while
+          # @vitest/coverage-v8 stays 4.1.11) breaks `npm ci` with an ERESOLVE.
+          # Bump the whole family together in one PR so the exact-peer
+          # versions never diverge. Must come before security/patch/minor
+          # below — Dependabot assigns each update to the FIRST matching
+          # group, and this one has no applies-to restriction so it always
+          # wins for vitest-family packages regardless of update type.
           vitest:
               patterns:
                   - "vitest"
