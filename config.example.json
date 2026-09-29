@@ -32,7 +32,8 @@
 		},
 		{
 			"name": "pull_request_read",
-			"mode": "read"
+			"mode": "read",
+			"augment": true
 		},
 		{
 			"name": "search_pull_requests",
@@ -242,6 +243,16 @@
 		{
 			"name": "reply_review_thread",
 			"mode": "write",
+			"custom": true
+		},
+		{
+			"name": "report_unlabeled",
+			"mode": "read",
+			"custom": true
+		},
+		{
+			"name": "report_ci_status",
+			"mode": "read",
 			"custom": true
 		}
 	],

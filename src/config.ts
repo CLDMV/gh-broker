@@ -31,7 +31,10 @@ export function loadConfig(path: string): Config {
 		if (!MODES.includes(o.mode as Mode)) throw new Error(`config.tools[${i}].mode: must be read|write`);
 		if (seen.has(o.name)) throw new Error(`config.tools: duplicate tool "${o.name}"`);
 		seen.add(o.name);
-		return { name: o.name, mode: o.mode as Mode, custom: o.custom === true };
+		const custom = o.custom === true;
+		const augment = o.augment === true;
+		if (custom && augment) throw new Error(`config.tools[${i}] ("${o.name}"): custom and augment are mutually exclusive`);
+		return { name: o.name, mode: o.mode as Mode, custom, augment };
 	});
 
 	if (typeof c.owners !== "object" || c.owners === null) throw new Error("config.owners: must be an object");

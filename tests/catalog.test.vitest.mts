@@ -47,6 +47,53 @@ describe("buildCatalog", () => {
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/allowlisted tool "not_exposed" is NOT exposed/));
 	});
 
+	it("advertises report_unlabeled with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const config = makeConfig([{ name: "report_unlabeled", mode: "read", custom: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "report_unlabeled" });
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
+	});
+
+	it("advertises report_ci_status with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const config = makeConfig([{ name: "report_ci_status", mode: "read", custom: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "report_ci_status" });
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo"] });
+	});
+
+	it("layers ciVerbosity/logLines onto pull_request_read's real upstream schema without dropping its own params", async () => {
+		const upstreamTool = {
+			name: "pull_request_read",
+			description: "Get information on a specific pull request.",
+			inputSchema: { type: "object", required: ["owner", "repo", "pullNumber", "method"], properties: { method: { type: "string" }, pullNumber: { type: "number" } } }
+		};
+		upstream.listToolsFor.mockResolvedValue([upstreamTool]);
+		const config = makeConfig([{ name: "pull_request_read", mode: "read", augment: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		const tool = catalog[0]!;
+		expect(tool.description).toContain("gh-broker extension");
+		expect((tool.inputSchema as any).required).toEqual(["owner", "repo", "pullNumber", "method"]);
+		expect((tool.inputSchema as any).properties.pullNumber).toEqual({ type: "number" });
+		expect((tool.inputSchema as any).properties.ciVerbosity).toMatchObject({ type: "number", enum: [0, 1, 2, 3] });
+		expect((tool.inputSchema as any).properties.logLines).toMatchObject({ type: "number" });
+	});
+
+	it("still adds ciVerbosity/logLines to pull_request_read when the upstream fetch fails entirely", async () => {
+		upstream.listToolsFor.mockRejectedValue(new Error("network down"));
+		const config = makeConfig([{ name: "pull_request_read", mode: "read", augment: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect((catalog[0]!.inputSchema as any).properties).toEqual({
+			ciVerbosity: { type: "number", enum: [0, 1, 2, 3], description: expect.any(String) },
+			logLines: { type: "number", description: expect.any(String) }
+		});
+	});
+
 	it("falls back to minimal schemas when the upstream fetch fails", async () => {
 		upstream.listToolsFor.mockRejectedValue(new Error("401 bad token"));
 		const config = makeConfig([

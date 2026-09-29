@@ -9,7 +9,7 @@
  * --non-interactive for a single unattended command. See --help and
  * docs/deploy-architecture.md.
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
@@ -115,7 +115,7 @@ async function main() {
 	}
 
 	step("prerequisites");
-	for (const cmd of ["systemctl", "useradd", "getent"]) if (!has(cmd)) die(`missing required command: ${cmd}`);
+	for (const cmd of ["systemctl", "useradd", "getent", "sudo"]) if (!has(cmd)) die(`missing required command: ${cmd}`);
 	for (const cmd of ["socat", "rsync"]) if (!has(cmd)) log(`  note: '${cmd}' not found — ${cmd === "socat" ? "the agent socket bridge needs it" : "will fall back to a plain copy"}`);
 
 	// --- agent user ---
@@ -136,11 +136,34 @@ async function main() {
 	}
 
 	// --- build if needed ---
-	if (!existsSync(DIST_ENTRY)) {
-		step("build (dist not found)");
+	// This installer requires root, but dist/ and node_modules/ are generated INSIDE
+	// the repo checkout itself — not the deploy target (/opt/gh-broker, a directory
+	// the installer owns outright and correctly chowns to the gh-broker service user
+	// via deployDist() below). The checkout already has an owner: whoever owns this
+	// very script file. Build AS that owner via `sudo -u '#<uid>'` — sudo resolves
+	// that uid's home directory, primary group, AND full supplementary groups itself
+	// (exactly like a real login), so generated files are correct from the moment
+	// they're created — never chown, which is neither cross-platform nor necessary
+	// once nothing is ever created with the wrong owner to begin with.
+	const nodeModulesDir = join(REPO, "node_modules");
+	const buildUid = statSync(fileURLToPath(import.meta.url)).uid;
+	const asBuildOwner = (cmd, args) => run("sudo", ["-u", `#${buildUid}`, cmd, ...args], { cwd: REPO, stdio: "inherit" });
+
+	// A prior root-run build (an older version of this script, or a manual `sudo npm
+	// run build`) can leave dist/ or node_modules/ owned by root instead. Detect that
+	// and rebuild rather than reuse it — root can always remove a root-owned
+	// directory (regular DAC checks don't apply to it), where the build subprocess
+	// (running as the checkout owner) could not. This makes re-running the installer
+	// self-healing with no separate manual fix ever required.
+	const distStale = existsSync(DIST_ENTRY) && statSync(DIST_ENTRY).uid !== buildUid;
+	const modulesStale = existsSync(nodeModulesDir) && statSync(nodeModulesDir).uid !== buildUid;
+	if (!existsSync(DIST_ENTRY) || distStale || modulesStale) {
+		step(distStale || modulesStale ? "build (owned by a different user — rebuilding)" : "build (dist not found)");
 		if (!has("npm")) die(`dist/ is missing and 'npm' is not installed — build the bundle first (npm run build) or install npm, then re-run`);
-		if (!existsSync(join(REPO, "node_modules"))) run("npm", ["ci"], { cwd: REPO, stdio: "inherit" });
-		run("npm", ["run", "build"], { cwd: REPO, stdio: "inherit" });
+		if (distStale) rmSync(DIST, { recursive: true, force: true });
+		if (modulesStale) rmSync(nodeModulesDir, { recursive: true, force: true });
+		if (!existsSync(nodeModulesDir)) asBuildOwner("npm", ["ci"]);
+		asBuildOwner("npm", ["run", "build"]);
 	}
 
 	// --- resolve deployed paths from the daemon itself (one resolver, no drift) ---

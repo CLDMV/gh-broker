@@ -12,6 +12,8 @@ import {
 	type ResolveReviewThreadInput,
 	type ReplyReviewThreadInput
 } from "./verbs/review_thread.ts";
+import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlabeled.ts";
+import { reportCiStatus, ciStatusForHeadSha, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
@@ -23,14 +25,17 @@ export interface Upstream {
  * forwards to the hosted MCP or dispatches a custom verb. The token never leaves here.
  */
 export class Router {
+	private readonly config: Config;
+	private readonly secrets: SecretStore;
+	private readonly upstream: Upstream;
+	private readonly appAuth?: AppAuth;
 	private readonly rules: Map<string, ToolRule>;
 
-	constructor(
-		private readonly config: Config,
-		private readonly secrets: SecretStore,
-		private readonly upstream: Upstream,
-		private readonly appAuth?: AppAuth
-	) {
+	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth) {
+		this.config = config;
+		this.secrets = secrets;
+		this.upstream = upstream;
+		this.appAuth = appAuth;
 		this.rules = indexTools(config.tools);
 	}
 
@@ -64,14 +69,17 @@ export class Router {
 		const token = this.secrets.resolve(rule.mode === "write" ? creds.write : creds.read);
 		const repo = typeof args.repo === "string" ? `${owner}/${args.repo}` : owner;
 
+		const decision = rule.custom ? "custom" : rule.augment ? "augment" : "forward";
 		try {
 			const out = rule.custom
 				? await this.dispatchCustom(tool, args, owner, token)
-				: await this.upstream.forward(tool, args, token);
-			audit({ tool, owner, mode: rule.mode, repo, decision: rule.custom ? "custom" : "forward", ok: true });
+				: rule.augment
+					? await this.dispatchAugmented(tool, args, owner, token)
+					: await this.upstream.forward(tool, args, token);
+			audit({ tool, owner, mode: rule.mode, repo, decision, ok: true });
 			return out;
 		} catch (err) {
-			audit({ tool, owner, mode: rule.mode, repo, decision: rule.custom ? "custom" : "forward", ok: false, detail: (err as Error).message });
+			audit({ tool, owner, mode: rule.mode, repo, decision, ok: false, detail: (err as Error).message });
 			throw err;
 		}
 	}
@@ -105,8 +113,95 @@ export class Router {
 				const out = await replyReviewThread(octokit, args as unknown as ReplyReviewThreadInput);
 				return { content: [{ type: "text", text: `replied: ${out.url}` }] };
 			}
+			case "report_unlabeled": {
+				const octokit = new Octokit({ auth: token });
+				const out = await reportUnlabeled(octokit, args as unknown as ReportUnlabeledInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "report_ci_status": {
+				const octokit = new Octokit({ auth: token });
+				const reportArgs = args as unknown as ReportCiStatusInput;
+				const out = await reportCiStatus(octokit, reportArgs, this.makeJobLogsFetcher(owner, reportArgs.repo, token));
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
 			default:
 				throw new Error(`custom verb "${tool}" not implemented`);
+		}
+	}
+
+	/**
+	 * A failing-run's job logs, via the hosted MCP's own `get_job_logs` tool
+	 * (`failed_only: true` fetches every failing job in the run in one call) rather
+	 * than a hand-rolled REST call — see report_ci_status.ts's FailedJobLogsFetcher
+	 * doc comment for why. Best-effort: any failure here (bad shape, upstream error)
+	 * just yields an empty map — report_ci_status treats a lookup miss as "no
+	 * logTail for this job", never a hard failure of the whole report.
+	 */
+	private makeJobLogsFetcher(owner: string, repo: string, token: string): FailedJobLogsFetcher {
+		return async (runId, tailLines) => {
+			const map = new Map<number, string>();
+			try {
+				const result = await this.upstream.forward("get_job_logs", { owner, repo, run_id: runId, failed_only: true, return_content: true, tail_lines: tailLines }, token);
+				const textBlock = result.content?.find((c) => (c as { type?: string }).type === "text") as { text?: string } | undefined;
+				if (!textBlock?.text) return map;
+				const parsed = JSON.parse(textBlock.text) as { logs?: Array<{ job_id?: unknown; logs_content?: unknown }> };
+				for (const entry of parsed.logs ?? []) {
+					if (typeof entry.job_id === "number" && typeof entry.logs_content === "string") map.set(entry.job_id, entry.logs_content);
+				}
+			} catch {
+				/* best-effort — see doc comment */
+			}
+			return map;
+		};
+	}
+
+	/**
+	 * Forwards to the hosted MCP like a plain proxy, then post-processes the result.
+	 * gh-broker presents its own MCP contract — a proxied tool's response is not
+	 * required to match the hosted MCP's shape verbatim (see [[broker-owns-its-mcp-contract]]
+	 * in project memory). `ciVerbosity`/`logLines` are gh-broker's own extension
+	 * params, stripped before forwarding since the upstream schema doesn't know them.
+	 *
+	 * Opt-in only: with no `ciVerbosity`, this is byte-identical to a plain forward —
+	 * augmenting every `pull_request_read` call by default would add an unrequested
+	 * API call (and cost) to every ordinary PR read.
+	 *
+	 * Best-effort: if the upstream response isn't the JSON-text shape expected (a
+	 * format this broker doesn't control), the original result is returned unmodified
+	 * rather than thrown — a shape mismatch should degrade to "no CI data added," not
+	 * break an otherwise-successful PR read.
+	 */
+	private async dispatchAugmented(tool: string, args: Record<string, unknown>, owner: string, token: string): Promise<CallToolResult> {
+		switch (tool) {
+			case "pull_request_read": {
+				const { ciVerbosity, logLines, ...upstreamArgs } = args as Record<string, unknown> & { ciVerbosity?: number; logLines?: number };
+				const result = await this.upstream.forward(tool, upstreamArgs, token);
+				if (ciVerbosity === undefined) return result;
+				if ((upstreamArgs.method ?? "get") !== "get") return result; // only the single-PR "get" shape is augmentable
+
+				const textBlock = result.content?.find((c) => (c as { type?: string }).type === "text") as { text?: string } | undefined;
+				if (!textBlock?.text) return result;
+				let pr: unknown;
+				try {
+					pr = JSON.parse(textBlock.text);
+				} catch {
+					return result;
+				}
+				const p = pr as { number?: unknown; head?: { sha?: unknown } };
+				if (typeof p.number !== "number" || typeof p.head?.sha !== "string") return result;
+
+				const repo = String(upstreamArgs.repo ?? "");
+				const octokit = new Octokit({ auth: token });
+				const ci = await ciStatusForHeadSha(octokit, owner, repo, p.number, p.head.sha, {
+					verbosity: Number(ciVerbosity),
+					logLines: logLines !== undefined ? Number(logLines) : undefined,
+					fetchFailedJobLogs: this.makeJobLogsFetcher(owner, repo, token)
+				});
+				textBlock.text = JSON.stringify({ ...(pr as object), ci });
+				return result;
+			}
+			default:
+				return this.upstream.forward(tool, args, token);
 		}
 	}
 }
