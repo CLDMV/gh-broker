@@ -1,3 +1,18 @@
+/**
+ *
+ *	@Project: @cldmv/gh-broker
+ *	@Filename: /.configs/vitest.config.mjs
+ *	@Date: 2026-08-02T16:55:52-07:00 (1785714952)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-02T11:30:57-07:00 (1790965857)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
 import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
 import path from "node:path";

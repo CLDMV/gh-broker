@@ -1,3 +1,18 @@
+/**
+ *
+ *	@Project: @cldmv/gh-broker
+ *	@Filename: /src/verbs/review_thread.ts
+ *	@Date: 2026-07-11T10:24:46-07:00 (1783790686)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
 import type { Octokit } from "@octokit/core";
 
 /**
