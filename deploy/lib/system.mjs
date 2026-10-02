@@ -1,3 +1,18 @@
+/**
+ *
+ *	@Project: @cldmv/gh-broker
+ *	@Filename: /deploy/lib/system.mjs
+ *	@Date: 2026-09-06T10:05:35-07:00 (1788714335)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, chmodSync, chownSync, writeFileSync, cpSync, rmSync, symlinkSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
