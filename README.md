@@ -49,6 +49,18 @@ A tool not listed in `config.tools` is neither advertised nor executable. Adding
 
 🏷️ **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_unlabeled)**
 
+### 🛡️ **Org-Wide Security Alerts**
+
+`report_security_alerts` lists every open Dependabot, CodeQL and secret-scanning alert — for one repo or across everything an owner has — using the org-level endpoints where the token can read them and a per-repo sweep where it can't. Secret values are never returned.
+
+🛡️ **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_security_alerts)**
+
+### 🚢 **Release PR Discovery**
+
+`report_release_prs` finds every open release PR across an owner's repos and says which ones still lack their per-version changelog file — the list an agent needs during a mass update.
+
+🚢 **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_release_prs)**
+
 ### 🔧 **Extensible By Design**
 
 The broker presents its **own** MCP contract to the agent — a proxied tool's schema and response are not required to match the hosted MCP's exactly. Adding a custom verb or extending a proxied tool with new parameters follows a documented pattern, not a one-off hack.
@@ -116,6 +128,8 @@ src/
   audit.ts          structured audit log (never tokens)
   verbs/
     report_unlabeled.ts  issues/PRs with no labels, one repo or org-wide
+    report_security_alerts.ts  open Dependabot/CodeQL/secret alerts, one repo or org-wide
+    report_release_prs.ts  open release PRs + whether each has its changelog file
     report_ci_status.ts  tiered CI status for a PR or every open PR in a repo
     rest-client.ts       shared rate-limit-floor + call-budget REST helpers
     review_thread.ts     resolve/reply PR review threads (write PAT)
@@ -136,7 +150,7 @@ config.example.json  shipped defaults (token-free); merged into the deployed con
 
 ## 📚 Documentation
 
-- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `resolve_review_thread`/`reply_review_thread`, and how to add a new one
+- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `resolve_review_thread`/`reply_review_thread`, and how to add a new one
 - **[Agent-as-Separate-User Model](docs/agent-user-model.md)** — the isolation model behind "use ≠ possession": users, groups, filesystem permissions, verified against a real host
 - **[Deploy Architecture](docs/deploy-architecture.md)** — config merge, secret store backends, node handling, the installer's full flow
 - **[Install Guide](deploy/README.md)** — prerequisites, PAT scopes, install/upgrade command, flags

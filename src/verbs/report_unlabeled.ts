@@ -14,7 +14,7 @@
  */
 
 import type { Octokit } from "@octokit/core";
-import { CallBudget, CallBudgetExhausted, RateLimited, paginate } from "./rest-client.ts";
+import { CallBudget, CallBudgetExhausted, RateLimited, listOwnerRepos, paginate } from "./rest-client.ts";
 
 /**
  * Custom verb: report_unlabeled — issues/PRs with no labels, for one repo or every
@@ -81,11 +81,6 @@ const HARD_PER_REPO_LIMIT = 1000;
 const DEFAULT_MAX_API_CALLS = 250;
 const HARD_MAX_API_CALLS = 1000;
 
-interface RawRepo {
-	name: string;
-	archived?: boolean;
-}
-
 interface RawIssueOrPull {
 	number: number;
 	title: string;
@@ -96,19 +91,6 @@ interface RawIssueOrPull {
 	pull_request?: unknown;
 	/** Present only on items returned by the /pulls endpoint. */
 	draft?: boolean;
-}
-
-/** Lists non-archived repo names for an owner — tries the org endpoint, falls back to user. */
-async function listOwnerRepos(octokit: Octokit, budget: CallBudget, owner: string, maxRepos: number): Promise<string[]> {
-	let raw: RawRepo[];
-	try {
-		raw = await paginate<RawRepo>(octokit, budget, "GET /orgs/{owner}/repos", { owner, type: "all" }, maxRepos);
-	} catch (err) {
-		if (err instanceof RateLimited || err instanceof CallBudgetExhausted) throw err;
-		if ((err as { status?: number }).status !== 404) throw err;
-		raw = await paginate<RawRepo>(octokit, budget, "GET /users/{username}/repos", { username: owner, type: "all" }, maxRepos);
-	}
-	return raw.filter((r) => !r.archived).map((r) => r.name);
 }
 
 async function listUnlabeledIssues(

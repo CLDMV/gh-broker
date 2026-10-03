@@ -251,6 +251,16 @@
 			"custom": true
 		},
 		{
+			"name": "report_security_alerts",
+			"mode": "read",
+			"custom": true
+		},
+		{
+			"name": "report_release_prs",
+			"mode": "read",
+			"custom": true
+		},
+		{
 			"name": "report_ci_status",
 			"mode": "read",
 			"custom": true
