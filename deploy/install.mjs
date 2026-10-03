@@ -24,7 +24,7 @@
  * --non-interactive for a single unattended command. See --help and
  * docs/deploy-architecture.md.
  */
-import { readFileSync, existsSync, statSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
@@ -36,7 +36,7 @@ import {
 } from "./lib/system.mjs";
 import { promptLine, promptHidden, confirm, choose } from "./lib/prompt.mjs";
 import { mergeConfig } from "./lib/config-merge.mjs";
-import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames } from "./lib/secret-store.mjs";
+import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, detectSecretsProvider } from "./lib/secret-store.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -209,6 +209,21 @@ async function main() {
 	const credsDir = join(configDir, "creds"); // systemd-creds location
 	const priorProvider = merged.secrets?.provider ?? "systemd-creds";
 	let provider = opts.provider;
+	if (!provider) {
+		// An existing install already has a backend — keep it rather than asking again. Only a
+		// first install (or an ambiguous one) falls through to the prompt.
+		let credNames = [];
+		try {
+			credNames = readdirSync(credsDir).filter((f) => f.endsWith(".cred")).map((f) => f.slice(0, -".cred".length));
+		} catch {
+			// no creds dir yet — nothing encrypted on disk
+		}
+		const detected = detectSecretsProvider({ configured: current?.secrets?.provider, credNames, fileTokenNames: Object.keys(existingFile) });
+		if (detected) {
+			provider = detected;
+			log(`  keeping existing backend: ${provider} (change it with --secrets-provider)`);
+		}
+	}
 	if (!provider) {
 		provider = opts.nonInteractive
 			? priorProvider

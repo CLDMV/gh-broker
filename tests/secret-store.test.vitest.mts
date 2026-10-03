@@ -9,7 +9,7 @@ vi.mock("node:fs", () => ({
 }));
 
 import { readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
-import { readSecretsFile, removeSecretsFile, referencedCredNames } from "../deploy/lib/secret-store.mjs";
+import { readSecretsFile, removeSecretsFile, referencedCredNames, detectSecretsProvider } from "../deploy/lib/secret-store.mjs";
 
 const mockRead = vi.mocked(readFileSync);
 const mockExists = vi.mocked(existsSync);
@@ -72,5 +72,35 @@ describe("referencedCredNames", () => {
 	it("rejects an unsafe cred name (path separator / traversal)", () => {
 		expect(() => referencedCredNames({ owners: { o: { read: "cred:../x", write: "cred:ok" } } })).toThrow(/unsafe credential name/);
 		expect(() => referencedCredNames({ owners: { o: { read: "cred:a/b", write: "cred:ok" } } })).toThrow(/unsafe credential name/);
+	});
+});
+
+describe("detectSecretsProvider", () => {
+	it("trusts the provider recorded in the deployed config, whatever is on disk", () => {
+		expect(detectSecretsProvider({ configured: "file", credNames: ["a"], fileTokenNames: [] })).toBe("file");
+		expect(detectSecretsProvider({ configured: "systemd-creds", credNames: [], fileTokenNames: ["a"] })).toBe("systemd-creds");
+	});
+
+	it("ignores an unrecognised configured value and falls back to what is on disk", () => {
+		expect(detectSecretsProvider({ configured: "vault", credNames: ["a"] })).toBe("systemd-creds");
+		expect(detectSecretsProvider({ configured: 42, fileTokenNames: ["a"] })).toBe("file");
+	});
+
+	it("infers systemd-creds from encrypted .cred files when nothing is recorded", () => {
+		expect(detectSecretsProvider({ credNames: ["cldmv-read", "cldmv-write"] })).toBe("systemd-creds");
+	});
+
+	it("infers file from tokens in the secrets file when nothing is recorded", () => {
+		expect(detectSecretsProvider({ fileTokenNames: ["cldmv-read"] })).toBe("file");
+	});
+
+	it("returns undefined on a first install, so the installer asks", () => {
+		expect(detectSecretsProvider({})).toBeUndefined();
+		expect(detectSecretsProvider()).toBeUndefined();
+		expect(detectSecretsProvider({ credNames: [], fileTokenNames: [] })).toBeUndefined();
+	});
+
+	it("returns undefined when both backends hold credentials and nothing is recorded (ambiguous)", () => {
+		expect(detectSecretsProvider({ credNames: ["a"], fileTokenNames: ["a"] })).toBeUndefined();
 	});
 });

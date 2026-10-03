@@ -93,3 +93,22 @@ export function referencedCredNames(config) {
 	if (config.app) add(config.app.privateKey);
 	return [...names];
 }
+
+/**
+ * Works out which secrets backend an EXISTING install already uses, so a re-run keeps it
+ * instead of asking again. Precedence: the provider recorded in the deployed config, then
+ * what is actually on disk (encrypted `.cred` files → systemd-creds; tokens in the secrets
+ * file → file). Returns undefined when it is a first install, or when both backends have
+ * credentials and nothing is recorded (ambiguous — the caller should ask).
+ *
+ * @param {{ configured?: unknown, credNames?: string[], fileTokenNames?: string[] }} found
+ * @returns {"systemd-creds" | "file" | undefined}
+ */
+export function detectSecretsProvider({ configured, credNames = [], fileTokenNames = [] } = {}) {
+	if (configured === "systemd-creds" || configured === "file") return configured;
+	const hasCreds = credNames.length > 0;
+	const hasFile = fileTokenNames.length > 0;
+	if (hasCreds && !hasFile) return "systemd-creds";
+	if (hasFile && !hasCreds) return "file";
+	return undefined;
+}
