@@ -5,7 +5,7 @@ Every tool the broker advertises falls into one of three categories, set per ent
 | Category | Config flag | What happens | Example |
 |---|---|---|---|
 | **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines. | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_ci_status`, `resolve_review_thread`, `reply_review_thread` |
+| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, `resolve_review_thread`, `reply_review_thread` |
 | **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
@@ -50,6 +50,90 @@ Real example — `CLDMV/gh-broker` scanned for unlabeled issues/PRs (`state: "al
 ```
 
 **Fan-out safety.** Hitting a rate limit or the `maxApiCalls` ceiling mid-scan returns `truncated: true` plus a `truncatedReason` (`"rate-limited"` | `"max-api-calls"` | `"max-repos"`) and whatever was already found, rather than discarding partial results. The rate-limit floor is not a hardcoded number — every response's `x-ratelimit-limit` header is read and the scan backs off at 2% of that token's real limit (floored at an absolute minimum for low-limit tokens), so it's correct regardless of which token type is configured.
+
+---
+
+## `report_security_alerts`
+
+Every open Dependabot, code-scanning (CodeQL) and secret-scanning alert, for one repo or everything an owner has. Read-only, `mode: "read"`, `custom: true`.
+
+```json
+{
+	"owner": "cldmv",
+	"types": ["dependabot", "codeql", "secrets"]
+}
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | Selects the read credential. |
+| `repo` | string | — | Omit to cover every non-archived repo the owner has. When given, only the per-repo endpoints are used. |
+| `types` | array of `"dependabot"` \| `"codeql"` \| `"secrets"` | all three | |
+| `maxRepos` | number | 200 (hard cap 500) | Only relevant to a per-repo sweep (see below). |
+| `alertLimit` | number | 500 (hard cap 5000) | Alerts fetched per type in org mode, or per repo per type in a per-repo sweep. |
+| `maxApiCalls` | number | 700 (hard cap 3000) | Hard ceiling on total REST calls for one invocation. |
+
+**Org-level first, per-repo as the fallback.** For each requested type the verb asks the org-level endpoint (`/orgs/{owner}/dependabot/alerts`, `/code-scanning/alerts`, `/secret-scanning/alerts`) — a handful of calls for the whole owner. If that endpoint is not available to the token (a user-owned account answers 404, a PAT without org alert access answers 403), that type alone falls back to one call per repo. `scope` in the result says which path each type took, and `disabled` counts the repos where a type is switched off or unreadable (code scanning and secret scanning are off on many repos, and that is a normal answer rather than an error).
+
+Each alert is normalized to one shape: `repo`, `type`, `number`, `severity`, `summary`, `url`, `createdAt`, plus type-specific fields — Dependabot adds `package`, `ecosystem`, `manifest`, `scope`, `ghsa`, `cve`, `vulnerableRange` and `patchedVersion` (the patched version for the range that actually matches the alert); code scanning adds `rule`, `tool` and `location`; secret scanning adds `secretType` and `validity`. Results are sorted critical-first, then by repo and number. Secret scanning returns metadata only: the secret value GitHub sends back is dropped and never leaves the broker.
+
+```json
+{
+	"scanned": {},
+	"scope": { "dependabot": "org", "codeql": "per-repo", "secrets": "per-repo" },
+	"counts": { "dependabot": { "high": 1 }, "codeql": {}, "secrets": {} },
+	"alerts": [
+		{ "repo": "CLDMV/gh-broker", "type": "dependabot", "number": 19, "severity": "medium", "summary": "…", "url": "https://github.com/CLDMV/gh-broker/security/dependabot/19", "createdAt": "2026-10-02T20:10:30Z", "package": "ip-address", "ecosystem": "npm", "manifest": "package-lock.json", "scope": "runtime", "ghsa": "GHSA-j6r3-76f7-8jcv", "vulnerableRange": "<= 10.7.0", "patchedVersion": "10.7.1" }
+	],
+	"disabled": { "codeql": 140, "secrets": 140 }
+}
+```
+
+**"Open" is the default-branch view.** An alert's state tracks the default branch, so one already fixed on `next` but not yet released still reads as open until the release lands.
+
+**Fan-out safety** works like `report_unlabeled`'s: hitting `maxRepos`, `alertLimit`, `maxApiCalls` or GitHub's rate limit returns what was found so far with `truncated: true` and a `truncatedReason` (`"max-repos"` | `"max-alerts"` | `"max-api-calls"` | `"rate-limited"`). A type that was never reached is left out of `counts` rather than reported as zero. A permission or feature-disabled `403`/`404` from an alert endpoint is never mistaken for a rate limit — only a `403` that carries a `Retry-After`, an exhausted `x-ratelimit-remaining`, or a rate-limit/abuse message is.
+
+---
+
+## `report_release_prs`
+
+Every open release PR for an owner (or one repo), and whether each one's per-version changelog file is already on the release branch. Built for mass updates: it tells an agent which repos have a release waiting and which of those still need a changelog written. Read-only, `mode: "read"`, `custom: true`.
+
+```json
+{
+	"owner": "cldmv",
+	"onlyMissing": true
+}
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | Selects the read credential. |
+| `repo` | string | — | Omit to search every repo the owner has. |
+| `onlyMissing` | boolean | `false` | List only PRs that are not `ready`. `summary` still counts all of them. |
+| `maxApiCalls` | number | 300 (hard cap 1000) | Hard ceiling on total REST calls for one invocation. |
+
+A release PR is an open PR carrying the `release` label, which the v4 release automation applies to both the `next → master` and the `hotfixes → master` PR. One search call covers the whole owner; each PR found then costs one call for its head/base and up to two to look for the changelog.
+
+The version is read from the `release: vX.Y.Z - …` title. The changelog is looked up **at the PR's head commit** (not the default branch), because the file lands on `next` before the release PR merges. Both `docs/changelog/v<major>/vX.Y.Z.md` and `docs/changelogs/v<major>/vX.Y.Z.md` are checked. Each PR gets one `status`:
+
+| `status` | Meaning |
+|---|---|
+| `ready` | The changelog file exists (`changelogPath` says where). |
+| `needs-changelog` | The version is known but no changelog file exists (`checkedPaths` lists what was looked up). |
+| `unknown-version` | The title has no `release: vX.Y.Z`, so there is nothing to look up. |
+
+```json
+{
+	"scanned": { "releasePrs": 2 },
+	"summary": { "ready": 1, "needsChangelog": 1, "unknownVersion": 0 },
+	"releasePrs": [
+		{ "repo": "CLDMV/gh-broker", "pull": 91, "url": "https://github.com/CLDMV/gh-broker/pull/91", "title": "release: v0.4.3 - …", "version": "0.4.3", "head": "next", "base": "master", "draft": false, "status": "needs-changelog", "checkedPaths": ["docs/changelog/v0/v0.4.3.md", "docs/changelogs/v0/v0.4.3.md"] }
+	]
+}
+```
+
+The release PR's version can change while it is open (more PRs landing on `next` can raise the bump), so a `ready` changelog is only as current as the title it was matched against — re-run the report after `next` changes. Truncation follows the same pattern as the other report verbs; the extra reasons are `"max-results"` (more than one page of release PRs matched — GitHub's search returns 100 per page) and `"incomplete-search"` (GitHub reported the search timed out).
 
 ---
 

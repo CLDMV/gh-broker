@@ -20,6 +20,8 @@ import type { UpstreamPool } from "./upstream.ts";
 // import { LINK_ISSUE_SCHEMA } from "./verbs/link_issue.ts";
 import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verbs/review_thread.ts";
 import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
+import { REPORT_SECURITY_ALERTS_SCHEMA } from "./verbs/report_security_alerts.ts";
+import { REPORT_RELEASE_PRS_SCHEMA } from "./verbs/report_release_prs.ts";
 import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 
 /**
@@ -83,6 +85,20 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 					description:
 						"Report issues and/or PRs with no labels, for one repo or every non-archived repo an owner has. Bounded by maxRepos/perRepoLimit/maxApiCalls; returns truncated:true (with a reason) instead of failing outright if a cap or GitHub's rate limit is hit mid-scan. Runs on the read PAT.",
 					inputSchema: REPORT_UNLABELED_SCHEMA
+				});
+			} else if (rule.name === "report_security_alerts") {
+				tools.push({
+					name: "report_security_alerts",
+					description:
+						"Report every open Dependabot, code-scanning (CodeQL) and secret-scanning alert, for one repo or across every repo an owner has. Reads the org-level endpoints in a handful of calls and falls back to a per-repo sweep for any alert type the token can't read org-wide. Alert state tracks the default branch. Secret values are never returned. Bounded by maxRepos/alertLimit/maxApiCalls; returns truncated:true (with a reason) instead of failing outright if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
+					inputSchema: REPORT_SECURITY_ALERTS_SCHEMA
+				});
+			} else if (rule.name === "report_release_prs") {
+				tools.push({
+					name: "report_release_prs",
+					description:
+						"Report every open release PR (label `release`: next→master and hotfixes→master) for one repo or across every repo an owner has, and whether each one's per-version changelog file (docs/changelog[s]/v<major>/vX.Y.Z.md) is already on the release branch. Status per PR: ready, needs-changelog, or unknown-version (title has no `release: vX.Y.Z`). Use during mass updates to find which repos need a changelog. One search call plus two calls per release PR found; returns truncated:true with a reason if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
+					inputSchema: REPORT_RELEASE_PRS_SCHEMA
 				});
 			} else if (rule.name === "report_ci_status") {
 				tools.push({

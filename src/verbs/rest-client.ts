@@ -59,6 +59,18 @@ export class CallBudget {
 	}
 }
 
+/**
+ * A 403 is only a rate limit when GitHub says so — a Retry-After header, an exhausted
+ * `x-ratelimit-remaining`, or a rate-limit/abuse message. Any other 403 is a permission
+ * or feature-disabled answer (e.g. code scanning off for a repo) and must surface to the
+ * caller with its status intact instead of being mistaken for throttling.
+ */
+function looksRateLimited(err: Error, headers: Record<string, string> | undefined): boolean {
+	if (headers?.["retry-after"] !== undefined) return true;
+	if (headers?.["x-ratelimit-remaining"] === "0") return true;
+	return /rate limit|abuse|secondary/i.test(err.message);
+}
+
 /** Runs one octokit.request call, charging the budget and enforcing the rate-limit floor. */
 async function doRequest(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>): Promise<{ data: unknown }> {
 	budget.spend();
@@ -75,9 +87,10 @@ async function doRequest(octokit: Octokit, budget: CallBudget, route: string, pa
 		return res;
 	} catch (err) {
 		if (err instanceof RateLimited) throw err;
-		const status = (err as { status?: number; response?: { headers?: Record<string, string> } }).status;
-		if (status === 403 || status === 429) {
-			const retryAfter = (err as { response?: { headers?: Record<string, string> } }).response?.headers?.["retry-after"];
+		const status = (err as { status?: number }).status;
+		const headers = (err as { response?: { headers?: Record<string, string> } }).response?.headers;
+		if (status === 429 || (status === 403 && looksRateLimited(err as Error, headers))) {
+			const retryAfter = headers?.["retry-after"];
 			throw new RateLimited(retryAfter ? Number(retryAfter) : undefined);
 		}
 		throw err;
@@ -126,4 +139,43 @@ export async function paginate<T>(
 		page++;
 	}
 	return out.length > limit ? out.slice(0, limit) : out;
+}
+
+/**
+ * Paginates a listing endpoint that uses cursor pagination (`after`) instead of `page` —
+ * Dependabot's alert endpoints. Follows the `rel="next"` cursor in the Link header and
+ * stops at the last page or once `limit` items are collected.
+ */
+export async function paginateAfter<T>(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>, limit: number): Promise<T[]> {
+	const out: T[] = [];
+	let after: string | undefined;
+	while (out.length < limit) {
+		const res = await doRequest(octokit, budget, route, { ...params, per_page: PAGE_SIZE, ...(after ? { after } : {}) });
+		const batch = res.data;
+		if (!Array.isArray(batch) || batch.length === 0) break;
+		out.push(...(batch as T[]));
+		const link = (res as { headers?: Record<string, string> }).headers?.link;
+		const next = link ? /<[^>]*[?&]after=([^&>]+)[^>]*>;\s*rel="next"/.exec(link) : null;
+		if (!next) break;
+		after = decodeURIComponent(next[1]!);
+	}
+	return out.length > limit ? out.slice(0, limit) : out;
+}
+
+interface RawRepo {
+	name: string;
+	archived?: boolean;
+}
+
+/** Lists non-archived repo names for an owner — tries the org endpoint, falls back to user. */
+export async function listOwnerRepos(octokit: Octokit, budget: CallBudget, owner: string, maxRepos: number): Promise<string[]> {
+	let raw: RawRepo[];
+	try {
+		raw = await paginate<RawRepo>(octokit, budget, "GET /orgs/{owner}/repos", { owner, type: "all" }, maxRepos);
+	} catch (err) {
+		if (err instanceof RateLimited || err instanceof CallBudgetExhausted) throw err;
+		if ((err as { status?: number }).status !== 404) throw err;
+		raw = await paginate<RawRepo>(octokit, budget, "GET /users/{username}/repos", { username: owner, type: "all" }, maxRepos);
+	}
+	return raw.filter((r) => !r.archived).map((r) => r.name);
 }
