@@ -26,6 +26,8 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "resolve_review_thread", mode: "write", custom: true },
 			{ name: "reply_review_thread", mode: "write", custom: true },
 			{ name: "report_unlabeled", mode: "read", custom: true },
+			{ name: "report_security_alerts", mode: "read", custom: true },
+			{ name: "report_release_prs", mode: "read", custom: true },
 			{ name: "report_ci_status", mode: "read", custom: true },
 			{ name: "pull_request_read", mode: "read", augment: true }
 		],
@@ -169,6 +171,41 @@ describe("Router.call", () => {
 			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
 			expect(out).toEqual({
 				content: [{ type: "text", text: JSON.stringify({ scanned: { repos: 1, issues: 0, pulls: 0 }, unlabeled: [] }) }]
+			});
+		});
+
+		it("report_security_alerts runs on a read-PAT Octokit and returns the JSON report as text", async () => {
+			requestMock.mockResolvedValue({ data: [], headers: {} });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("report_security_alerts", { owner: "cldmv" });
+			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
+			expect(out).toEqual({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							scanned: {},
+							scope: { dependabot: "org", codeql: "org", secrets: "org" },
+							counts: { dependabot: {}, codeql: {}, secrets: {} },
+							alerts: []
+						})
+					}
+				]
+			});
+		});
+
+		it("report_release_prs runs on a read-PAT Octokit and returns the JSON report as text", async () => {
+			requestMock.mockResolvedValue({ data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("report_release_prs", { owner: "cldmv" });
+			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
+			expect(out).toEqual({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({ scanned: { releasePrs: 0 }, summary: { ready: 0, needsChangelog: 0, unknownVersion: 0 }, releasePrs: [] })
+					}
+				]
 			});
 		});
 

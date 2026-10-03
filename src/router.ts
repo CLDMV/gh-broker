@@ -28,6 +28,8 @@ import {
 	type ReplyReviewThreadInput
 } from "./verbs/review_thread.ts";
 import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlabeled.ts";
+import { reportSecurityAlerts, type ReportSecurityAlertsInput } from "./verbs/report_security_alerts.ts";
+import { reportReleasePrs, type ReportReleasePrsInput } from "./verbs/report_release_prs.ts";
 import { reportCiStatus, ciStatusForHeadSha, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
@@ -131,6 +133,16 @@ export class Router {
 			case "report_unlabeled": {
 				const octokit = new Octokit({ auth: token });
 				const out = await reportUnlabeled(octokit, args as unknown as ReportUnlabeledInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "report_security_alerts": {
+				const octokit = new Octokit({ auth: token });
+				const out = await reportSecurityAlerts(octokit, args as unknown as ReportSecurityAlertsInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "report_release_prs": {
+				const octokit = new Octokit({ auth: token });
+				const out = await reportReleasePrs(octokit, args as unknown as ReportReleasePrsInput);
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			case "report_ci_status": {
