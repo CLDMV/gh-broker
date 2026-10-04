@@ -15,6 +15,7 @@
 
 import type { Octokit } from "@octokit/core";
 import { CallBudget, CallBudgetExhausted, RateLimited, listOwnerRepos, paginate, paginateAfter } from "./rest-client.ts";
+import { classifyRepo, type RepoTier } from "./repo-tier.ts";
 
 /**
  * Custom verb: report_security_alerts — every OPEN Dependabot, code-scanning (CodeQL)
@@ -54,6 +55,29 @@ export interface ReportSecurityAlertsInput {
 	alertLimit?: number;
 	/** Hard ceiling on total REST calls for this invocation. Default 700, hard-capped at 3000. */
 	maxApiCalls?: number;
+	/** Return only the per-repo roll-up (`byRepo`) and the counts, not the alert list. An org run is ~700 KB with the list; the roll-up is a few KB. */
+	summaryOnly?: boolean;
+	/** Keep only alerts at or above this severity (secret-scanning alerts have no severity and are always kept). */
+	minSeverity?: "critical" | "high" | "medium" | "low";
+	/** Keep only these repos (names, with or without the owner prefix). */
+	repos?: string[];
+	/** Add each repo's flow tier (`v4` / `dev-trunk` / `non-v4`, plus the raw signals) to `byRepo`. Costs about 3 REST calls per repo that has alerts. */
+	classify?: boolean;
+}
+
+export interface RepoRollup {
+	repo: string;
+	total: number;
+	dependabot: number;
+	codeql: number;
+	secrets: number;
+	critical: number;
+	high: number;
+	medium: number;
+	low: number;
+	/** Only with `classify: true`; absent for a repo that could not be classified before a cap was hit. */
+	tier?: RepoTier["tier"];
+	tierSignals?: RepoTier["signals"];
 }
 
 export interface SecurityAlert {
@@ -91,7 +115,12 @@ export interface ReportSecurityAlertsResult {
 	scope: Partial<Record<AlertType, "org" | "per-repo">>;
 	/** Open alerts per type, keyed by severity (secrets are keyed `open`). */
 	counts: Partial<Record<AlertType, Record<string, number>>>;
+	/** One row per repo with at least one alert, worst first (criticals, then highs, then total). */
+	byRepo: RepoRollup[];
+	/** Empty when `summaryOnly` is set; see `alertsOmitted`. */
 	alerts: SecurityAlert[];
+	/** Set with `summaryOnly`: how many alerts were left out of `alerts`. */
+	alertsOmitted?: number;
 	/** Per-repo sweep only: repos where an alert type is switched off or not readable, per type. Omitted when none. */
 	disabled?: Partial<Record<AlertType, number>>;
 	truncated?: boolean;
@@ -318,6 +347,16 @@ export async function reportSecurityAlerts(octokit: Octokit, input: ReportSecuri
 		}
 	}
 
+	// Filters run after fetching: the API has no cross-type severity or repo-list filter.
+	const minRank = input.minSeverity ? { critical: 0, high: 1, medium: 2, low: 4 }[input.minSeverity] : undefined;
+	const wanted = input.repos?.length ? new Set(input.repos.map((r) => r.replace(/^[^/]+\//, "").toLowerCase())) : undefined;
+	for (let i = alerts.length - 1; i >= 0; i--) {
+		const a = alerts[i]!;
+		const name = a.repo.replace(/^[^/]+\//, "").toLowerCase();
+		if (wanted && !wanted.has(name)) alerts.splice(i, 1);
+		else if (minRank !== undefined && a.type !== "secrets" && severityRank(a.severity) > minRank) alerts.splice(i, 1);
+	}
+
 	alerts.sort((a, b) => severityRank(a.severity) - severityRank(b.severity) || a.repo.localeCompare(b.repo) || a.number - b.number);
 
 	const counts: ReportSecurityAlertsResult["counts"] = {};
@@ -328,11 +367,51 @@ export async function reportSecurityAlerts(octokit: Octokit, input: ReportSecuri
 		counts[type] = byType;
 	}
 
+	const rollup = new Map<string, RepoRollup>();
+	for (const a of alerts) {
+		let row = rollup.get(a.repo);
+		if (!row) {
+			row = { repo: a.repo, total: 0, dependabot: 0, codeql: 0, secrets: 0, critical: 0, high: 0, medium: 0, low: 0 };
+			rollup.set(a.repo, row);
+		}
+		row.total++;
+		row[a.type]++;
+		const r = severityRank(a.severity);
+		if (r === 0) row.critical++;
+		else if (r === 1) row.high++;
+		else if (r === 2) row.medium++;
+		else if (r >= 3 && r <= 5) row.low++;
+	}
+	const byRepo = [...rollup.values()].sort((a, b) => b.critical - a.critical || b.high - a.high || b.total - a.total || a.repo.localeCompare(b.repo));
+
+	if (input.classify) {
+		try {
+			for (const row of byRepo) {
+				const [owner, repo] = row.repo.includes("/") ? row.repo.split("/") : [input.owner, row.repo];
+				const t = await classifyRepo(octokit, budget, owner!, repo!);
+				row.tier = t.tier;
+				row.tierSignals = t.signals;
+			}
+		} catch (err) {
+			if (err instanceof RateLimited) {
+				truncatedReason = "rate-limited";
+				retryAfterSeconds = err.retryAfterSeconds;
+			} else if (err instanceof CallBudgetExhausted) {
+				truncatedReason = "max-api-calls";
+			} else {
+				throw err;
+			}
+		}
+	}
+
+	const omitted = input.summaryOnly ? alerts.length : undefined;
 	return {
 		scanned,
 		scope,
 		counts,
-		alerts,
+		byRepo,
+		alerts: input.summaryOnly ? [] : alerts,
+		...(omitted !== undefined ? { alertsOmitted: omitted } : {}),
 		...(Object.keys(disabled).length > 0 ? { disabled } : {}),
 		...(truncatedReason ? { truncated: true, truncatedReason } : {}),
 		...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {})
@@ -354,6 +433,10 @@ export const REPORT_SECURITY_ALERTS_SCHEMA = {
 		},
 		maxRepos: { type: "number", description: `safety cap on repos swept per-repo when the org-level endpoint is unavailable (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})` },
 		alertLimit: { type: "number", description: `safety cap on alerts fetched per type (org mode) or per repo per type (default ${DEFAULT_ALERT_LIMIT}, hard cap ${HARD_ALERT_LIMIT})` },
-		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` }
+		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` },
+		summaryOnly: { type: "boolean", description: "return only the per-repo roll-up (byRepo) and counts, not the alert list — a few KB instead of ~700 KB for a whole org", default: false },
+		minSeverity: { type: "string", enum: ["critical", "high", "medium", "low"], description: "keep only alerts at or above this severity (secret-scanning alerts are always kept)" },
+		repos: { type: "array", items: { type: "string" }, description: "keep only these repos (names, with or without the owner prefix)" },
+		classify: { type: "boolean", description: "add each repo's flow tier (v4 / dev-trunk / non-v4) and the raw signals to byRepo; about 3 REST calls per repo with alerts", default: false }
 	}
 };
