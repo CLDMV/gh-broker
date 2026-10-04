@@ -50,7 +50,7 @@
 	"homepage": "https://github.com/CLDMV/gh-broker#readme",
 	"devDependencies": {
 		"@cldmv/configs": "^1.2.0",
-		"@cldmv/fix-headers": "^2.1.1",
+		"@cldmv/fix-headers": "^2.1.4",
 		"@cldmv/vitest-runner": "^1.5.1",
 		"@types/node": "^26.6.3",
 		"@vitest/coverage-v8": "^5.0.2",
