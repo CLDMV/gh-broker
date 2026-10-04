@@ -15,6 +15,7 @@
 
 import type { Octokit } from "@octokit/core";
 import { CallBudget, CallBudgetExhausted, RateLimited, reqOne } from "./rest-client.ts";
+import { analyzeRelease, type ReleaseAnalysis, type ReleaseVerdict } from "./release-analysis.ts";
 
 /**
  * Custom verb: report_release_prs — every open release PR for an owner (or one repo),
@@ -41,6 +42,12 @@ export interface ReportReleasePrsInput {
 	repo?: string;
 	/** Return only release PRs that are not ready (missing changelog or unreadable version). Default false. */
 	onlyMissing?: boolean;
+	/**
+	 * Also work out, per release PR, what is still open against its release branch, whether an existing
+	 * changelog is actually up to date, and a verdict (done / in-flight / wait / gray / write / update / inspect).
+	 * Costs about 5 more REST calls per release PR, so raise `maxApiCalls` for a whole org. Default false.
+	 */
+	analyze?: boolean;
 	/** Hard ceiling on total REST calls for this invocation. Default 300, hard-capped at 1000. */
 	maxApiCalls?: number;
 }
@@ -62,6 +69,8 @@ export interface ReleasePr {
 	changelogPath?: string;
 	/** The paths that were looked up, when `status` is "needs-changelog". */
 	checkedPaths?: string[];
+	/** Only with `analyze: true`. */
+	analysis?: ReleaseAnalysis;
 }
 
 export type ReleaseTruncatedReason = "max-results" | "incomplete-search" | "max-api-calls" | "rate-limited";
@@ -69,6 +78,8 @@ export type ReleaseTruncatedReason = "max-results" | "incomplete-search" | "max-
 export interface ReportReleasePrsResult {
 	scanned: { releasePrs: number };
 	summary: { ready: number; needsChangelog: number; unknownVersion: number };
+	/** Only with `analyze: true`: how many release PRs landed on each verdict. */
+	verdicts?: Partial<Record<ReleaseVerdict, number>>;
 	releasePrs: ReleasePr[];
 	truncated?: boolean;
 	truncatedReason?: ReleaseTruncatedReason;
@@ -164,13 +175,19 @@ export async function reportReleasePrs(octokit: Octokit, input: ReportReleasePrs
 				base: pull.base.ref,
 				draft: pull.draft ?? hit.draft ?? false
 			};
+			let entry: ReleasePr;
 			if (version === null) {
-				releasePrs.push({ ...base, status: "unknown-version" });
-				continue;
+				entry = { ...base, status: "unknown-version" };
+			} else {
+				const paths = changelogPaths(version);
+				const found = await findChangelog(octokit, budget, owner, repo, pull.head.ref, paths);
+				entry = found ? { ...base, status: "ready", changelogPath: found } : { ...base, status: "needs-changelog", checkedPaths: paths };
 			}
-			const paths = changelogPaths(version);
-			const found = await findChangelog(octokit, budget, owner, repo, pull.head.ref, paths);
-			releasePrs.push(found ? { ...base, status: "ready", changelogPath: found } : { ...base, status: "needs-changelog", checkedPaths: paths });
+			// Pushed before the analysis so a cap hit mid-analysis still reports this PR's status.
+			releasePrs.push(entry);
+			if (input.analyze) {
+				entry.analysis = await analyzeRelease(octokit, budget, { owner, repo, pull: hit.number, head: pull.head.ref, version, ...(entry.changelogPath ? { changelogPath: entry.changelogPath } : {}) });
+			}
 		}
 	} catch (err) {
 		if (err instanceof RateLimited) {
@@ -188,11 +205,18 @@ export async function reportReleasePrs(octokit: Octokit, input: ReportReleasePrs
 		needsChangelog: releasePrs.filter((p) => p.status === "needs-changelog").length,
 		unknownVersion: releasePrs.filter((p) => p.status === "unknown-version").length
 	};
-	const listed = input.onlyMissing ? releasePrs.filter((p) => p.status !== "ready") : releasePrs;
+	let verdicts: Partial<Record<ReleaseVerdict, number>> | undefined;
+	if (input.analyze) {
+		verdicts = {};
+		for (const p of releasePrs) if (p.analysis) verdicts[p.analysis.verdict] = (verdicts[p.analysis.verdict] ?? 0) + 1;
+	}
+	// With analysis, "missing" means "not done": a ready-but-stale changelog still needs work.
+	const listed = input.onlyMissing ? releasePrs.filter((p) => (p.analysis ? p.analysis.verdict !== "done" : p.status !== "ready")) : releasePrs;
 
 	return {
 		scanned: { releasePrs: hits },
 		summary,
+		...(verdicts ? { verdicts } : {}),
 		releasePrs: listed,
 		...(truncatedReason ? { truncated: true, truncatedReason } : {}),
 		...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {})
@@ -207,7 +231,8 @@ export const REPORT_RELEASE_PRS_SCHEMA = {
 	properties: {
 		owner: { type: "string", description: "repository owner (org/user login) — selects the read credential" },
 		repo: { type: "string", description: "repository name; omit to search every repo this owner has" },
-		onlyMissing: { type: "boolean", description: "return only release PRs that still need a changelog (or have no readable version); summary counts still cover all", default: false },
+		onlyMissing: { type: "boolean", description: "return only release PRs that still need work (no changelog, unreadable version, or — with analyze — a verdict other than done); summary counts still cover all", default: false },
+		analyze: { type: "boolean", description: "also compute, per release PR: open PRs against its release branch (doc / dependency / feature / draft), whether an existing changelog is up to date (missing PRs, version heading, README), and a verdict (done / in-flight / wait / gray / write / update / inspect). ~5 extra calls per release PR — raise maxApiCalls for a whole org", default: false },
 		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` }
 	}
 };

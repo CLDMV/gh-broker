@@ -187,6 +187,7 @@ describe("Router.call", () => {
 							scanned: {},
 							scope: { dependabot: "org", codeql: "org", secrets: "org" },
 							counts: { dependabot: {}, codeql: {}, secrets: {} },
+							byRepo: [],
 							alerts: []
 						})
 					}
