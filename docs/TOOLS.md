@@ -72,8 +72,22 @@ Every open Dependabot, code-scanning (CodeQL) and secret-scanning alert, for one
 | `maxRepos` | number | 200 (hard cap 500) | Only relevant to a per-repo sweep (see below). |
 | `alertLimit` | number | 500 (hard cap 5000) | Alerts fetched per type in org mode, or per repo per type in a per-repo sweep. |
 | `maxApiCalls` | number | 700 (hard cap 3000) | Hard ceiling on total REST calls for one invocation. |
+| `summaryOnly` | boolean | `false` | Return only the per-repo roll-up and counts. An org run is about 700 KB with the alert list and a few KB without it; `alertsOmitted` says how many alerts were left out. |
+| `minSeverity` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | — | Keep only alerts at or above this severity. Secret-scanning alerts have no severity and are always kept. |
+| `repos` | string[] | — | Keep only these repos (names, with or without the owner prefix, case-insensitive). |
+| `classify` | boolean | `false` | Add each repo's flow tier to its roll-up row. About 3 REST calls per repo that has alerts. |
 
 **Org-level first, per-repo as the fallback.** For each requested type the verb asks the org-level endpoint (`/orgs/{owner}/dependabot/alerts`, `/code-scanning/alerts`, `/secret-scanning/alerts`) — a handful of calls for the whole owner. If that endpoint is not available to the token (a user-owned account answers 404, a PAT without org alert access answers 403), that type alone falls back to one call per repo. `scope` in the result says which path each type took, and `disabled` counts the repos where a type is switched off or unreadable (code scanning and secret scanning are off on many repos, and that is a normal answer rather than an error).
+
+**Per-repo roll-up.** Every result carries `byRepo`: one row per repo with at least one alert (after the filters), worst first (criticals, then highs, then total), with `total`, per-type counts (`dependabot`, `codeql`, `secrets`) and `critical` / `high` / `medium` / `low`. With `classify: true` each row also has `tier` and `tierSignals`:
+
+| `tier` | Meaning |
+|---|---|
+| `v4` | `.github/workflows/next-release.yml` exists on the default branch, and `next` carries its own work (or there is no `dev` branch). |
+| `dev-trunk` | A v4 repo with a `dev` branch that differs from the default branch while `next` is missing or equal to the default branch (scaffold only). |
+| `non-v4` | No `next-release.yml` on the default branch — even if `next` / `hotfixes` branches exist. |
+
+The tier is a structural signal, not a verdict. A stale `dev` branch on a repo whose `next` happens to equal `master` right after a release reads as `dev-trunk`; `tierSignals` carries the raw facts (`v4Workflow`, `defaultBranch`, `next`, `dev`, `nextEqualsDefault`, `devDiffersFromDefault`) so a caller can cross-check.
 
 Each alert is normalized to one shape: `repo`, `type`, `number`, `severity`, `summary`, `url`, `createdAt`, plus type-specific fields — Dependabot adds `package`, `ecosystem`, `manifest`, `scope`, `ghsa`, `cve`, `vulnerableRange` and `patchedVersion` (the patched version for the range that actually matches the alert); code scanning adds `rule`, `tool` and `location`; secret scanning adds `secretType` and `validity`. Results are sorted critical-first, then by repo and number. Secret scanning returns metadata only: the secret value GitHub sends back is dropped and never leaves the broker.
 
@@ -111,6 +125,7 @@ Every open release PR for an owner (or one repo), and whether each one's per-ver
 | `owner` | string | — (required) | Selects the read credential. |
 | `repo` | string | — | Omit to search every repo the owner has. |
 | `onlyMissing` | boolean | `false` | List only PRs that are not `ready`. `summary` still counts all of them. |
+| `analyze` | boolean | `false` | Add an `analysis` block per release PR and a `verdicts` tally. About 5 more REST calls per release PR, so raise `maxApiCalls` for a whole org. With `onlyMissing`, "missing" then means "verdict other than `done`". |
 | `maxApiCalls` | number | 300 (hard cap 1000) | Hard ceiling on total REST calls for one invocation. |
 
 A release PR is an open PR carrying the `release` label, which the v4 release automation applies to both the `next → master` and the `hotfixes → master` PR. One search call covers the whole owner; each PR found then costs one call for its head/base and up to two to look for the changelog.
@@ -132,6 +147,32 @@ The version is read from the `release: vX.Y.Z - …` title. The changelog is loo
 	]
 }
 ```
+
+**`analyze: true`.** Each release PR gains `analysis`: `openPrs` (everything open against its release branch — `next`, or `hotfixes` — as `doc`, `dependency`, `feature` or `draft`; a doc PR's title version is read), `freshness` when a changelog exists, a `verdict`, and a one-line `reason`.
+
+`freshness.status` compares the changelog with the PRs that actually shipped in the release (read from the release PR's commits, first line of each; docs PRs and the version bump are ignored):
+
+| `freshness.status` | Meaning |
+|---|---|
+| `current` | The heading carries the release's version and every shipped PR is mentioned. |
+| `minor-gap` | Every user-facing PR is mentioned; only `ci` / `chore` / `style` / `test` PRs are not (`missingInternal`). |
+| `stale` | At least one user-facing PR is not mentioned (`missingUserFacing`). |
+| `version-drift` | The changelog's heading names a different version than the release PR's current title. |
+| `thin` | Looks like a stub (very short, or no Overview section). |
+
+`readmeMentionsVersion` reports whether the README's What's New block names the version; it does not change the status.
+
+The `verdict` is the release-docs decision table:
+
+| `verdict` | When |
+|---|---|
+| `done` | A changelog exists and is `current` or `minor-gap`. |
+| `in-flight` | It needs work and a doc PR is already open against the release branch (`docVersionMismatch` is set if that PR names a different version). |
+| `wait` | It needs work and feature/fix PRs are still open against the release branch. |
+| `gray` | It needs work and only dependency PRs or drafts are open. |
+| `write` | No changelog exists and nothing is open against the release branch. |
+| `update` | A changelog exists but is stale, drifted or thin, and nothing is open against the release branch. |
+| `inspect` | The release PR title has no readable version. |
 
 The release PR's version can change while it is open (more PRs landing on `next` can raise the bump), so a `ready` changelog is only as current as the title it was matched against — re-run the report after `next` changes. Truncation follows the same pattern as the other report verbs; the extra reasons are `"max-results"` (more than one page of release PRs matched — GitHub's search returns 100 per page) and `"incomplete-search"` (GitHub reported the search timed out).
 

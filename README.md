@@ -77,19 +77,18 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ## ✨ What's New
 
-### Latest: v0.4.0 (September 2026)
+### Latest: v0.6.0 (October 2026)
 
-- **CI visibility without per-call log fetches** — `report_ci_status` reports pass/fail/pending counts for a PR (or every open PR in a repo) by default, escalating on request to which job failed, which step failed, and a tail of the failing job's log — paying for that detail only on runs that are genuinely failing. `pull_request_read` can now carry the same status inline via an opt-in `ciVerbosity` parameter, the first tool built on the router's new **augment** dispatch mode (forward to the hosted MCP, then enrich the result in place).
-- **`report_unlabeled`** — issues/PRs with no labels, for one repo or every repo an owner has, with a rate-limit floor scaled to the token's own real limit rather than a hardcoded guess.
-- Fixed `npm run dev` crashing outright (a TypeScript syntax `node --experimental-strip-types` can't handle) and an installer bug that left build output root-owned in the operator's own checkout.
-- [View full v0.4.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.4.0.md)
+- **Org-wide alert and release reports you can actually read** — `report_security_alerts` can return a compact per-repo roll-up (`summaryOnly`, a few KB instead of about 700 KB for an org), filter by severity and repo, and tag each repo as `v4`, `dev-trunk` or `non-v4`. `report_release_prs` can judge each release PR (`analyze`): what is still open against it, whether its changelog is up to date, and what to do next.
+- **Two verbs since v0.4** — v0.5.0 added `report_security_alerts` and `report_release_prs`, and v0.5.1 stopped the installer from re-asking where credentials are stored on an upgrade.
+- [View full v0.6.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.0.md)
 
 ### Recent Releases
 
-- **v0.3.2** (September 2026) — Bump the CI test matrix + Dependabot grouping to match the v0.3.1 Node floor raise ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.3.2.md))
-- **v0.3.1** (September 2026) — Raise the Node floor to `>=22.12.0` for `vitest` 5 compatibility ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.3.1.md))
-- **v0.3.0** (September 2026) — Portable Node installer: `deploy/install.mjs` replaces the old shell scripts with config merging, a choice of credential-storage backend, and a post-deploy smoke test ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.3.0.md))
-- **v0.2.5** (September 2026) — Security hotfix: bump the `npm_and_yarn` group across 1 directory (4 updates; [#40](https://github.com/CLDMV/gh-broker/pull/40)) ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.2.5.md))
+- **v0.5.1** (October 2026) — The installer keeps the existing secrets backend instead of prompting on every upgrade ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.1.md))
+- **v0.5.0** (October 2026) — New `report_security_alerts` and `report_release_prs` verbs, and a permission 403 is no longer mistaken for a rate limit ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.0.md))
+- **v0.4.2** (October 2026) — Patched `ip-address`, `fast-uri` and `hono` (four Dependabot alerts), and the required-check mirror no longer skips ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.4.2.md))
+- **v0.4.1** (October 2026) — Uniform file headers via `@cldmv/fix-headers`, TypeScript back on 6 and patch-group dependency bumps ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.4.1.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
