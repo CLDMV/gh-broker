@@ -1,4 +1,19 @@
 /**
+ *
+ *	@Project: @cldmv/gh-broker
+ *	@Filename: /src/verbs/release-analysis.ts
+ *	@Date: 2026-10-04T15:40:09-07:00 (1791153609)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-04T16:41:24-07:00 (1791157284)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
  * Release-readiness analysis for report_release_prs `analyze: true`.
  *
  * This is the decision logic the release-docs skill used to walk by hand: what is still open against

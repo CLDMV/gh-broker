@@ -1,4 +1,19 @@
 /**
+ *
+ *	@Project: @cldmv/gh-broker
+ *	@Filename: /src/verbs/repo-tier.ts
+ *	@Date: 2026-10-04T15:40:09-07:00 (1791153609)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-04T16:41:24-07:00 (1791157284)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
  * Classifies a repo into the CLDMV flow tiers the maintenance skills care about.
  *
  *  - `v4`        — carries the v4 release workflow and is a normal next → master staging-flow repo.
