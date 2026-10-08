@@ -77,18 +77,18 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ## ✨ What's New
 
-### Latest: v0.6.0 (October 2026)
+### Latest: v0.6.1 (October 2026)
 
-- **Org-wide alert and release reports you can actually read** — `report_security_alerts` can return a compact per-repo roll-up (`summaryOnly`, a few KB instead of about 700 KB for an org), filter by severity and repo, and tag each repo as `v4`, `dev-trunk` or `non-v4`. `report_release_prs` can judge each release PR (`analyze`): what is still open against it, whether its changelog is up to date, and what to do next.
-- **Two verbs since v0.4** — v0.5.0 added `report_security_alerts` and `report_release_prs`, and v0.5.1 stopped the installer from re-asking where credentials are stored on an upgrade.
-- [View full v0.6.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.0.md)
+- **MCP SDK 1.32.0** — `@modelcontextprotocol/sdk` moves from 1.31.0 to 1.32.0, the only runtime package that changed. Its HTTP client now follows redirects only within the endpoint's origin, so an `upstream` URL that redirects to another host needs to be set to its final URL. No broker source changed.
+- **Toolchain** — vitest 5.0.3, `@cldmv/vitest-runner` 1.5.3 (minimum Node.js 22.12, with `chalk` 6) and `@types/node` 26.6.4. The broker's own minimum was already Node.js 22.12.
+- [View full v0.6.1 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.1.md)
 
 ### Recent Releases
 
+- **v0.6.0** (October 2026) — Compact per-repo roll-up, filters and flow tier for `report_security_alerts`, and release-readiness analysis for `report_release_prs` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.0.md))
 - **v0.5.1** (October 2026) — The installer keeps the existing secrets backend instead of prompting on every upgrade ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.1.md))
 - **v0.5.0** (October 2026) — New `report_security_alerts` and `report_release_prs` verbs, and a permission 403 is no longer mistaken for a rate limit ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.0.md))
 - **v0.4.2** (October 2026) — Patched `ip-address`, `fast-uri` and `hono` (four Dependabot alerts), and the required-check mirror no longer skips ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.4.2.md))
-- **v0.4.1** (October 2026) — Uniform file headers via `@cldmv/fix-headers`, TypeScript back on 6 and patch-group dependency bumps ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.4.1.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
