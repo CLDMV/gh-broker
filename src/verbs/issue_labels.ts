@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-16T17:17:03-07:00 (1792196223)
+ *	@Last modified time: 2026-10-16T17:25:33-07:00 (1792196733)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -27,8 +27,12 @@ import type { Octokit } from "@octokit/core";
  *
  *  - `add`    → POST   /repos/{o}/{r}/issues/{n}/labels         (server-side append)
  *  - `remove` → DELETE /repos/{o}/{r}/issues/{n}/labels/{name}  (one call per label)
- *  - `swap`   → the DELETEs for every current label starting with `prefix`, then a POST of `to`
- *  - `set`    → PUT    /repos/{o}/{r}/issues/{n}/labels         (explicit full replace)
+ *  - `swap`   → a POST of `to`, then a DELETE for every current label starting with `prefix`
+ *  - `set`    → PUT    /repos/{o}/{r}/issues/{n}/labels         (explicit full replace, never empty)
+ *
+ * Writes run create → add → remove, so a call that fails part-way never leaves the issue
+ * with fewer labels than it should have (a swap whose add is rate-limited keeps its old
+ * status label). The error then names exactly what was applied and what was not.
  *
  * Issues and PRs share these endpoints, so a PR number works the same way.
  *
@@ -74,14 +78,25 @@ export interface IssueLabelsResult {
 }
 
 const DEFAULT_COLOR = "ededed";
+/** GitHub's own per-issue label limit; also bounds the requests one call can make. */
+export const MAX_LABELS = 100;
+const INPUT_KEYS = new Set(["owner", "repo", "issue_number", "add", "remove", "swap", "set", "create_missing", "color"]);
+const SWAP_KEYS = new Set(["prefix", "to"]);
 
-function toList(v: string | string[] | undefined, field: string): string[] {
+const fail = (msg: string): never => {
+	throw new Error(`issue_labels: ${msg}`);
+};
+
+function toList(v: unknown, field: string): string[] {
 	if (v === undefined) return [];
 	const arr = Array.isArray(v) ? v : [v];
+	if (arr.length === 0) fail(`"${field}" is empty — pass at least one label name`);
 	for (const x of arr) {
-		if (typeof x !== "string" || !x.trim()) throw new Error(`issue_labels: "${field}" must be a label name or a list of label names`);
+		if (typeof x !== "string" || !x.trim()) fail(`"${field}" must be a label name or a list of label names`);
 	}
-	return dedupe(arr.map((x) => x.trim()));
+	const list = dedupe((arr as string[]).map((x) => x.trim()));
+	if (list.length > MAX_LABELS) fail(`"${field}" has ${list.length} labels — at most ${MAX_LABELS} per call`);
+	return list;
 }
 
 const key = (s: string): string => s.toLowerCase();
@@ -95,46 +110,78 @@ function statusOf(err: unknown): number | undefined {
 	return (err as { status?: number })?.status;
 }
 
+const fmt = (list: string[]): string => `[${list.join(", ")}]`;
+
 type Label = { name: string };
 const names = (data: unknown): string[] => (Array.isArray(data) ? (data as Label[]).map((l) => l.name) : []);
 
-export async function issueLabels(octokit: Octokit, input: IssueLabelsInput): Promise<IssueLabelsResult> {
-	const { owner, repo } = input;
-	const issue_number = Number(input.issue_number);
-	if (!owner || !repo) throw new Error("issue_labels: owner and repo are required");
-	if (!Number.isInteger(issue_number) || issue_number <= 0) throw new Error("issue_labels: issue_number must be a positive integer");
+/**
+ * The handler is the real contract: the MCP server does not validate against the
+ * advertised inputSchema, so every key and type is checked here, before any request.
+ */
+function validate(input: unknown) {
+	if (typeof input !== "object" || input === null || Array.isArray(input)) fail("arguments must be an object");
+	const a = input as Record<string, unknown>;
+	const unknown = Object.keys(a).filter((k) => !INPUT_KEYS.has(k));
+	if (unknown.length) fail(`unknown argument(s): ${unknown.join(", ")} — expected ${[...INPUT_KEYS].join(", ")}`);
+	if (typeof a.owner !== "string" || !a.owner.trim()) fail('"owner" must be a non-empty string');
+	if (typeof a.repo !== "string" || !a.repo.trim()) fail('"repo" must be a non-empty string');
+	if (typeof a.issue_number !== "number" || !Number.isInteger(a.issue_number) || a.issue_number <= 0) fail('"issue_number" must be a positive integer');
+	if (a.create_missing !== undefined && typeof a.create_missing !== "boolean") fail('"create_missing" must be a boolean');
+	if (a.color !== undefined && (typeof a.color !== "string" || !/^#?[0-9a-f]{6}$/i.test(a.color))) fail('"color" must be a 6-digit hex color, e.g. "ededed"');
 
-	const add = toList(input.add, "add");
-	const remove = toList(input.remove, "remove");
-	const set = input.set === undefined ? undefined : toList(input.set, "set");
+	const add = toList(a.add, "add");
+	const remove = toList(a.remove, "remove");
+	const set = a.set === undefined ? undefined : toList(a.set, "set");
 	let swapTo: string[] = [];
 	let swapPrefix: string | undefined;
-	if (input.swap !== undefined) {
-		if (typeof input.swap?.prefix !== "string" || !input.swap.prefix) throw new Error('issue_labels: "swap.prefix" is required');
-		swapPrefix = input.swap.prefix;
-		swapTo = toList(input.swap.to, "swap.to");
-		if (swapTo.length === 0) throw new Error('issue_labels: "swap.to" needs at least one label');
+	if (a.swap !== undefined) {
+		const sw = a.swap as Record<string, unknown>;
+		if (typeof sw !== "object" || sw === null || Array.isArray(sw)) fail('"swap" must be an object { prefix, to }');
+		const extra = Object.keys(sw).filter((k) => !SWAP_KEYS.has(k));
+		if (extra.length) fail(`unknown "swap" key(s): ${extra.join(", ")} — expected prefix, to`);
+		if (typeof sw.prefix !== "string" || !sw.prefix) fail('"swap.prefix" is required');
+		if (sw.to === undefined) fail('"swap.to" needs at least one label');
+		swapPrefix = sw.prefix as string;
+		swapTo = toList(sw.to, "swap.to");
 	}
 
 	if (set !== undefined && (add.length || remove.length || swapPrefix !== undefined)) {
-		throw new Error('issue_labels: "set" replaces the whole label set and cannot be combined with add/remove/swap');
+		fail('"set" replaces the whole label set and cannot be combined with add/remove/swap');
 	}
-	if (set === undefined && !add.length && !remove.length && swapPrefix === undefined) {
-		throw new Error("issue_labels: nothing to do — pass add, remove, swap or set");
-	}
+	if (set === undefined && !add.length && !remove.length && swapPrefix === undefined) fail("nothing to do — pass add, remove, swap or set");
 	const addSide = dedupe([...add, ...swapTo]);
+	if (addSide.length > MAX_LABELS) fail(`${addSide.length} labels to add — at most ${MAX_LABELS} per call`);
 	const removeKeys = new Set(remove.map(key));
 	const clash = addSide.filter((l) => removeKeys.has(key(l)));
-	if (clash.length) throw new Error(`issue_labels: label(s) both added and removed: ${clash.join(", ")}`);
+	if (clash.length) fail(`label(s) both added and removed: ${clash.join(", ")}`);
 
+	return {
+		owner: a.owner as string,
+		repo: a.repo as string,
+		issue_number: a.issue_number as number,
+		remove,
+		set,
+		swapPrefix,
+		addSide,
+		createMissing: a.create_missing === true,
+		color: ((a.color as string | undefined) ?? DEFAULT_COLOR).replace(/^#/, "")
+	};
+}
+
+export async function issueLabels(octokit: Octokit, input: IssueLabelsInput): Promise<IssueLabelsResult> {
+	const { owner, repo, issue_number, remove, set, swapPrefix, addSide, createMissing, color } = validate(input);
+	const issue = `${owner}/${repo}#${issue_number}`;
 	const base = { owner, repo, issue_number };
 	const readLabels = async (): Promise<string[]> =>
-		names((await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/labels", { ...base, per_page: 100 })).data);
+		names((await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/labels", { ...base, per_page: MAX_LABELS })).data);
 
-	// 0. The current set: needed for swap's prefix matches and for reporting what changed.
-	//    It also fails a wrong issue number (404) before anything is written or created.
+	// 0. The current set: needed for swap's prefix matches, for the spelling of removals and
+	//    for reporting what changed. It also fails a wrong issue number (404) before anything
+	//    is written or created.
 	const before = await readLabels();
 	const beforeKeys = new Set(before.map(key));
+	const onIssue = (n: string): string | undefined => before.find((l) => key(l) === key(n));
 
 	// 1. Resolve every add-side label against the repo before writing anything.
 	const toResolve = set ?? addSide;
@@ -149,74 +196,105 @@ export async function issueLabels(octokit: Octokit, input: IssueLabelsInput): Pr
 			missing.push(name);
 		}
 	}
-	const created: string[] = [];
-	if (missing.length) {
-		if (!input.create_missing) {
-			throw new Error(
-				`issue_labels: label(s) not found in ${owner}/${repo}: ${missing.join(", ")} — nothing was changed. Check the spelling (list_label), or pass create_missing: true to create them.`
-			);
+	if (missing.length && !createMissing) {
+		fail(`label(s) not found in ${owner}/${repo}: ${missing.join(", ")} — nothing was changed. Check the spelling (list_label), or pass create_missing: true to create them.`);
+	}
+
+	// 2. Plan the removals: only labels actually on the issue, in the issue's own spelling.
+	//    swap removes every prefix match except a label this call also adds — that one stays
+	//    put instead of being deleted and re-added.
+	const removals: string[] = [];
+	if (set === undefined) {
+		for (const n of remove) {
+			const hit = onIssue(n);
+			if (hit) removals.push(hit);
 		}
-		const color = (input.color ?? DEFAULT_COLOR).replace(/^#/, "");
+		if (swapPrefix !== undefined) {
+			const keep = new Set(addSide.map(key));
+			const p = key(swapPrefix);
+			for (const l of before) if (key(l).startsWith(p) && !keep.has(key(l))) removals.push(l);
+		}
+	}
+	const plannedRemovals = dedupe(removals);
+
+	// 3. Writes. Order is chosen so a failure part-way never leaves the issue with LESS than
+	//    it started with plus what was asked: create, then add (POST), and removals last.
+	//    Any failure is rethrown with exactly what was applied and what was not.
+	const created: string[] = [];
+	let addedDone = false;
+	const removed: string[] = [];
+	let latest: string[] | undefined;
+	const canonical = (): string[] => [...resolved, ...created];
+	const canon = (n: string): string => canonical().find((c) => key(c) === key(n)) ?? n;
+	try {
 		for (const name of missing) {
 			const res = await octokit.request("POST /repos/{owner}/{repo}/labels", { owner, repo, name, color });
 			created.push((res.data as Label).name);
 		}
+
+		if (set !== undefined) {
+			const res = await octokit.request("PUT /repos/{owner}/{repo}/issues/{issue_number}/labels", { ...base, labels: set.map(canon) });
+			latest = names(res.data);
+			addedDone = true;
+			return result(latest, before);
+		}
+
+		if (addSide.length) {
+			const res = await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", { ...base, labels: addSide.map(canon) });
+			latest = names(res.data);
+			addedDone = true;
+		}
+
+		for (const name of plannedRemovals) {
+			try {
+				const res = await octokit.request("DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", { ...base, name });
+				latest = names(res.data);
+				removed.push(name);
+			} catch (err) {
+				// Someone removed it since the read above: already the state asked for.
+				if (statusOf(err) !== 404) throw err;
+			}
+		}
+	} catch (err) {
+		const applied: string[] = [];
+		const notApplied: string[] = [];
+		const part = (label: string, done: string[], all: string[]) => {
+			const doneKeys = new Set(done.map(key));
+			if (done.length) applied.push(`${label} ${fmt(done)}`);
+			const rest = all.filter((l) => !doneKeys.has(key(l)));
+			if (rest.length) notApplied.push(`${label} ${fmt(rest)}`);
+		};
+		part("created", created, missing);
+		if (set !== undefined) part("set", addedDone ? set : [], set);
+		else part("added", addedDone ? addSide.map(canon) : [], addSide.map(canon));
+		part("removed", removed, plannedRemovals);
+		const e = new Error(
+			`issue_labels: failed part-way on ${issue}: ${(err as Error).message}. Applied: ${applied.join("; ") || "nothing"}. Not applied: ${notApplied.join("; ") || "nothing"}.`,
+			{ cause: err }
+		);
+		(e as Error & { status?: number }).status = statusOf(err);
+		throw e;
 	}
-	const canonical = [...resolved, ...created];
-	const canon = (n: string): string => canonical.find((c) => key(c) === key(n)) ?? n;
-	const result = (labels: string[], removed: string[]): IssueLabelsResult => {
+
+	return result(latest ?? (await readLabels()), removed);
+
+	function result(labels: string[], removedFrom: string[]): IssueLabelsResult {
 		const afterKeys = new Set(labels.map(key));
 		// Only what this call asked for — a label someone else added meanwhile isn't ours to report.
 		const requested = new Set(toResolve.map(key));
 		return {
-			issue: `${owner}/${repo}#${issue_number}`,
+			issue,
 			labels,
 			added: labels.filter((l) => requested.has(key(l)) && !beforeKeys.has(key(l))),
-			removed: removed.filter((l) => !afterKeys.has(key(l))),
+			removed: removedFrom.filter((l) => !afterKeys.has(key(l))),
 			created
 		};
-	};
-
-	// 2. `set`: one PUT, done.
-	if (set !== undefined) {
-		const res = await octokit.request("PUT /repos/{owner}/{repo}/issues/{issue_number}/labels", { ...base, labels: set.map(canon) });
-		return result(names(res.data), before);
 	}
-
-	// 3. Removals. swap removes every current prefix match, except a label already in
-	//    `to` — that one stays put rather than being removed and re-added.
-	const removals = [...remove];
-	if (swapPrefix !== undefined) {
-		const keep = new Set(swapTo.map(key));
-		const p = key(swapPrefix);
-		for (const l of before) if (key(l).startsWith(p) && !keep.has(key(l))) removals.push(l);
-	}
-	let latest: string[] | undefined;
-	const removed: string[] = [];
-	for (const name of dedupe(removals)) {
-		try {
-			const res = await octokit.request("DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", { ...base, name });
-			latest = names(res.data);
-			removed.push(name);
-		} catch (err) {
-			// The label isn't on the issue: a no-op, not an error.
-			if (statusOf(err) !== 404) throw err;
-		}
-	}
-
-	// 4. Additions: POST appends server-side, so a label someone else adds meanwhile is
-	//    kept; ones already present are a no-op.
-	if (addSide.length) {
-		const res = await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", { ...base, labels: addSide.map(canon) });
-		latest = names(res.data);
-	}
-
-	return result(latest ?? (await readLabels()), removed);
 }
 
 const labelList = (description: string) => ({
 	description,
-	oneOf: [{ type: "string" }, { type: "array", items: { type: "string" }, minItems: 1 }]
+	oneOf: [{ type: "string" }, { type: "array", items: { type: "string" }, minItems: 1, maxItems: MAX_LABELS }]
 });
 
 /** JSON Schema advertised to the agent for issue_labels. */
@@ -240,12 +318,12 @@ export const ISSUE_LABELS_SCHEMA = {
 				to: labelList("label(s) to add after the prefix matches are removed")
 			}
 		},
-		set: labelList("replace the WHOLE label set with these; cannot be combined with add/remove/swap"),
+		set: labelList("replace the WHOLE label set with these (at least one); cannot be combined with add/remove/swap"),
 		create_missing: {
 			type: "boolean",
 			default: false,
 			description: "create add-side labels that don't exist in the repo; without it an unknown name refuses the call and nothing changes"
 		},
-		color: { type: "string", description: `hex color (no #) for labels created via create_missing; default ${DEFAULT_COLOR}` }
+		color: { type: "string", pattern: "^#?[0-9a-fA-F]{6}$", description: `6-digit hex color (with or without #) for labels created via create_missing; default ${DEFAULT_COLOR}` }
 	}
 };

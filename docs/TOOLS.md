@@ -288,15 +288,25 @@ The hosted MCP's `issue_write` takes `labels` as a **replacement**: every label 
 |---|---|---|---|
 | `owner` | string | — (required) | Selects the write credential. |
 | `repo` | string | — (required) | |
-| `issue_number` | number | — (required) | An issue or a pull-request number. PRs use the same endpoints. |
+| `issue_number` | integer | — (required) | An issue or a pull-request number. PRs use the same endpoints. |
 | `add` | string \| string[] | — | Append one or more labels (`POST …/issues/{n}/labels`, server-side append). Labels already on the issue are a no-op. |
-| `remove` | string \| string[] | — | Remove one or more labels (`DELETE …/issues/{n}/labels/{name}` each). A label the issue doesn't have is a no-op, not an error. |
+| `remove` | string \| string[] | — | Remove one or more labels (`DELETE …/issues/{n}/labels/{name}` each, using the spelling already on the issue). A label the issue doesn't have is skipped: no request, not an error. |
 | `swap` | `{ prefix, to }` | — | Remove every current label whose name starts with `prefix`, then add `to` (one label or several). A `to` label already on the issue is left in place rather than removed and re-added. |
-| `set` | string \| string[] | — | Replace the whole set (`PUT …/issues/{n}/labels`). Only as an explicit choice; cannot be combined with `add`, `remove` or `swap`. |
+| `set` | string \| string[] | — | Replace the whole set (`PUT …/issues/{n}/labels`). Only as an explicit choice; cannot be combined with `add`, `remove` or `swap`. An empty `set` is refused, so it can never clear every label. |
 | `create_missing` | boolean | `false` | Create add-side labels that don't exist in the repo instead of refusing the call. |
-| `color` | string | `ededed` | Hex color (with or without `#`) for labels created by `create_missing`. |
+| `color` | string | `ededed` | 6-digit hex color (with or without `#`) for labels created by `create_missing`. Anything else is refused. |
 
-`add`, `remove` and `swap` combine freely in one call. Removals run first, then one POST adds everything on the add side. Naming the same label on both sides is refused.
+`add`, `remove` and `swap` combine freely in one call. Naming the same label on both sides is refused, and a label on the add side is never removed by a `swap` prefix match (it stays put rather than being deleted and re-added).
+
+**Strict arguments.** The handler enforces the schema itself: an unknown key (a typo such as `remvoe`), a non-integer `issue_number`, a non-string `owner`/`repo`, a non-boolean `create_missing`, an empty list or a bad `color` refuses the call before any request. Each list holds at most 100 labels (GitHub's per-issue limit), and so does the add side as a whole.
+
+**Write order and partial failure.** Writes run in this order: create missing labels, one POST for the whole add side, then the DELETEs. Adding before removing means a failure part-way never leaves the issue with fewer labels than it should have; a `swap` whose POST is rate-limited keeps its old status label. If any write fails, the error names what was applied and what was not, and keeps the HTTP status:
+
+```
+issue_labels: failed part-way on cldmv/gh-broker#117: API rate limit exceeded. Applied: nothing. Not applied: added [status: verified]; removed [status: in progress].
+```
+
+A failure before the first write (the read of the issue's labels, or a label lookup) is passed through unchanged; nothing was written.
 
 **Unknown labels are refused.** Every name the call would add (`add`, `swap.to`, `set`) is looked up in the repo first. If any is missing and `create_missing` is not set, the call fails with the missing names and **nothing is written**. Names to remove are not checked, since removing an absent label is already a no-op. Matching is case-insensitive, as GitHub's is, and the repo's own spelling is what gets applied.
 
@@ -314,7 +324,7 @@ The hosted MCP's `issue_write` takes `labels` as a **replacement**: every label 
 
 `added` lists only labels this call asked for that were not already there; a label someone else added meanwhile shows in `labels` but not in `added`.
 
-**Calls.** One read of the issue's current labels (which also fails a wrong issue number before anything is written), one lookup per add-side label, one DELETE per removal, and at most one POST. `swap` reads the prefix matches from that first read, so a matching label added by someone else in the moments between that read and the DELETEs is not removed; nothing outside the prefix is ever affected.
+**Calls.** One read of the issue's current labels (which also fails a wrong issue number before anything is written), one lookup per add-side label, one create per missing label with `create_missing`, at most one POST, and one DELETE per label actually on the issue. With the 100-label caps a call makes at most a few hundred requests. `swap` and `remove` work from that first read, so a matching label added by someone else in the moments between that read and the DELETEs is not removed; nothing outside the call is ever affected.
 
 ---
 
