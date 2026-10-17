@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-16T17:17:03-07:00 (1792196223)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -30,6 +30,7 @@ import {
 import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlabeled.ts";
 import { reportSecurityAlerts, type ReportSecurityAlertsInput } from "./verbs/report_security_alerts.ts";
 import { reportReleasePrs, type ReportReleasePrsInput } from "./verbs/report_release_prs.ts";
+import { issueLabels, type IssueLabelsInput } from "./verbs/issue_labels.ts";
 import { reportCiStatus, ciStatusForHeadSha, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
@@ -129,6 +130,12 @@ export class Router {
 				const octokit = new Octokit({ auth: token });
 				const out = await replyReviewThread(octokit, args as unknown as ReplyReviewThreadInput);
 				return { content: [{ type: "text", text: `replied: ${out.url}` }] };
+			}
+			case "issue_labels": {
+				// Per-label REST endpoints (Issues: write) on the resolved write PAT.
+				const octokit = new Octokit({ auth: token });
+				const out = await issueLabels(octokit, args as unknown as IssueLabelsInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			case "report_unlabeled": {
 				const octokit = new Octokit({ auth: token });

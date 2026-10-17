@@ -74,6 +74,42 @@ describe("buildCatalog", () => {
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
 	});
 
+	it("advertises issue_labels with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const config = makeConfig([{ name: "issue_labels", mode: "write", custom: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "issue_labels" });
+		expect(catalog[0]?.description).toMatch(/swap/);
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo", "issue_number"] });
+	});
+
+	it("warns on issue_write that labels replaces the set, pointing at issue_labels when it is allowlisted", async () => {
+		const upstreamTool = { name: "issue_write", description: "Create or update an issue.", inputSchema: { type: "object", properties: { labels: {} } } };
+		upstream.listToolsFor.mockResolvedValue([upstreamTool]);
+		const withVerb = await buildCatalog(
+			makeConfig([{ name: "issue_write", mode: "write" }, { name: "issue_labels", mode: "write", custom: true }]),
+			secrets as any,
+			upstream as any
+		);
+		const iw = withVerb.find((t) => t.name === "issue_write")!;
+		expect(iw.description).toMatch(/^Create or update an issue\. WARNING \(gh-broker\): "labels" REPLACES the issue's whole label set/);
+		expect(iw.description).toMatch(/use issue_labels instead/);
+		expect(iw.inputSchema).toBe(upstreamTool.inputSchema);
+		expect(upstreamTool.description).toBe("Create or update an issue."); // the fetched tool is not mutated
+
+		const without = await buildCatalog(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);
+		expect(without[0]?.description).toMatch(/REPLACES/);
+		expect(without[0]?.description).not.toMatch(/issue_labels/);
+		expect(without[0]?.description).toMatch(/pass the full set/);
+	});
+
+	it("still warns on issue_write when the upstream fetch fails (minimal schema)", async () => {
+		upstream.listToolsFor.mockRejectedValue(new Error("down"));
+		const catalog = await buildCatalog(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);
+		expect(catalog[0]?.description).toMatch(/^\(write\) proxied to the GitHub MCP WARNING/);
+	});
+
 	it("advertises report_ci_status with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "report_ci_status", mode: "read", custom: true }]);
