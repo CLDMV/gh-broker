@@ -87,18 +87,19 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ## ✨ What's New
 
-### Latest: v0.6.1 (October 2026)
+### Latest: v0.7.0 (October 2026)
 
-- **MCP SDK 1.32.0** — `@modelcontextprotocol/sdk` moves from 1.31.0 to 1.32.0, the only runtime package that changed. Its HTTP client now follows redirects only within the endpoint's origin, so an `upstream` URL that redirects to another host needs to be set to its final URL. No broker source changed.
-- **Toolchain** — vitest 5.0.3, `@cldmv/vitest-runner` 1.5.3 (minimum Node.js 22.12, with `chalk` 6) and `@types/node` 26.6.4. The broker's own minimum was already Node.js 22.12.
-- [View full v0.6.1 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.1.md)
+- **`issue_labels`: edit labels without replacing the set.** The new write verb adds, removes or swaps individual labels on an issue or PR (`swap { prefix: "status: ", to: "status: verified" }` moves a status in one call), so the priority, area and type labels next to it are never dropped the way they are by `issue_write`'s whole-set `labels`. Unknown label names are refused unless `create_missing` is set, and the call returns the resulting set.
+- **`issue_write` warns about the replacement.** Its advertised description now says that `labels` replaces the whole set and points at `issue_labels`.
+- **Dependencies.** MCP SDK 1.32.1 and a patched `proxy-addr` (CVE-2026-90711) at runtime; `@cldmv/configs` 1.3.0 and other dev-tooling bumps.
+- [View full v0.7.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.7.0.md)
 
 ### Recent Releases
 
+- **v0.6.1** (October 2026) — MCP SDK 1.32.0 (same-origin redirects only) and a refreshed vitest toolchain; no broker source changes ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.1.md))
 - **v0.6.0** (October 2026) — Compact per-repo roll-up, filters and flow tier for `report_security_alerts`, and release-readiness analysis for `report_release_prs` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.0.md))
 - **v0.5.1** (October 2026) — The installer keeps the existing secrets backend instead of prompting on every upgrade ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.1.md))
 - **v0.5.0** (October 2026) — New `report_security_alerts` and `report_release_prs` verbs, and a permission 403 is no longer mistaken for a rate limit ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.0.md))
-- **v0.4.2** (October 2026) — Patched `ip-address`, `fast-uri` and `hono` (four Dependabot alerts), and the required-check mirror no longer skips ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.4.2.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
