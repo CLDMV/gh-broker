@@ -25,6 +25,7 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "link_issue", mode: "write", custom: true },
 			{ name: "resolve_review_thread", mode: "write", custom: true },
 			{ name: "reply_review_thread", mode: "write", custom: true },
+			{ name: "issue_labels", mode: "write", custom: true },
 			{ name: "report_unlabeled", mode: "read", custom: true },
 			{ name: "report_security_alerts", mode: "read", custom: true },
 			{ name: "report_release_prs", mode: "read", custom: true },
@@ -162,6 +163,25 @@ describe("Router.call", () => {
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
 			const out = await r.call("reply_review_thread", { owner: "cldmv", threadId: "PRRT_1", body: "thanks" });
 			expect(out).toEqual({ content: [{ type: "text", text: "replied: https://gh/c/1" }] });
+		});
+
+		it("issue_labels runs on a write-PAT Octokit and returns the resulting label set as JSON text", async () => {
+			requestMock.mockImplementation(async (route: string) => {
+				if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/labels") return { data: [{ name: "type: bug" }] };
+				if (route === "GET /repos/{owner}/{repo}/labels/{name}") return { data: { name: "area: auth" } };
+				return { data: [{ name: "type: bug" }, { name: "area: auth" }] };
+			});
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("issue_labels", { owner: "CLDMV", repo: "gh-broker", issue_number: 117, add: "area: auth" });
+			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-write" });
+			expect(JSON.parse((out.content[0] as { text: string }).text)).toEqual({
+				issue: "CLDMV/gh-broker#117",
+				labels: ["type: bug", "area: auth"],
+				added: ["area: auth"],
+				removed: [],
+				created: []
+			});
+			expect(upstream.forward).not.toHaveBeenCalled();
 		});
 
 		it("report_unlabeled runs on a read-PAT Octokit and returns the JSON report as text", async () => {

@@ -49,6 +49,16 @@ A tool not listed in `config.tools` is neither advertised nor executable. Adding
 
 🏷️ **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_unlabeled)**
 
+### 🏷️ **Label Edits That Leave Other Labels Alone**
+
+The hosted MCP's `issue_write` takes `labels` as a full replacement, so changing one status label that way drops every other label on the issue. `issue_labels` edits labels one at a time instead: `add` and `remove` (one or several, combinable), `swap` (drop every `status: ` label and add `status: verified` in one call), and an explicit `set`. A misspelled label is refused rather than created, and the call returns the resulting set.
+
+```json
+{ "owner": "cldmv", "repo": "gh-broker", "issue_number": 117, "swap": { "prefix": "status: ", "to": "status: implemented" } }
+```
+
+🏷️ **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#issue_labels)**
+
 ### 🛡️ **Org-Wide Security Alerts**
 
 `report_security_alerts` lists every open Dependabot, CodeQL and secret-scanning alert — for one repo or across everything an owner has — using the org-level endpoints where the token can read them and a per-repo sweep where it can't. Secret values are never returned.
@@ -131,6 +141,7 @@ src/
     report_release_prs.ts  open release PRs + whether each has its changelog file
     report_ci_status.ts  tiered CI status for a PR or every open PR in a repo
     rest-client.ts       shared rate-limit-floor + call-budget REST helpers
+    issue_labels.ts      add/remove/swap/set labels on an issue or PR (write PAT)
     review_thread.ts     resolve/reply PR review threads (write PAT)
     link_issue.ts         addClosingIssueReference (App token) — DEFERRED, not wired in
 deploy/
@@ -149,7 +160,7 @@ config.example.json  shipped defaults (token-free); merged into the deployed con
 
 ## 📚 Documentation
 
-- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `resolve_review_thread`/`reply_review_thread`, and how to add a new one
+- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `issue_labels`, `resolve_review_thread`/`reply_review_thread`, and how to add a new one
 - **[Agent-as-Separate-User Model](docs/agent-user-model.md)** — the isolation model behind "use ≠ possession": users, groups, filesystem permissions, verified against a real host
 - **[Deploy Architecture](docs/deploy-architecture.md)** — config merge, secret store backends, node handling, the installer's full flow
 - **[Install Guide](deploy/README.md)** — prerequisites, PAT scopes, install/upgrade command, flags
