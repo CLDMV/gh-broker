@@ -236,6 +236,11 @@
 			"mode": "write"
 		},
 		{
+			"name": "issue_labels",
+			"mode": "write",
+			"custom": true
+		},
+		{
 			"name": "resolve_review_thread",
 			"mode": "write",
 			"custom": true

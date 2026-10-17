@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-16T17:17:02-07:00 (1792196222)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -22,6 +22,7 @@ import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verb
 import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
 import { REPORT_SECURITY_ALERTS_SCHEMA } from "./verbs/report_security_alerts.ts";
 import { REPORT_RELEASE_PRS_SCHEMA } from "./verbs/report_release_prs.ts";
+import { ISSUE_LABELS_SCHEMA } from "./verbs/issue_labels.ts";
 import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 
 /**
@@ -79,6 +80,13 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 						"Post a reply inside a pull-request review thread — e.g. respond to a Copilot review comment. Takes the thread node id from pull_request_read get_review_comments. Runs on the write PAT (Pull requests: write).",
 					inputSchema: REPLY_REVIEW_THREAD_SCHEMA
 				});
+			} else if (rule.name === "issue_labels") {
+				tools.push({
+					name: "issue_labels",
+					description:
+						'Edit the labels on one issue or PR without touching any other label on it. add / remove take one label or several (combinable in one call); swap { prefix, to } removes every label starting with prefix and adds to (e.g. prefix "status: ", to "status: verified"); set replaces the whole set and only as an explicit choice. Labels already present (add) or absent (remove) are no-ops. A label name to add that does not exist in the repo refuses the call and changes nothing, unless create_missing is true. Returns the resulting label set plus what was added, removed and created. Runs on the write PAT (Issues: write).',
+					inputSchema: ISSUE_LABELS_SCHEMA
+				});
 			} else if (rule.name === "report_unlabeled") {
 				tools.push({
 					name: "report_unlabeled",
@@ -135,6 +143,19 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 						logLines: { type: "number", description: "gh-broker extension: tier-3 log tail length" }
 					}
 				}
+			});
+			continue;
+		}
+		if (rule.name === "issue_write") {
+			// issue_write's `labels` REPLACES the issue's whole label set — the trap behind
+			// CLDMV/gh-broker#117. Say so where the agent reads the tool, and point at the verb
+			// that edits labels one at a time when it is allowlisted.
+			const pointer = config.tools.some((t) => t.name === "issue_labels" && t.custom)
+				? " To add, remove or swap individual labels, use issue_labels instead."
+				: " Read the current labels first and pass the full set you want to keep.";
+			tools.push({
+				...base,
+				description: `${base.description ?? ""} WARNING (gh-broker): "labels" REPLACES the issue's whole label set — every label not listed is removed.${pointer}`.trim()
 			});
 			continue;
 		}

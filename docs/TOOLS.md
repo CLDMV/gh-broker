@@ -4,8 +4,8 @@ Every tool the broker advertises falls into one of three categories, set per ent
 
 | Category | Config flag | What happens | Example |
 |---|---|---|---|
-| **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines. | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, `resolve_review_thread`, `reply_review_thread` |
+| **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
+| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, `issue_labels`, `resolve_review_thread`, `reply_review_thread` |
 | **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
@@ -266,6 +266,65 @@ A normal `pull_request_read` call (`method: "get"`) can carry CI status inline b
 **Opt-in only.** Omitting `ciVerbosity` makes this call byte-identical to a plain forward — augmenting every `pull_request_read` by default would add an unrequested API call (and cost) to every ordinary PR read. Only `method: "get"` is augmentable; any other method (`get_diff`, `get_files`, …) forwards untouched even if `ciVerbosity` is present.
 
 **Best-effort.** If the upstream response isn't the JSON-text shape expected — a format gh-broker doesn't control — the original result is returned unmodified rather than thrown. A shape mismatch degrades to "no CI data added," never a broken PR read.
+
+---
+
+## `issue_labels`
+
+Edit the labels on one issue or PR, touching only the labels named. Write, `mode: "write"`, `custom: true`, runs on the write PAT (Issues: write).
+
+The hosted MCP's `issue_write` takes `labels` as a **replacement**: every label not in the list is removed. Changing one status label that way silently drops the priority, area and type labels next to it. Reading the set and writing the merged set back has a race, since a label someone else adds between the two calls is lost. `issue_labels` uses GitHub's per-label endpoints instead, so nothing outside the call is touched. The broker also appends a warning to the advertised `issue_write` description pointing here.
+
+```json
+{
+	"owner": "cldmv",
+	"repo": "gh-broker",
+	"issue_number": 117,
+	"swap": { "prefix": "status: ", "to": "status: implemented" }
+}
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | Selects the write credential. |
+| `repo` | string | — (required) | |
+| `issue_number` | integer | — (required) | An issue or a pull-request number. PRs use the same endpoints. |
+| `add` | string \| string[] | — | Append one or more labels (`POST …/issues/{n}/labels`, server-side append). Labels already on the issue are a no-op. |
+| `remove` | string \| string[] | — | Remove one or more labels (`DELETE …/issues/{n}/labels/{name}` each, using the spelling already on the issue). A label the issue doesn't have is skipped: no request, not an error. |
+| `swap` | `{ prefix, to }` | — | Remove every current label whose name starts with `prefix`, then add `to` (one label or several). A `to` label already on the issue is left in place rather than removed and re-added. |
+| `set` | string \| string[] | — | Replace the whole set (`PUT …/issues/{n}/labels`). Only as an explicit choice; cannot be combined with `add`, `remove` or `swap`. An empty `set` is refused, so it can never clear every label. |
+| `create_missing` | boolean | `false` | Create add-side labels that don't exist in the repo instead of refusing the call. |
+| `color` | string | `ededed` | 6-digit hex color (with or without `#`) for labels created by `create_missing`. Anything else is refused. |
+
+`add`, `remove` and `swap` combine freely in one call. Naming the same label on both sides is refused, and a label on the add side is never removed by a `swap` prefix match (it stays put rather than being deleted and re-added).
+
+**Strict arguments.** The handler enforces the schema itself: an unknown key (a typo such as `remvoe`), a non-integer `issue_number`, a non-string `owner`/`repo`, a non-boolean `create_missing`, an empty list or a bad `color` refuses the call before any request. Each list holds at most 100 labels (GitHub's per-issue limit), and so does the add side as a whole.
+
+**Write order and partial failure.** Writes run in this order: create missing labels, one POST for the whole add side, then the DELETEs. Adding before removing means a failure part-way never leaves the issue with fewer labels than it should have; a `swap` whose POST is rate-limited keeps its old status label. If any write fails, the error names what was applied and what was not, and keeps the HTTP status:
+
+```
+issue_labels: failed part-way on cldmv/gh-broker#117: API rate limit exceeded. Applied: nothing. Not applied: added [status: verified]; removed [status: in progress].
+```
+
+A failure before the first write (the read of the issue's labels, or a label lookup) is passed through unchanged; nothing was written.
+
+**Unknown labels are refused.** Every name the call would add (`add`, `swap.to`, `set`) is looked up in the repo first. If any is missing and `create_missing` is not set, the call fails with the missing names and **nothing is written**. Names to remove are not checked, since removing an absent label is already a no-op. Matching is case-insensitive, as GitHub's is, and the repo's own spelling is what gets applied.
+
+**Result.** Always the issue's resulting label set, plus what this call changed:
+
+```json
+{
+	"issue": "cldmv/gh-broker#117",
+	"labels": ["type: enhancement", "priority: medium", "status: implemented"],
+	"added": ["status: implemented"],
+	"removed": ["status: not started"],
+	"created": []
+}
+```
+
+`added` lists only labels this call asked for that were not already there; a label someone else added meanwhile shows in `labels` but not in `added`.
+
+**Calls.** One read of the issue's current labels (which also fails a wrong issue number before anything is written), one lookup per add-side label, one create per missing label with `create_missing`, at most one POST, and one DELETE per label actually on the issue. With the 100-label caps a call makes at most a few hundred requests. `swap` and `remove` work from that first read, so a matching label added by someone else in the moments between that read and the DELETEs is not removed; nothing outside the call is ever affected.
 
 ---
 
