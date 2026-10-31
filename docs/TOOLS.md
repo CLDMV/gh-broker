@@ -349,15 +349,15 @@ npm only accepts a trusted publisher on a package that already exists, and that 
 **Guardrails, checked before any npm write.**
 
 - The scope is allowed by `config.npm.scopes`.
-- The repo exists and isn't archived, its `package.json` on the default branch names exactly this package and is not `"private": true`, and `.github/workflows/<workflow>` exists there.
-- The package does not exist on the registry yet. A package that exists is refused unless it is this verb's own placeholder from an earlier call (a single `0.0.0-stage` version marked `scaffoldedBy: "gh-broker"`), which is how an interrupted call resumes. The verb can never publish a version of a real package.
+- The repo exists under exactly the owner and name given (a renamed or transferred repo, which GitHub answers with a redirect, is refused), isn't archived, its `package.json` on the default branch names exactly this package and is not `"private": true`, and `.github/workflows/<workflow>` exists there.
+- The package does not exist on the registry yet. A package that exists is refused unless it is this verb's own placeholder from an earlier call (a single `0.0.0-stage` version marked `scaffoldedBy: "gh-broker"`), which is how an interrupted call resumes; the placeholder's recorded repository must be the one in this call. The lookup uses `?write=true`, so it reads the registry's primary copy rather than a possibly stale cache. The verb can never publish a version of a real package.
 
 **What it writes.**
 
 1. **Placeholder publish** (`PUT /<package>`, the request `npm publish` sends). The broker builds the tarball itself, so the agent supplies no files: a `package.json` (name, `0.0.0-stage`, the repo's `license` or `UNLICENSED`, repository, homepage, the `scaffoldedBy` marker) and a README pointing at the repo. Access is `public` for a public repo and `restricted` for a private one, the rule the CI publish uses too.
 2. **Trusted publisher** (`POST /-/package/<package>/trust`, the request `npm trust github <package> --repo <owner>/<repo> --file <workflow> --allow-publish` sends). Permission `createPackage` is npm's internal name for publish.
 
-**One code per write, so two calls.** npm requires a one-time password for every write, and a code works once. The first call publishes the placeholder and returns `status: "needs_otp"` with `done: ["publish"]` and `remaining: ["trust"]`, without sending the spent code again. Ask the user for the next code (after the authenticator changes) and call again: the publish is skipped, since the placeholder now exists, and the trusted publisher is added. A refused or expired code also returns `needs_otp` with what is left, and a trusted publisher that is already configured (HTTP 409) counts as done.
+**One code per write, so two calls.** npm requires a one-time password for every write, and a code works once. The first call publishes the placeholder and returns `status: "needs_otp"` with `done: ["publish"]` and `remaining: ["trust"]`, without sending the spent code again. Ask the user for the next code (after the authenticator changes) and call again: the publish is skipped, since the placeholder now exists, and the trusted publisher is added. A refused or expired code also returns `needs_otp` with what is left, and when npm answers that the package already has a trusted publisher (HTTP 409), the verb reads the existing configuration: if it is this repo and workflow the call is done, otherwise it fails naming what is configured (and if npm wants another code just to show it, it says so and points at the package's access page).
 
 **Result.**
 

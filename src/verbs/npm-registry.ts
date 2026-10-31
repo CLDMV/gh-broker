@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:04:31-07:00 (1793469871)
+ *	@Last modified time: 2026-10-31T12:58:18-07:00 (1793476698)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -114,9 +114,14 @@ export class NpmRegistry {
 		return { status: res.status, body };
 	}
 
-	/** The package's registry document, or undefined when it does not exist (or is not visible to the token). */
+	/**
+	 * The package's registry document, or undefined when it does not exist (or is not visible to
+	 * the token). `?write=true` reads from the primary rather than a cache, as npm itself does
+	 * before a write: a stale 404 here is the one thing that could let a placeholder land on a
+	 * package that already exists.
+	 */
 	async packument(name: string): Promise<Packument | undefined> {
-		const res = await this.send("package lookup", "GET", `/${escapePackageName(name)}`);
+		const res = await this.send("package lookup", "GET", `/${escapePackageName(name)}?write=true`);
 		if (res.status === 404) return undefined;
 		if (res.status !== 200) throw new NpmHttpError("package lookup", res.status, errorDetail(res.body));
 		return JSON.parse(res.body) as Packument;
@@ -129,21 +134,35 @@ export class NpmRegistry {
 	}
 
 	/**
-	 * Adds a GitHub Actions trusted publisher. Returns the created configuration, or undefined
-	 * with `alreadyExists` when the registry reports the same configuration is already present.
+	 * Adds a GitHub Actions trusted publisher. A 409 means the package already has a trusted
+	 * publisher, which may or may not be this one, so it is reported as `conflict` for the
+	 * caller to check against listGithubTrust rather than as success.
 	 */
-	async addGithubTrust(name: string, claims: { repository: string; file: string }, otp: string): Promise<{ config?: TrustConfig; alreadyExists: boolean }> {
+	async addGithubTrust(name: string, claims: { repository: string; file: string }, otp: string): Promise<{ config?: TrustConfig; conflict: boolean }> {
 		const body = [{ type: "github", claims: { repository: claims.repository, workflow_ref: { file: claims.file } }, permissions: ["createPackage"] }];
 		const res = await this.send("trusted publisher setup", "POST", `/-/package/${escapePackageName(name)}/trust`, { otp, body });
-		if (res.status === 409) return { alreadyExists: true };
+		if (res.status === 409) return { conflict: true };
 		if (res.status < 200 || res.status >= 300) throw new NpmHttpError("trusted publisher setup", res.status, errorDetail(res.body));
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(res.body);
 		} catch {
-			return { alreadyExists: false };
+			return { conflict: false };
 		}
 		const first = Array.isArray(parsed) ? parsed[0] : parsed;
-		return { config: first && typeof first === "object" ? (first as TrustConfig) : undefined, alreadyExists: false };
+		return { config: first && typeof first === "object" ? (first as TrustConfig) : undefined, conflict: false };
+	}
+
+	/** The package's trusted-publisher configurations (`npm trust list`). May need an OTP. */
+	async listTrust(name: string, otp?: string): Promise<TrustConfig[]> {
+		const res = await this.send("trusted publisher lookup", "GET", `/-/package/${escapePackageName(name)}/trust`, otp ? { otp } : {});
+		if (res.status !== 200) throw new NpmHttpError("trusted publisher lookup", res.status, errorDetail(res.body));
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(res.body);
+		} catch {
+			throw new NpmHttpError("trusted publisher lookup", res.status, "response is not JSON");
+		}
+		return (Array.isArray(parsed) ? parsed : [parsed]).filter((c): c is TrustConfig => Boolean(c) && typeof c === "object");
 	}
 }

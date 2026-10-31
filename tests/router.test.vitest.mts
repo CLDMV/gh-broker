@@ -200,7 +200,7 @@ describe("Router.call", () => {
 				const r = new Router(cfg, secrets as any, upstream as any);
 				const out = await r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" });
 				expect(JSON.parse((out.content[0] as any).text)).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"] });
-				expect(urls).toEqual(["GET https://npm.example.test/@cldmv%2fx", "PUT https://npm.example.test/@cldmv%2fx"]);
+				expect(urls).toEqual(["GET https://npm.example.test/@cldmv%2fx?write=true", "PUT https://npm.example.test/@cldmv%2fx"]);
 				expect(fetchMock.mock.calls[1]![1].headers.authorization).toBe("Bearer token:cred:npm-token");
 			} finally {
 				vi.unstubAllGlobals();

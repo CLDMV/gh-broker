@@ -40,7 +40,7 @@ sudo node deploy/install.mjs [agent-user]
 
 ### Unattended (single non-interactive command)
 
-Pass flags plus `--non-interactive` (`-y`) to skip every prompt: `--agent-user <name>`, `--secrets-provider systemd-creds|file`, `--create-agent-user`, and supply tokens via `--secrets-file <json>` (`{ "<cred-name>": "<token>" }`), env `GH_BROKER_SECRET_<NAME>` (NAME upper-cased, non-alnum → `_`), or `--secret <cred-name>=<token>` (repeatable; it is visible in the process list and shell history, so prefer the file or env). Precedence is `--secret`, then the file, then env, then the interactive prompt; a token from any of the first three replaces a stored one. Example:
+Pass flags plus `--non-interactive` (`-y`) to skip every prompt: `--agent-user <name>`, `--secrets-provider systemd-creds|file`, `--create-agent-user`, and supply tokens via `--secrets-file <json>` (`{ "<cred-name>": "<token>" }`), env `GH_BROKER_SECRET_<NAME>` (NAME upper-cased, non-alnum → `_`), or `--secret <cred-name>=<token>` (repeatable; a name the config doesn't use is refused, so a typo can't silently do nothing; it is visible in the process list and shell history, so prefer the file or env). Precedence is `--secret`, then the file, then env, then the interactive prompt; a token from any of the first three replaces a stored one. Example:
 
 ```sh
 sudo GH_BROKER_SECRET_CLDMV_READ=… GH_BROKER_SECRET_CLDMV_WRITE=… \
@@ -88,10 +88,10 @@ Optional. It lets `npm_scaffold` create new npm packages and their trusted publi
 1. asks which scopes to allow (`--npm-scope @cldmv`, repeatable; defaults to the existing setting, else `@<first owner>`),
    and, with `--npm-org cldmv` (repeatable), also grants the token org read-write on those orgs; the choice is saved as `npm.tokenOrgs` so a later rotation creates the same kind of token,
 2. starts an npm web login and shows the login link, then **waits** until you approve it in a browser (the same flow as `npm login --auth-type=web`),
-3. asks for your npm password (hidden, used for this one request and never stored) and a one-time password, and creates a granular token: those scopes read-write, `--npm-token-days` lifetime (default 90), **no 2FA bypass**,
+3. asks for your npm password and a one-time password (both hidden; the password is used for this one request and never stored), and creates a granular token: those scopes read-write, `--npm-token-days` lifetime (default 90), **no 2FA bypass**,
 4. revokes the login session, stores the token as `npm-token` in the chosen credential backend, and adds `"npm": { "token": "cred:npm-token", "scopes": [...] }` to the config.
 
-Without 2FA bypass the token can't publish or change trust settings on its own: every npm write `npm_scaffold` makes carries its own one-time password from you (one for the publish, one for the trusted publisher). Running `--npm` again creates a fresh token and replaces the stored one (the old token stays valid until it expires or you revoke it at `https://www.npmjs.com/settings/<user>/tokens`).
+Without 2FA bypass the token can't publish or change trust settings on its own: every npm write `npm_scaffold` makes carries its own one-time password from you (one for the publish, one for the trusted publisher). Running `--npm` again creates a fresh token and replaces the stored one. The installer does not revoke the old token; it says so, and the old one stays valid until it expires or you revoke it in your npm account's Access Tokens settings.
 
 **Unattended:** the web login needs a browser, so `--non-interactive --npm` takes an existing token instead, via `--secrets-file` (`{ "npm-token": "npm_…" }`) or env `GH_BROKER_SECRET_NPM_TOKEN`.
 

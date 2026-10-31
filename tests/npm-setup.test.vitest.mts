@@ -32,14 +32,12 @@ function fakeNpm(script: { login?: Reply; polls?: Reply[]; tokens?: Reply[]; log
 	return { fetch, calls };
 }
 
-function prompts(hidden: string[], lines: string[]) {
-	return {
-		promptHidden: vi.fn(async () => hidden.shift() ?? ""),
-		promptLine: vi.fn(async () => lines.shift() ?? "")
-	};
+/** Every answer, the OTP included, is read through the hidden prompt, in call order. */
+function prompts(answers: string[]) {
+	return { promptHidden: vi.fn(async () => answers.shift() ?? "") };
 }
 
-const run = (npm: ReturnType<typeof fakeNpm>, p = prompts([PASSWORD], ["111111"]), extra: Record<string, unknown> = {}) => {
+const run = (npm: ReturnType<typeof fakeNpm>, p = prompts([PASSWORD, "111111"]), extra: Record<string, unknown> = {}) => {
 	const logs: string[] = [];
 	const done = createNpmToken({ scopes: ["@cldmv"], tokenName: "gh-broker test", fetch: npm.fetch as any, log: (m: string) => logs.push(m), ...p, ...extra });
 	return { done, logs, p };
@@ -84,16 +82,17 @@ describe("createNpmToken", () => {
 
 	it("re-prompts for the OTP when npm rejects it", async () => {
 		const npm = fakeNpm({ tokens: [{ status: 401, headers: { "www-authenticate": "OTP" } }, { status: 201, body: { token: NEW_TOKEN } }] });
-		const p = prompts([PASSWORD], ["111111", "222222"]);
+		const p = prompts([PASSWORD, "111111", "222222"]);
 		await expect(run(npm, p).done).resolves.toEqual({ token: NEW_TOKEN });
 		const creates = npm.calls.filter((c) => c.url.endsWith("/-/npm/v1/tokens"));
 		expect(creates.map((c) => c.headers["npm-otp"])).toEqual(["111111", "222222"]);
-		expect(p.promptHidden).toHaveBeenCalledTimes(1);
+		// password + first OTP + the replacement OTP: the password is not asked for again
+		expect(p.promptHidden).toHaveBeenCalledTimes(3);
 	});
 
 	it("re-prompts for the password (and a new OTP) when npm rejects it", async () => {
 		const npm = fakeNpm({ tokens: [{ status: 401, body: { error: "invalid password" } }, { status: 201, body: { token: NEW_TOKEN } }] });
-		const p = prompts([PASSWORD, "right-password"], ["111111", "222222"]);
+		const p = prompts([PASSWORD, "111111", "right-password", "222222"]);
 		await expect(run(npm, p).done).resolves.toEqual({ token: NEW_TOKEN });
 		expect(npm.calls.filter((c) => c.url.endsWith("/-/npm/v1/tokens")).map((c) => c.body.password)).toEqual([PASSWORD, "right-password"]);
 	});
@@ -101,7 +100,7 @@ describe("createNpmToken", () => {
 	it("stops after three attempts and still revokes the session", async () => {
 		const otpNo = { status: 401, headers: { "www-authenticate": "OTP" } };
 		const npm = fakeNpm({ tokens: [otpNo, otpNo, { status: 401, body: { error: "You must provide a one-time pass." } }] });
-		const { done, logs } = run(npm, prompts([PASSWORD], ["1", "2", "3"]));
+		const { done, logs } = run(npm, prompts([PASSWORD, "1", "2", "3"]));
 		await expect(done).rejects.toThrow(/npm token creation failed \(HTTP 401\)/);
 		expect(npm.calls.at(-1)!.method).toBe("DELETE");
 		expect(logs).toContain("  npm login session revoked");
@@ -155,6 +154,28 @@ describe("createNpmToken", () => {
 		expect(npm.calls.find((c) => c.url.endsWith("/tokens"))!.body).toMatchObject({ scopes: ["@cldmv"], orgs: ["cldmv"], orgs_permission: "read-write" });
 	});
 
+	it("rejects a login URL that does not parse", async () => {
+		const npm = fakeNpm({ login: { status: 200, body: { loginUrl: "not a url", doneUrl: "https://registry.npmjs.org/-/v1/done" } } });
+		await expect(run(npm).done).rejects.toThrow(/could not start/);
+	});
+
+	it("sends no npm-otp header when the code is left empty", async () => {
+		const npm = fakeNpm({});
+		await run(npm, prompts([PASSWORD, ""])).done;
+		expect(npm.calls.find((c) => c.url.endsWith("/tokens"))!.headers).not.toHaveProperty("npm-otp");
+	});
+
+	it("uses the global fetch when none is passed", async () => {
+		const npm = fakeNpm({});
+		vi.stubGlobal("fetch", npm.fetch);
+		try {
+			const logs: string[] = [];
+			await expect(createNpmToken({ scopes: ["@cldmv"], tokenName: "t", log: (m: string) => logs.push(m), ...prompts([PASSWORD, "111111"]) })).resolves.toMatchObject({ token: NEW_TOKEN });
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("uses a custom registry and token lifetime", async () => {
 		const npm = fakeNpm({ login: { status: 200, body: { loginUrl: "https://npm.example.test/login", doneUrl: "https://npm.example.test/-/v1/done?x" } } });
 		await run(npm, undefined, { registry: "https://npm.example.test/", days: 30 }).done;
@@ -169,6 +190,7 @@ describe("wantsOtp", () => {
 		expect(wantsOtp(res(401, { "www-authenticate": "OTP" }), {})).toBe(true);
 		expect(wantsOtp(res(401), { error: "You must provide a one-time pass." })).toBe(true);
 		expect(wantsOtp(res(401), { error: "bad password" })).toBe(false);
+		expect(wantsOtp(res(401), undefined)).toBe(false);
 		expect(wantsOtp(res(403, { "www-authenticate": "OTP" }), {})).toBe(false);
 	});
 });

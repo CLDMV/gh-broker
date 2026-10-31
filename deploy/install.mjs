@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T12:30:45-07:00 (1793475045)
+ *	@Last modified time: 2026-10-31T12:58:15-07:00 (1793476695)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -37,7 +37,8 @@ import {
 import { promptLine, promptHidden, confirm, choose } from "./lib/prompt.mjs";
 import { mergeConfig } from "./lib/config-merge.mjs";
 import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "./lib/secret-store.mjs";
-import { parseArgs, envSecretKey, NPM_SCOPE } from "./lib/install-args.mjs";
+import { parseArgs, NPM_SCOPE } from "./lib/install-args.mjs";
+import { credentialPlan } from "./lib/credentials.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
 import { createNpmToken } from "./lib/npm-setup.mjs";
 import { hostname } from "node:os";
@@ -266,119 +267,59 @@ async function main() {
 	// single-line prompt can't accept — it must be supplied out-of-band.
 	const appKeyName = merged.app?.privateKey?.startsWith("cred:") ? merged.app.privateKey.slice("cred:".length) : undefined;
 
-	// A token the operator EXPLICITLY supplied for this run — --secrets-file, then
-	// env GH_BROKER_SECRET_<NAME>. Its presence is what makes a re-run ROTATE an
-	// existing credential rather than keep it. Only non-empty strings count.
-	const explicitToken = (name) => {
-		const fromCli = opts.cliSecrets[name];
-		if (typeof fromCli === "string" && fromCli) return fromCli;
-		const fromImport = importTokens && importTokens[name];
-		if (typeof fromImport === "string" && fromImport) return fromImport;
-		const fromEnv = process.env[envSecretKey(name)];
-		if (typeof fromEnv === "string" && fromEnv) return fromEnv;
-		return undefined;
-	};
+	let plan;
+	try {
+		plan = credentialPlan({
+			needed,
+			optional,
+			cliSecrets: opts.cliSecrets,
+			imported: importTokens ?? {},
+			env: process.env,
+			existingFile,
+			decrypt: (name) => trySystemdCredDecrypt(name, join(credsDir, `${name}.cred`)),
+			mints: (name) => name === npmTokenName && npmMint,
+			mint: async (name) => {
+				try {
+					const out = await createNpmToken({
+						...(merged.npm.registry ? { registry: merged.npm.registry } : {}),
+						scopes: merged.npm.scopes,
+						...(merged.npm.tokenOrgs?.length ? { orgs: merged.npm.tokenOrgs } : {}),
+						tokenName: `gh-broker ${hostname()} ${new Date().toISOString().slice(0, 10)}`,
+						...(opts.npmTokenDays ? { days: opts.npmTokenDays } : {}),
+						promptHidden,
+						log
+					});
+					log(`  ${name}: created${out.expires ? ` (expires ${out.expires.slice(0, 10)})` : ""}`);
+					return out.token;
+				} catch (err) {
+					throw new Error(`npm token setup failed: ${err.message}`);
+				}
+			},
+			appKeyName,
+			nonInteractive: opts.nonInteractive,
+			promptHidden,
+			log
+		});
 
-	// Resolve a token's plaintext, only when needed. Precedence:
-	//   explicit --secret / --secrets-file / env (a new value = rotation) → plaintext
-	//   secrets file (file → creds migration, or keep) → decrypt an existing legacy .cred
-	//   (migration/keep) → prompt (interactive only). Explicit MUST beat the stored
-	//   values, or a rotation would just re-store the old one. Every source yields a
-	//   non-empty STRING.
-	const mintsNpmToken = (name) => name === npmTokenName && npmMint && explicitToken(name) === undefined;
-	const resolveToken = async (name) => {
-		if (mintsNpmToken(name)) {
-			if (opts.nonInteractive) die(`creating the npm token needs a browser login and prompts — run interactively, or supply an existing token via --secrets-file or env ${envSecretKey(name)}`);
-			try {
-				const out = await createNpmToken({
-					...(merged.npm.registry ? { registry: merged.npm.registry } : {}),
-					scopes: merged.npm.scopes,
-					...(merged.npm.tokenOrgs?.length ? { orgs: merged.npm.tokenOrgs } : {}),
-					tokenName: `gh-broker ${hostname()} ${new Date().toISOString().slice(0, 10)}`,
-					...(opts.npmTokenDays ? { days: opts.npmTokenDays } : {}),
-					promptHidden,
-					promptLine,
-					log
-				});
-				log(`  ${name}: created${out.expires ? ` (expires ${out.expires.slice(0, 10)})` : ""}`);
-				return out.token;
-			} catch (err) {
-				die(`npm token setup failed: ${err.message}`);
+		if (provider === "systemd-creds") {
+			ensureCredsDir(configDir, SVC_GROUP);
+			const stored = await plan.storeSystemd({
+				exists: (name) => existsSync(join(credsDir, `${name}.cred`)),
+				encrypt: (name, value) => systemdCredsEncrypt(name, value, join(credsDir, `${name}.cred`))
+			});
+			writeCredsDropin(stored, credsDir);
+			// Now that creds are encrypted, a plaintext secrets file from a previous
+			// `file` install must not linger — it would defeat "encrypted at rest".
+			if (existsSync(paths.secrets)) {
+				removeSecretsFile(paths.secrets);
+				log(`  removed plaintext secrets file (now using systemd-creds)`);
 			}
+		} else {
+			writeSecretsFile(paths.secrets, await plan.storeFile(), { gid: requireGid(SVC_GROUP) });
+			removeCredsDropin(); // no systemd-creds delivery under the file provider
 		}
-		const explicit = explicitToken(name);
-		if (explicit) return explicit;
-		const fromFile = existingFile[name];
-		if (typeof fromFile === "string" && fromFile) return fromFile;
-		const dec = trySystemdCredDecrypt(name, join(credsDir, `${name}.cred`));
-		if (dec) {
-			log(`  ${name}: migrated from systemd-creds`);
-			return dec;
-		}
-		// An optional credential (one whose tools are simply hidden without it) is never a
-		// reason to fail the install: an unattended run skips it, an interactive one may.
-		if (optional.has(name)) {
-			if (opts.nonInteractive) return undefined;
-			return (await promptHidden(`  ${name} (input hidden; Enter to skip — its tools stay hidden): `)) || undefined;
-		}
-		if (opts.nonInteractive) die(`missing credential "${name}" — provide via --secrets-file or env ${envSecretKey(name)}`);
-		if (name === appKeyName) {
-			die(`credential "${name}" is a GitHub App private key (multi-line PEM); the single-line prompt can't accept it — supply it via --secrets-file or env ${envSecretKey(name)}`);
-		}
-		const entered = await promptHidden(`  ${name} (input hidden): `);
-		if (!entered) die(`empty value for "${name}"`);
-		return entered;
-	};
-	const skipped = (name) => log(`  ${name}: not stored — its tools stay hidden until it is (re-run the installer to add it)`);
-
-	if (provider === "systemd-creds") {
-		ensureCredsDir(configDir, SVC_GROUP);
-		const stored = [];
-		for (const name of needed) {
-			const credFile = join(credsDir, `${name}.cred`);
-			const existed = existsSync(credFile);
-			// Re-encrypt (rotate) only when the operator supplies a new value — a
-			// plaintext entry (file → creds migration) or an explicit --secrets-file/env
-			// token. On a plain re-run with no new value, keep the existing cred as-is.
-			const rotate = Boolean(existingFile[name]) || explicitToken(name) !== undefined || mintsNpmToken(name);
-			if (existed && !rotate) {
-				log(`  ${name}: existing systemd-creds kept`);
-				stored.push(name);
-				continue;
-			}
-			const token = await resolveToken(name);
-			if (token === undefined) {
-				// Keep an existing cred rather than drop it when a rotation is skipped.
-				if (existed) stored.push(name);
-				skipped(name);
-				continue;
-			}
-			systemdCredsEncrypt(name, token, credFile);
-			stored.push(name);
-			log(`  ${name}: ${existed ? "rotated" : "encrypted"} (systemd-creds)`);
-		}
-		// Only credentials that exist: a LoadCredentialEncrypted= line for a missing file
-		// would stop the unit from starting at all.
-		writeCredsDropin(stored, credsDir);
-		// Now that creds are encrypted, a plaintext secrets file from a previous
-		// `file` install must not linger — it would defeat "encrypted at rest".
-		if (existsSync(paths.secrets)) {
-			removeSecretsFile(paths.secrets);
-			log(`  removed plaintext secrets file (now using systemd-creds)`);
-		}
-	} else {
-		const tokens = { ...existingFile };
-		for (const name of needed) {
-			// Same rule as systemd-creds: an explicitly supplied token (--secret, --secrets-file,
-			// env) rotates the stored one; otherwise the stored one is kept.
-			if (!tokens[name] || mintsNpmToken(name) || explicitToken(name) !== undefined) {
-				const token = await resolveToken(name);
-				if (token !== undefined) tokens[name] = token;
-				else if (!tokens[name]) skipped(name);
-			}
-		}
-		writeSecretsFile(paths.secrets, tokens, { gid: requireGid(SVC_GROUP) });
-		removeCredsDropin(); // no systemd-creds delivery under the file provider
+	} catch (err) {
+		die(err.message);
 	}
 	writeConfigFile(paths.config, merged, SVC_GROUP);
 

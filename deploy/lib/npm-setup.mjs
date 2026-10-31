@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:23:22-07:00 (1793471002)
+ *	@Last modified time: 2026-10-31T12:58:17-07:00 (1793476697)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -72,7 +72,6 @@ export function wantsOtp(res, body) {
  * @param {string} o.tokenName                 shown in the npm token list
  * @param {number} [o.days]                    token lifetime
  * @param {(q: string) => Promise<string>} o.promptHidden
- * @param {(q: string) => Promise<string>} o.promptLine
  * @param {(m: string) => void} o.log
  * @param {typeof fetch} [o.fetch]
  * @param {number} [o.pollTimeoutMs]           how long to wait for the browser approval
@@ -127,7 +126,7 @@ async function webLogin(registry, doFetch, o) {
 
 async function createToken(registry, doFetch, session, o) {
 	let password = await o.promptHidden("  npm account password (input hidden, used once, not stored): ");
-	let otp = await o.promptLine("  npm one-time password: ");
+	let otp = await o.promptHidden("  npm one-time password (input hidden): ");
 	const request = {
 		name: o.tokenName,
 		scopes: o.scopes,
@@ -154,10 +153,10 @@ async function createToken(registry, doFetch, session, o) {
 		}
 		if (attempt >= MAX_ATTEMPTS) throw new Error(`npm token creation failed (HTTP ${res.status})${detail(body)}`);
 		if (wantsOtp(res, body)) {
-			otp = await o.promptLine("  npm rejected the one-time password (expired?). New one-time password: ");
+			otp = await o.promptHidden("  npm rejected the one-time password (expired?). New one-time password (input hidden): ");
 		} else if (res.status === 401 || res.status === 403) {
 			password = await o.promptHidden("  npm rejected the password. npm account password (input hidden): ");
-			otp = await o.promptLine("  npm one-time password: ");
+			otp = await o.promptHidden("  npm one-time password (input hidden): ");
 		} else {
 			throw new Error(`npm token creation failed (HTTP ${res.status})${detail(body)}`);
 		}

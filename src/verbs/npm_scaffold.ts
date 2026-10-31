@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:23:24-07:00 (1793471004)
+ *	@Last modified time: 2026-10-31T12:58:19-07:00 (1793476699)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -157,8 +157,12 @@ async function checkRepo(octokit: Octokit, args: Required<NpmScaffoldInput>): Pr
 		if (statusOf(err) === 404) fail(`repository ${args.owner}/${args.repo} not found`);
 		throw err;
 	}
-	if (info.archived) fail(`repository ${info.full_name} is archived`);
-	const repository = info.full_name ?? `${args.owner}/${args.repo}`;
+	const asked = `${args.owner}/${args.repo}`;
+	const repository = info.full_name ?? asked;
+	// GitHub answers a renamed or transferred repo with a redirect, which the client follows.
+	// The trusted publisher must name the repo that was routed and checked, so refuse that.
+	if (repository.toLowerCase() !== asked.toLowerCase()) fail(`${asked} redirects to ${repository} (renamed or transferred) — call with the repository's current owner and name`);
+	if (info.archived) fail(`repository ${repository} is archived`);
 	const ref = info.default_branch ?? "HEAD";
 	const raw = await repoFile(octokit, args.owner, args.repo, "package.json", ref);
 	if (raw === undefined) fail(`${repository} has no package.json on ${ref}`);
@@ -258,8 +262,14 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 
 	// The package exists: carry on only if it is this verb's own placeholder (a resumed call).
 	const versions = Object.keys(existing.versions ?? {});
-	const ours = versions.length === 1 && versions[0] === PLACEHOLDER_VERSION && existing.versions?.[PLACEHOLDER_VERSION]?.scaffoldedBy === SCAFFOLD_MARKER;
+	const placeholder = existing.versions?.[PLACEHOLDER_VERSION];
+	const ours = versions.length === 1 && versions[0] === PLACEHOLDER_VERSION && placeholder?.scaffoldedBy === SCAFFOLD_MARKER;
 	if (!ours) fail(`${args.package} already exists on the registry (${versions.length} version(s)) and was not created by npm_scaffold — set up its trusted publisher on npmjs.com instead`);
+	// The placeholder records the repo it was made for; the trusted publisher may only go there.
+	const madeFor = (placeholder?.repository as { url?: unknown } | undefined)?.url;
+	if (typeof madeFor !== "string" || madeFor.toLowerCase() !== `git+https://github.com/${facts.repository}.git`.toLowerCase()) {
+		fail(`${args.package}'s placeholder was published for ${typeof madeFor === "string" ? madeFor : "an unrecorded repository"}, not ${facts.repository}`);
+	}
 
 	let out: Awaited<ReturnType<NpmRegistry["addGithubTrust"]>>;
 	try {
@@ -278,12 +288,37 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 		throw err;
 	}
 
+	let alreadyThere = false;
+	if (out.conflict) {
+		// npm already has a trusted publisher for this package. Only call it done if it is the
+		// one asked for. The code was spent on the POST, so the list may need another one.
+		const access = `https://www.npmjs.com/package/${args.package}/access`;
+		let configs: Awaited<ReturnType<NpmRegistry["listTrust"]>>;
+		try {
+			configs = await deps.registry.listTrust(args.package);
+		} catch (err) {
+			if (err instanceof NpmOtpRequired) fail(`${args.package} already has a trusted publisher, and npm needs another one-time password to show which; check it at ${access}`);
+			throw err;
+		}
+		const claimsOf = (c: Record<string, unknown>) => (c.claims ?? {}) as { repository?: unknown; workflow_ref?: { file?: unknown } };
+		const matches = configs.find((c) => {
+			const cl = claimsOf(c);
+			return c.type === "github" && typeof cl.repository === "string" && cl.repository.toLowerCase() === facts.repository.toLowerCase() && cl.workflow_ref?.file === args.workflow;
+		});
+		if (!matches) {
+			const existingList = configs.map((c) => `${String(c.type)} ${String(claimsOf(c).repository)} (${String(claimsOf(c).workflow_ref?.file)})`).join("; ") || "unreadable";
+			fail(`${args.package} already has a different trusted publisher: ${existingList}. Change it at ${access}`);
+		}
+		alreadyThere = true;
+		out = { config: matches, conflict: true };
+	}
+
 	const trustId = typeof out.config?.id === "string" ? out.config.id : undefined;
 	return {
 		...base,
 		status: "done",
-		done: out.alreadyExists ? [] : ["trust"],
-		skipped: out.alreadyExists ? ["publish", "trust"] : ["publish"],
+		done: alreadyThere ? [] : ["trust"],
+		skipped: alreadyThere ? ["publish", "trust"] : ["publish"],
 		...(trustId ? { trustId } : {}),
 		message: `${args.package} exists with a trusted publisher for ${facts.repository} (.github/workflows/${args.workflow}); its next release can publish through OIDC.`
 	};
