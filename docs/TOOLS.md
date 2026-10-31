@@ -397,7 +397,7 @@ Resolve/unresolve, or reply inside, a pull-request review thread (e.g. addressin
 
 ## `ghcr_push`
 
-Push a container image to `ghcr.io/<owner>/<image>:<tag>` from a `docker save` archive, without the agent ever holding a registry credential. Write, `mode: "write"`, `custom: true`. It runs on the owner's **GHCR credential** from `config.ghcr` (a classic PAT with `write:packages`), not on the owner's GitHub PATs: GHCR does not accept fine-grained PATs.
+Push a container image to `ghcr.io/<owner>/<image>:<tag>` from a `docker save` archive, without the agent ever holding a registry credential. Write, `mode: "write"`, `custom: true`. It runs on the owner's **GHCR credential** from `config.ghcr` (a classic PAT with `write:packages`), not on the owner's GitHub PATs: GHCR does not accept fine-grained PATs. The three `ghcr_*` tools are only exposed when `config.ghcr` is present and at least one of its owners' credentials is stored; otherwise they are left out of the tool list, refused like an unlisted tool, and startup logs why.
 
 ```sh
 # as the agent
@@ -411,7 +411,7 @@ chmod g+r /srv/gh-broker/ghcr-drop/hoot-1.4.0.tar
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
-| `owner` | string | — (required) | Must be configured in both `config.owners` (routing) and `config.ghcr.owners` (registry credential + allowlist). |
+| `owner` | string | — (required) | Must be configured in `config.ghcr.owners` (registry credential + allowlist), with its credential stored. No `config.owners` entry or GitHub PAT is needed. |
 | `image` | string | — (required) | The name under `ghcr.io/<owner>/`, e.g. `hoot`. Lowercase OCI path syntax. Must match one of `config.ghcr.owners.<owner>.images`. |
 | `tag` | string | — (required) | OCI tag grammar: `[A-Za-z0-9_][A-Za-z0-9._-]{0,127}`. |
 | `archive` | string | — (required) | Path to the archive inside `config.ghcr.dropDir`, absolute or relative to it. |
@@ -516,7 +516,7 @@ List the tags of an allowlisted image, e.g. to check a push landed. Read, `mode:
 | `protectReleaseTags` | `true` | Refuse to overwrite an existing tag matching `^v?\d+\.\d+\.\d+$`. |
 | `maxArchiveBytes` | 16 GiB | Largest archive accepted. |
 | `owners.<o>.username` | — (required) | GitHub login the classic PAT belongs to; sent as the Basic-auth user in the token exchange. |
-| `owners.<o>.credential` | — (required) | `cred:<name>` ref to a classic PAT with `write:packages` only. |
+| `owners.<o>.credential` | — (required) | `cred:<name>` ref to a classic PAT with `write:packages` only. The credential itself is optional: while no owner's credential is stored the `ghcr_*` tools are not exposed, and a call for an owner whose credential is missing is refused. |
 | `owners.<o>.images` | — (required) | Allowlist of image names under `ghcr.io/<o>/`. `*` matches `[a-z0-9._-]*` within one segment. |
 
 Unknown keys anywhere in the block are refused. Like `tools`, the block is shipped policy: the installer's config merge always takes it from `config.example.json`, so a tightening in the repo can't be outvoted by a stale deployed copy.

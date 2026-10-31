@@ -463,7 +463,7 @@ describe("Router.call — GHCR verbs", () => {
 	let secrets: { resolve: ReturnType<typeof vi.fn> };
 	beforeEach(() => {
 		vi.spyOn(console, "log").mockImplementation(() => {});
-		secrets = { resolve: vi.fn((ref: string) => `token:${ref}`) };
+		secrets = { resolve: vi.fn((ref: string) => `token:${ref}`), has: vi.fn(() => true) };
 	});
 	afterEach(() => vi.restoreAllMocks());
 
@@ -481,6 +481,20 @@ describe("Router.call — GHCR verbs", () => {
 
 	it("refuses GHCR verbs when config.ghcr is absent", async () => {
 		const r = new Router(makeConfig({ tools }), secrets as any, { forward: vi.fn() } as any);
-		await expect(r.call("ghcr_push", { owner: "cldmv", image: "hoot", tag: "t", archive: "a" })).rejects.toThrow(/GHCR is not configured/);
+		await expect(r.call("ghcr_push", { owner: "cldmv", image: "hoot", tag: "t", archive: "a" })).rejects.toThrow(/tool "ghcr_push" is not available on this broker: GHCR pushes are not configured/);
+	});
+
+	it("refuses an owner whose GHCR credential is not stored, while another owner's is", async () => {
+		const ghcr = {
+			dropDir: "/srv/x/drop",
+			protectReleaseTags: true,
+			maxArchiveBytes: 1,
+			owners: { cldmv: { username: "u", credential: "cred:cldmv-packages", images: ["hoot"] }, other: { username: "o", credential: "cred:other-packages", images: ["x"] } }
+		};
+		secrets.has.mockImplementation((ref: string) => ref === "cred:other-packages");
+		const r = new Router(makeConfig({ tools, ghcr }), secrets as any, { forward: vi.fn() } as any);
+		await expect(r.call("ghcr_push_status", { owner: "cldmv" })).rejects.toThrow(/owner "cldmv"'s GHCR credential "cldmv-packages" is not stored/);
+		await expect(r.call("ghcr_push_status", { owner: "other" })).resolves.toMatchObject({ content: [{ type: "text" }] });
+		expect(secrets.resolve).not.toHaveBeenCalledWith("cred:cldmv-packages");
 	});
 });

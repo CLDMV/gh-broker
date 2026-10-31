@@ -53,7 +53,7 @@ async function service(opts: FakeRegistryOptions = {}, cfg: Record<string, unkno
 		owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot", "hoot-worker-*"] }, other: { username: "o", credential: "cred:other", images: ["x"] } },
 		...cfg
 	};
-	const secrets = { resolve: vi.fn((ref: string) => (ref === "cred:cldmv-packages" ? PAT : "ghp_otherPat000000000000000000000000")) };
+	const secrets = { resolve: vi.fn((ref: string) => (ref === "cred:cldmv-packages" ? PAT : "ghp_otherPat000000000000000000000000")), has: vi.fn(() => true) };
 	return { svc: new GhcrService(ghcr, secrets, { base, ...(queue ? { queue } : {}) }), secrets };
 }
 

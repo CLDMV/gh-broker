@@ -62,6 +62,7 @@ describe("optionalCredNames", () => {
 		expect(optionalCredNames(cfg)).toEqual(["npm-token"]);
 		expect(optionalCredNames({ owners: cfg.owners })).toEqual([]);
 		expect(optionalCredNames({ npm: { token: "npm_inline" } })).toEqual([]);
+		expect(optionalCredNames({ ...cfg, ghcr: { owners: { cldmv: { credential: "cred:cldmv-packages" }, x: { credential: "inline" } } } })).toEqual(["npm-token", "cldmv-packages"]);
 	});
 
 	it("rejects an unsafe cred name", () => {

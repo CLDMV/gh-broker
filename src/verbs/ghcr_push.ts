@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:13:30-07:00 (1793470410)
+ *	@Last modified time: 2026-10-31T13:14:41-07:00 (1793477681)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -102,6 +102,7 @@ export class GhcrService {
 	private ownerConfig(verb: string, owner: string): GhcrOwnerConfig {
 		const o = this.config(verb).owners[owner.toLowerCase()];
 		if (!o) throw new Error(`${verb}: owner "${owner}" has no GHCR configuration (config.ghcr.owners)`);
+		if (!this.secrets.has(o.credential)) throw new Error(`${verb}: owner "${owner}"'s GHCR credential "${o.credential.replace(/^cred:/, "")}" is not stored (re-run the installer to add it)`);
 		return o;
 	}
 
