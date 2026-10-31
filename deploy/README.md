@@ -86,6 +86,7 @@ Optional. It lets `npm_scaffold` create new npm packages and their trusted publi
 **Enable or rotate:** re-run the installer with `--npm` (a first interactive install also offers it). The installer then:
 
 1. asks which scopes to allow (`--npm-scope @cldmv`, repeatable; defaults to the existing setting, else `@<first owner>`),
+   and, with `--npm-org cldmv` (repeatable), also grants the token org read-write on those orgs; the choice is saved as `npm.tokenOrgs` so a later rotation creates the same kind of token,
 2. starts an npm web login and shows the login link, then **waits** until you approve it in a browser (the same flow as `npm login --auth-type=web`),
 3. asks for your npm password (hidden, used for this one request and never stored) and a one-time password, and creates a granular token: those scopes read-write, `--npm-token-days` lifetime (default 90), **no 2FA bypass**,
 4. revokes the login session, stores the token as `npm-token` in the chosen credential backend, and adds `"npm": { "token": "cred:npm-token", "scopes": [...] }` to the config.

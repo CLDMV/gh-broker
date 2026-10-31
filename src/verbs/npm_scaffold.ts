@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:18:58-07:00 (1793470738)
+ *	@Last modified time: 2026-10-31T11:23:24-07:00 (1793471004)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -236,19 +236,12 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 	} as const;
 
 	const existing = await deps.registry.packument(args.package);
-	const done: NpmScaffoldStep[] = [];
-	const skipped: NpmScaffoldStep[] = [];
-	if (existing) {
-		const versions = Object.keys(existing.versions ?? {});
-		const ours = versions.length === 1 && versions[0] === PLACEHOLDER_VERSION && existing.versions?.[PLACEHOLDER_VERSION]?.scaffoldedBy === SCAFFOLD_MARKER;
-		if (!ours) fail(`${args.package} already exists on the registry (${versions.length} version(s)) and was not created by npm_scaffold — set up its trusted publisher on npmjs.com instead`);
-		skipped.push("publish");
-	} else {
+	if (!existing) {
 		try {
 			await deps.registry.publish(placeholderDocument(args.package, facts, access, deps.registry.registry), args.package, args.otp);
 		} catch (err) {
 			if (err instanceof NpmOtpRequired) {
-				return { ...base, status: "needs_otp", done, remaining: ["publish", "trust"], message: "npm refused the one-time password before publishing; nothing was written. Call again with a fresh code." };
+				return { ...base, status: "needs_otp", done: [], remaining: ["publish", "trust"], message: "npm refused the one-time password before publishing; nothing was written. Call again with a fresh code." };
 			}
 			throw err;
 		}
@@ -263,33 +256,34 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 		};
 	}
 
-	let trustId: string | undefined;
-	let trustExisted = false;
+	// The package exists: carry on only if it is this verb's own placeholder (a resumed call).
+	const versions = Object.keys(existing.versions ?? {});
+	const ours = versions.length === 1 && versions[0] === PLACEHOLDER_VERSION && existing.versions?.[PLACEHOLDER_VERSION]?.scaffoldedBy === SCAFFOLD_MARKER;
+	if (!ours) fail(`${args.package} already exists on the registry (${versions.length} version(s)) and was not created by npm_scaffold — set up its trusted publisher on npmjs.com instead`);
+
+	let out: Awaited<ReturnType<NpmRegistry["addGithubTrust"]>>;
 	try {
-		const out = await deps.registry.addGithubTrust(args.package, { repository: facts.repository, file: args.workflow }, args.otp);
-		trustExisted = out.alreadyExists;
-		if (typeof out.config?.id === "string") trustId = out.config.id;
-		if (trustExisted) skipped.push("trust");
-		else done.push("trust");
+		out = await deps.registry.addGithubTrust(args.package, { repository: facts.repository, file: args.workflow }, args.otp);
 	} catch (err) {
 		if (err instanceof NpmOtpRequired) {
 			return {
 				...base,
 				status: "needs_otp",
-				done,
+				done: [],
 				remaining: ["trust"],
-				...(skipped.length ? { skipped } : {}),
+				skipped: ["publish"],
 				message: "The placeholder is published, but npm refused the one-time password for the trusted publisher (expired or already used). Call again with a new code to finish."
 			};
 		}
 		throw err;
 	}
 
+	const trustId = typeof out.config?.id === "string" ? out.config.id : undefined;
 	return {
 		...base,
 		status: "done",
-		done,
-		...(skipped.length ? { skipped } : {}),
+		done: out.alreadyExists ? [] : ["trust"],
+		skipped: out.alreadyExists ? ["publish", "trust"] : ["publish"],
 		...(trustId ? { trustId } : {}),
 		message: `${args.package} exists with a trusted publisher for ${facts.repository} (.github/workflows/${args.workflow}); its next release can publish through OIDC.`
 	};

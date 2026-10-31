@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:04:30-07:00 (1793469870)
+ *	@Last modified time: 2026-10-31T11:23:22-07:00 (1793471002)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -126,7 +126,15 @@ export function loadConfig(path: string): Config {
 		if (n.registry !== undefined && (typeof n.registry !== "string" || !/^https:\/\//.test(n.registry))) {
 			throw new Error("config.npm.registry: must be an https URL");
 		}
-		npm = { token: n.token, scopes, ...(typeof n.registry === "string" ? { registry: n.registry } : {}) };
+		if (n.tokenOrgs !== undefined && (!Array.isArray(n.tokenOrgs) || !n.tokenOrgs.every((o) => typeof o === "string" && /^[a-z0-9][a-z0-9._~-]*$/.test(o)))) {
+			throw new Error('config.npm.tokenOrgs: must be an array of lowercase npm org names, e.g. ["cldmv"]');
+		}
+		npm = {
+			token: n.token,
+			scopes,
+			...(typeof n.registry === "string" ? { registry: n.registry } : {}),
+			...(Array.isArray(n.tokenOrgs) ? { tokenOrgs: n.tokenOrgs as string[] } : {})
+		};
 	}
 
 	return {

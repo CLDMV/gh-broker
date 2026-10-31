@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:04:29-07:00 (1793469869)
+ *	@Last modified time: 2026-10-31T11:23:21-07:00 (1793471001)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -78,6 +78,8 @@ Flags:
                           token: walks through an npm web login and creates the token
   --npm-scope <@scope>    scope npm_scaffold may create packages in (repeatable;
                           default: the existing setting, else @<first owner>)
+  --npm-org <org>         also grant the new npm token org read-write on <org>
+                          (repeatable; default: the existing setting, else none)
   --npm-token-days <n>    lifetime of a newly created npm token (default 90)
   -y, --non-interactive   never prompt; fail if a value/decision is missing
   -h, --help              this help
@@ -90,7 +92,7 @@ Example (unattended):
     --secrets-provider systemd-creds --non-interactive`;
 
 function parseArgs(argv) {
-	const o = { positional: [], nonInteractive: false, createAgentUser: false, npm: false, npmScopes: [] };
+	const o = { positional: [], nonInteractive: false, createAgentUser: false, npm: false, npmScopes: [], npmOrgs: [] };
 	// Consume the value after a value-taking flag, failing if it's missing or is
 	// itself a flag — so `--agent-user --secrets-provider file` can't silently take
 	// "--secrets-provider" as the username and proceed with an unintended user.
@@ -109,6 +111,7 @@ function parseArgs(argv) {
 		else if (a === "--secrets-file") o.secretsFile = value(++i, a);
 		else if (a === "--npm") o.npm = true;
 		else if (a === "--npm-scope") o.npmScopes.push(value(++i, a));
+		else if (a === "--npm-org") o.npmOrgs.push(value(++i, a));
 		else if (a === "--npm-token-days") o.npmTokenDays = value(++i, a);
 		else if (a.startsWith("-")) die(`unknown flag: ${a} (see --help)`);
 		else o.positional.push(a);
@@ -117,6 +120,7 @@ function parseArgs(argv) {
 }
 
 const NPM_SCOPE = /^@[a-z0-9][a-z0-9._~-]*$/;
+const NPM_ORG = /^[a-z0-9][a-z0-9._~-]*$/;
 const NPM_TOKEN_REF = "cred:npm-token";
 
 const envSecretKey = (name) => "GH_BROKER_SECRET_" + name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -131,6 +135,7 @@ async function main() {
 		die(`--secrets-provider must be "systemd-creds" or "file"`);
 	}
 	for (const s of opts.npmScopes) if (!NPM_SCOPE.test(s)) die(`--npm-scope must be a lowercase npm scope like "@cldmv", got "${s}"`);
+	for (const org of opts.npmOrgs) if (!NPM_ORG.test(org)) die(`--npm-org must be a lowercase npm org name like "cldmv", got "${org}"`);
 	if (opts.npmTokenDays !== undefined && !/^[1-9][0-9]{0,2}$/.test(opts.npmTokenDays)) die("--npm-token-days must be a whole number of days");
 	const importTokens = opts.secretsFile ? readJson(opts.secretsFile) : {};
 	// Must be a plain JSON object of { "<name>": "<token>" } — an array parses as an
@@ -232,9 +237,12 @@ async function main() {
 			scopes = answer.split(",").map((s) => s.trim()).filter(Boolean);
 		}
 		for (const s of scopes) if (!NPM_SCOPE.test(s)) die(`npm scope must be a lowercase npm scope like "@cldmv", got "${s}"`);
+		const tokenOrgs = opts.npmOrgs.length ? opts.npmOrgs : (merged.npm?.tokenOrgs ?? []);
 		merged.npm = { ...(merged.npm ?? {}), token: merged.npm?.token ?? NPM_TOKEN_REF, scopes };
+		if (tokenOrgs.length) merged.npm.tokenOrgs = tokenOrgs;
+		else delete merged.npm.tokenOrgs;
 		npmMint = true;
-		log(`  ${current?.npm ? "rotating the npm token" : "enabling"} for ${scopes.join(", ")}`);
+		log(`  ${current?.npm ? "rotating the npm token" : "enabling"} for ${scopes.join(", ")}${tokenOrgs.length ? ` (plus org read-write on ${tokenOrgs.join(", ")})` : ""}`);
 	} else {
 		log(merged.npm ? `  enabled for ${merged.npm.scopes.join(", ")} (rotate the token with --npm)` : "  not enabled (enable with --npm)");
 	}
@@ -305,6 +313,7 @@ async function main() {
 				const out = await createNpmToken({
 					...(merged.npm.registry ? { registry: merged.npm.registry } : {}),
 					scopes: merged.npm.scopes,
+					...(merged.npm.tokenOrgs?.length ? { orgs: merged.npm.tokenOrgs } : {}),
 					tokenName: `gh-broker ${hostname()} ${new Date().toISOString().slice(0, 10)}`,
 					...(opts.npmTokenDays ? { days: Number(opts.npmTokenDays) } : {}),
 					promptHidden,

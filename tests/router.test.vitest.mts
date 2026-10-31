@@ -167,6 +167,31 @@ describe("Router.call", () => {
 			expect(secrets.resolve).toHaveBeenCalledWith("cred:npm-token");
 		});
 
+		it("npm_scaffold publishes through the configured registry and returns the verb's result", async () => {
+			const b64 = (x: string) => Buffer.from(x).toString("base64");
+			requestMock.mockImplementation(async (route: string, p: any) => {
+				if (route === "GET /repos/{owner}/{repo}") return { data: { full_name: "CLDMV/x", private: false, default_branch: "master" } };
+				if (p.path === "package.json") return { data: { type: "file", encoding: "base64", content: b64('{"name":"@cldmv/x"}') } };
+				return { data: { type: "file", encoding: "base64", content: b64("name: publish") } };
+			});
+			const urls: string[] = [];
+			const fetchMock = vi.fn(async (url: string, init: any) => {
+				urls.push(`${init.method} ${url}`);
+				return { status: init.method === "GET" ? 404 : 200, headers: { get: () => null }, text: async () => "{}" };
+			});
+			vi.stubGlobal("fetch", fetchMock);
+			try {
+				const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://npm.example.test" } });
+				const r = new Router(cfg, secrets as any, upstream as any);
+				const out = await r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" });
+				expect(JSON.parse((out.content[0] as any).text)).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"] });
+				expect(urls).toEqual(["GET https://npm.example.test/@cldmv%2fx", "PUT https://npm.example.test/@cldmv%2fx"]);
+				expect(fetchMock.mock.calls[1]![1].headers.authorization).toBe("Bearer token:cred:npm-token");
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
 		it("throws for an allowlisted custom verb that has no implementation", async () => {
 			const cfg = makeConfig({ tools: [{ name: "weird_verb", mode: "read", custom: true }] });
 			const r = new Router(cfg, secrets as any, upstream as any);

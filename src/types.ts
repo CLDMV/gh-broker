@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:04:31-07:00 (1793469871)
+ *	@Last modified time: 2026-10-31T11:23:23-07:00 (1793471003)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -85,6 +85,8 @@ export interface NpmConfig {
 	scopes: string[];
 	/** Registry base URL. Defaults to https://registry.npmjs.org. */
 	registry?: string;
+	/** Installer only: npm orgs the token is also granted org read-write on when it is created. */
+	tokenOrgs?: string[];
 }
 
 export interface Config {

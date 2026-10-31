@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:04:30-07:00 (1793469870)
+ *	@Last modified time: 2026-10-31T11:23:22-07:00 (1793471002)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -68,6 +68,7 @@ export function wantsOtp(res, body) {
  * @param {object} o
  * @param {string} [o.registry]
  * @param {string[]} o.scopes                  e.g. ["@cldmv"]
+ * @param {string[]} [o.orgs]                  npm orgs to also grant read-write on (org permission)
  * @param {string} o.tokenName                 shown in the npm token list
  * @param {number} [o.days]                    token lifetime
  * @param {(q: string) => Promise<string>} o.promptHidden
@@ -131,6 +132,7 @@ async function createToken(registry, doFetch, session, o) {
 		name: o.tokenName,
 		scopes: o.scopes,
 		packages_and_scopes_permission: "read-write",
+		...(o.orgs?.length ? { orgs: o.orgs, orgs_permission: "read-write" } : {}),
 		expires: o.days
 	};
 	for (let attempt = 1; ; attempt++) {

@@ -80,19 +80,21 @@ function fakeRegistry(opts: RegistryOpts = {}) {
 	return { registry: new NpmRegistry({ token: TOKEN, fetch }), fetch, calls, packages, trust };
 }
 
-type RepoOpts = { private?: boolean; archived?: boolean; pkg?: unknown; pkgRaw?: string; workflow?: boolean; missing?: boolean };
+type RepoOpts = { private?: boolean; archived?: boolean; pkg?: unknown; pkgRaw?: string; workflow?: boolean; missing?: boolean; pkgIsDir?: boolean; plainEncoding?: boolean; bareRepo?: boolean };
 
 function fakeGitHub(o: RepoOpts = {}) {
 	const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
-	const file = (s: string) => ({ data: { type: "file", encoding: "base64", content: Buffer.from(s).toString("base64") } });
+	const file = (s: string) => (o.plainEncoding ? { data: { type: "file", encoding: "utf-8", content: s } } : { data: { type: "file", encoding: "base64", content: Buffer.from(s).toString("base64") } });
 	const request = vi.fn(async (route: string, p: any) => {
 		if (route === "GET /repos/{owner}/{repo}") {
 			if (o.missing) throw notFound();
+			if (o.bareRepo) return { data: { private: false } };
 			return { data: { full_name: "CLDMV/new-thing", private: o.private ?? false, archived: o.archived ?? false, default_branch: "master" } };
 		}
 		if (route === "GET /repos/{owner}/{repo}/contents/{path}") {
-			expect(p.ref).toBe("master");
+			expect(p.ref).toBe(o.bareRepo ? "HEAD" : "master");
 			if (p.path === "package.json") {
+				if (o.pkgIsDir) return { data: [{ type: "file", name: "x" }] };
 				if (o.pkg === undefined && o.pkgRaw === undefined) return file(JSON.stringify({ name: PKG, license: "Apache-2.0", description: "A new thing." }));
 				if (o.pkg === null) throw notFound();
 				return file(o.pkgRaw ?? JSON.stringify(o.pkg));
@@ -254,6 +256,30 @@ describe("npm_scaffold", () => {
 		expect(reg.fetch).not.toHaveBeenCalled();
 	});
 
+	it("treats a package.json that is not a file as missing", async () => {
+		await expect(npmScaffold(args(), deps(fakeGitHub({ pkgIsDir: true }), fakeRegistry()))).rejects.toThrow(/has no package\.json/);
+	});
+
+	it("reads repo files that are not base64-encoded", async () => {
+		const out = await npmScaffold(args(), deps(fakeGitHub({ plainEncoding: true }), fakeRegistry()));
+		expect(out).toMatchObject({ status: "needs_otp", done: ["publish"] });
+	});
+
+	it("falls back to owner/repo and HEAD when GitHub omits full_name and default_branch, and to no license or description", async () => {
+		const reg = fakeRegistry();
+		const gh = fakeGitHub({ bareRepo: true, pkg: { name: PKG } });
+		const out = await npmScaffold(args(), deps(gh, reg));
+		expect(out.repository).toBe("cldmv/new-thing");
+		const v = reg.calls.find((c) => c.method === "PUT")!.body.versions[PLACEHOLDER_VERSION];
+		expect(v.license).toBe("UNLICENSED");
+		expect(v.readme).not.toContain("undefined");
+	});
+
+	it("refuses an existing package document that lists no versions", async () => {
+		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG } } });
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/\(0 version\(s\)\) and was not created by npm_scaffold/);
+	});
+
 	it("honours a custom workflow file name", async () => {
 		const reg = fakeRegistry({ otps: [OTP, OTP2] });
 		await npmScaffold(args({ workflow: "release.yaml" }), deps(fakeGitHub(), reg));
@@ -344,6 +370,21 @@ describe("NpmRegistry", () => {
 	it("accepts a trust response that is not JSON", async () => {
 		const reg = new NpmRegistry({ token: TOKEN, fetch: async () => res(204, "") });
 		await expect(reg.addGithubTrust(PKG, { repository: "CLDMV/x", file: "publish.yml" }, OTP)).resolves.toEqual({ alreadyExists: false });
+	});
+
+	it("reports an HTTP error with an empty body by status alone", async () => {
+		const reg = new NpmRegistry({ token: TOKEN, fetch: async () => res(500, "") });
+		await expect(reg.packument(PKG)).rejects.toThrow(/^npm: package lookup failed \(HTTP 500\)$/);
+	});
+
+	it("takes the trust config from an object response, and none from an empty or non-object one", async () => {
+		const claims = { repository: "CLDMV/x", file: "publish.yml" };
+		const one = new NpmRegistry({ token: TOKEN, fetch: async () => res(201, '{"id":"t-9","type":"github"}') });
+		await expect(one.addGithubTrust(PKG, claims, OTP)).resolves.toEqual({ config: { id: "t-9", type: "github" }, alreadyExists: false });
+		for (const body of ["[]", '"ok"']) {
+			const reg = new NpmRegistry({ token: TOKEN, fetch: async () => res(201, body) });
+			await expect(reg.addGithubTrust(PKG, claims, OTP)).resolves.toEqual({ config: undefined, alreadyExists: false });
+		}
 	});
 
 	it("fails a trust setup the registry rejects", async () => {

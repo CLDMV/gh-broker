@@ -149,6 +149,12 @@ describe("createNpmToken", () => {
 		for (const secret of [PASSWORD, "111111", SESSION, NEW_TOKEN]) expect(all).not.toContain(secret);
 	});
 
+	it("adds org read-write only when orgs are given", async () => {
+		const npm = fakeNpm({});
+		await run(npm, undefined, { orgs: ["cldmv"] }).done;
+		expect(npm.calls.find((c) => c.url.endsWith("/tokens"))!.body).toMatchObject({ scopes: ["@cldmv"], orgs: ["cldmv"], orgs_permission: "read-write" });
+	});
+
 	it("uses a custom registry and token lifetime", async () => {
 		const npm = fakeNpm({ login: { status: 200, body: { loginUrl: "https://npm.example.test/login", doneUrl: "https://npm.example.test/-/v1/done?x" } } });
 		await run(npm, undefined, { registry: "https://npm.example.test/", days: 30 }).done;
