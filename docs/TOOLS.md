@@ -5,7 +5,7 @@ Every tool the broker advertises falls into one of three categories, set per ent
 | Category | Config flag | What happens | Example |
 |---|---|---|---|
 | **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, `issue_labels`, `resolve_review_thread`, `reply_review_thread` |
+| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread` |
 | **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
@@ -325,6 +325,61 @@ A failure before the first write (the read of the issue's labels, or a label loo
 `added` lists only labels this call asked for that were not already there; a label someone else added meanwhile shows in `labels` but not in `added`.
 
 **Calls.** One read of the issue's current labels (which also fails a wrong issue number before anything is written), one lookup per add-side label, one create per missing label with `create_missing`, at most one POST, and one DELETE per label actually on the issue. With the 100-label caps a call makes at most a few hundred requests. `swap` and `remove` work from that first read, so a matching label added by someone else in the moments between that read and the DELETEs is not removed; nothing outside the call is ever affected.
+
+---
+
+## `npm_scaffold`
+
+Create a new npm package and register its GitHub Actions trusted publisher, so the repo's own publish workflow can release it through OIDC from then on. Write, `mode: "write"`, `custom: true`. It needs the optional `npm` integration (set up by the installer, see [deploy/README.md](../deploy/README.md#npm-integration-npm_scaffold)); without it, or while its token is not stored, the broker does not expose the tool at all (it is left out of the tool list, a call is refused like an unlisted tool, and startup logs the reason).
+
+npm only accepts a trusted publisher on a package that already exists, and that first publish needs a human's 2FA. The broker holds an npm granular access token created **without** 2FA bypass, and each call carries a one-time password the user reads from their authenticator. The token alone cannot write anything; the OTP is the human's approval for that one call. Ask the user for each code right before the call that uses it, since codes expire in about 30 seconds.
+
+```json
+{ "owner": "cldmv", "repo": "new-thing", "package": "@cldmv/new-thing", "otp": "123456" }
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | A configured owner. Its **read** PAT does the GitHub reads; the verb never writes to GitHub. |
+| `repo` | string | — (required) | The repo whose `package.json` names the package. |
+| `package` | string | — (required) | Lowercase scoped name, e.g. `@cldmv/new-thing`. Must be under a scope in `config.npm.scopes`. |
+| `otp` | string | — (required) | 6–8 digit one-time password. Never logged or returned. |
+| `workflow` | string | `publish.yml` | The repo's publish workflow file in `.github/workflows`; the trusted publisher names it. |
+
+**Guardrails, checked before any npm write.**
+
+- The scope is allowed by `config.npm.scopes`.
+- The repo exists under exactly the owner and name given (a renamed or transferred repo, which GitHub answers with a redirect, is refused), isn't archived, its `package.json` on the default branch names exactly this package and is not `"private": true`, and `.github/workflows/<workflow>` exists there.
+- The package does not exist on the registry yet. A package that exists is refused unless it is this verb's own placeholder from an earlier call (a single `0.0.0-stage` version marked `scaffoldedBy: "gh-broker"`), which is how an interrupted call resumes; the placeholder's recorded repository must be the one in this call. The lookup uses `?write=true`, so it reads the registry's primary copy rather than a possibly stale cache. The verb can never publish a version of a real package.
+
+**What it writes.**
+
+1. **Placeholder publish** (`PUT /<package>`, the request `npm publish` sends). The broker builds the tarball itself, so the agent supplies no files: a `package.json` (name, `0.0.0-stage`, the repo's `license` or `UNLICENSED`, repository, homepage, the `scaffoldedBy` marker) and a README pointing at the repo. Access is `public` for a public repo and `restricted` for a private one, the rule the CI publish uses too.
+2. **Trusted publisher** (`POST /-/package/<package>/trust`, the request `npm trust github <package> --repo <owner>/<repo> --file <workflow> --allow-publish` sends). Permission `createPackage` is npm's internal name for publish.
+
+**One code per write, so two calls.** npm requires a one-time password for every write, and a code works once. The first call publishes the placeholder and returns `status: "needs_otp"` with `done: ["publish"]` and `remaining: ["trust"]`, without sending the spent code again. Ask the user for the next code (after the authenticator changes) and call again: the publish is skipped, since the placeholder now exists, and the trusted publisher is added. A refused or expired code also returns `needs_otp` with what is left, and when npm answers that the package already has a trusted publisher (HTTP 409), the verb reads the existing configuration: if it is this repo and workflow the call is done, otherwise it fails naming what is configured (and if npm wants another code just to show it, it says so and points at the package's access page).
+
+**Result.**
+
+```json
+{
+	"status": "done",
+	"package": "@cldmv/new-thing",
+	"repository": "CLDMV/new-thing",
+	"workflow": "publish.yml",
+	"access": "public",
+	"done": ["trust"],
+	"skipped": ["publish"],
+	"version": "0.0.0-stage",
+	"url": "https://www.npmjs.com/package/@cldmv/new-thing",
+	"trustId": "…",
+	"message": "@cldmv/new-thing exists with a trusted publisher for CLDMV/new-thing (.github/workflows/publish.yml); its next release can publish through OIDC."
+}
+```
+
+That is the second call's result; `skipped` lists the steps an earlier call already did. Any other registry or GitHub failure fails the call with npm's or GitHub's own message; neither the OTP nor the token ever appears in a result, an error or the audit log.
+
+**Calls.** GitHub: one repo read and two file reads (read PAT). npm: one package lookup, at most one publish and one trust request.
 
 ---
 

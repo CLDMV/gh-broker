@@ -70,7 +70,7 @@ describe("Router.call", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.spyOn(console, "log").mockImplementation(() => {}); // silence audit output
-		secrets = { resolve: vi.fn((ref: string) => `token:${ref}`) };
+		secrets = { resolve: vi.fn((ref: string) => `token:${ref}`), has: vi.fn(() => true) };
 		upstream = { forward: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] }) };
 	});
 
@@ -87,7 +87,12 @@ describe("Router.call", () => {
 	it("advertisedTools returns the config tools", () => {
 		const cfg = makeConfig();
 		const r = new Router(cfg, secrets as any, upstream as any);
-		expect(r.advertisedTools()).toBe(cfg.tools);
+		expect(r.advertisedTools()).toEqual(cfg.tools);
+	});
+
+	it("advertisedTools leaves out a tool whose optional integration is not set up", () => {
+		const cfg = makeConfig({ tools: [{ name: "get_me", mode: "read" }, { name: "npm_scaffold", mode: "write", custom: true }] });
+		expect(new Router(cfg, secrets as any, upstream as any).advertisedTools().map((t) => t.name)).toEqual(["get_me"]);
 	});
 
 	it("forwards a read call with the resolved read PAT", async () => {
@@ -150,6 +155,56 @@ describe("Router.call", () => {
 			const out = await r.call("resolve_review_thread", { owner: "cldmv", threadId: "PRRT_1" });
 			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-write" });
 			expect(out).toEqual({ content: [{ type: "text", text: "thread PRRT_1: isResolved=true" }] });
+		});
+
+		it("npm_scaffold is unavailable without an npm block, before any credential is read", async () => {
+			const r = new Router(makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }] }), secrets as any, upstream as any);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(
+				/tool "npm_scaffold" is not available on this broker: the npm integration is not configured/
+			);
+			expect(secrets.resolve).not.toHaveBeenCalled();
+		});
+
+		it("npm_scaffold is unavailable when its token is not stored", async () => {
+			secrets.has.mockImplementation((ref: string) => ref !== "cred:npm-token");
+			const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } });
+			const r = new Router(cfg, secrets as any, upstream as any);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(/its credential "npm-token" is not stored/);
+			expect(secrets.resolve).not.toHaveBeenCalled();
+		});
+
+		it("npm_scaffold reads GitHub on the READ PAT and resolves the npm token", async () => {
+			requestMock.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
+			const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } });
+			const r = new Router(cfg, secrets as any, upstream as any);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(/repository cldmv\/x not found/);
+			expect(Octokit).toHaveBeenLastCalledWith({ auth: "token:cred:cldmv-read" });
+			expect(secrets.resolve).toHaveBeenCalledWith("cred:npm-token");
+		});
+
+		it("npm_scaffold publishes through the configured registry and returns the verb's result", async () => {
+			const b64 = (x: string) => Buffer.from(x).toString("base64");
+			requestMock.mockImplementation(async (route: string, p: any) => {
+				if (route === "GET /repos/{owner}/{repo}") return { data: { full_name: "CLDMV/x", private: false, default_branch: "master" } };
+				if (p.path === "package.json") return { data: { type: "file", encoding: "base64", content: b64('{"name":"@cldmv/x"}') } };
+				return { data: { type: "file", encoding: "base64", content: b64("name: publish") } };
+			});
+			const urls: string[] = [];
+			const fetchMock = vi.fn(async (url: string, init: any) => {
+				urls.push(`${init.method} ${url}`);
+				return { status: init.method === "GET" ? 404 : 200, headers: { get: () => null }, text: async () => "{}" };
+			});
+			vi.stubGlobal("fetch", fetchMock);
+			try {
+				const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://npm.example.test" } });
+				const r = new Router(cfg, secrets as any, upstream as any);
+				const out = await r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" });
+				expect(JSON.parse((out.content[0] as any).text)).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"] });
+				expect(urls).toEqual(["GET https://npm.example.test/@cldmv%2fx?write=true", "PUT https://npm.example.test/@cldmv%2fx"]);
+				expect(fetchMock.mock.calls[1]![1].headers.authorization).toBe("Bearer token:cred:npm-token");
+			} finally {
+				vi.unstubAllGlobals();
+			}
 		});
 
 		it("throws for an allowlisted custom verb that has no implementation", async () => {

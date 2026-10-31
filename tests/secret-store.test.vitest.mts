@@ -9,7 +9,7 @@ vi.mock("node:fs", () => ({
 }));
 
 import { readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
-import { readSecretsFile, removeSecretsFile, referencedCredNames, detectSecretsProvider } from "../deploy/lib/secret-store.mjs";
+import { readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "../deploy/lib/secret-store.mjs";
 
 const mockRead = vi.mocked(readFileSync);
 const mockExists = vi.mocked(existsSync);
@@ -56,6 +56,19 @@ describe("removeSecretsFile", () => {
 	});
 });
 
+describe("optionalCredNames", () => {
+	it("lists the npm token and nothing required", () => {
+		const cfg = { owners: { o: { read: "cred:a", write: "cred:b" } }, app: { privateKey: "cred:k" }, npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
+		expect(optionalCredNames(cfg)).toEqual(["npm-token"]);
+		expect(optionalCredNames({ owners: cfg.owners })).toEqual([]);
+		expect(optionalCredNames({ npm: { token: "npm_inline" } })).toEqual([]);
+	});
+
+	it("rejects an unsafe cred name", () => {
+		expect(() => optionalCredNames({ npm: { token: "cred:../x" } })).toThrow(/unsafe credential name/);
+	});
+});
+
 describe("referencedCredNames", () => {
 	it("collects distinct cred names from owners + app, ignoring non-cred refs", () => {
 		const cfg = {
@@ -63,6 +76,11 @@ describe("referencedCredNames", () => {
 			app: { privateKey: "cred:k" }
 		};
 		expect(referencedCredNames(cfg).sort()).toEqual(["a", "b", "c", "k"]);
+	});
+
+	it("includes the npm token ref", () => {
+		const cfg = { owners: { o: { read: "cred:a", write: "cred:b" } }, npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
+		expect(referencedCredNames(cfg).sort()).toEqual(["a", "b", "npm-token"]);
 	});
 
 	it("returns [] with no owners", () => {

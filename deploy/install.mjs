@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T12:58:15-07:00 (1793476695)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -36,8 +36,12 @@ import {
 } from "./lib/system.mjs";
 import { promptLine, promptHidden, confirm, choose } from "./lib/prompt.mjs";
 import { mergeConfig } from "./lib/config-merge.mjs";
-import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, detectSecretsProvider } from "./lib/secret-store.mjs";
+import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "./lib/secret-store.mjs";
+import { parseArgs, NPM_SCOPE } from "./lib/install-args.mjs";
+import { credentialPlan } from "./lib/credentials.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
+import { createNpmToken } from "./lib/npm-setup.mjs";
+import { hostname } from "node:os";
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const SVC_USER = "gh-broker";
@@ -71,51 +75,44 @@ Flags:
                           (also positional; defaults to $SUDO_USER)
   --secrets-provider <p>  systemd-creds | file   (skips the prompt)
   --secrets-file <path>   JSON { "<cred-name>": "<token>" } to import tokens from
+  --secret <name>=<tok>   one token on the command line (repeatable). Visible in
+                          the process list and shell history: prefer the file or env
   --create-agent-user     create the agent user if missing (no confirm)
+  --npm                   set up the npm integration (npm_scaffold), or rotate its
+                          token: walks through an npm web login and creates the token
+  --npm-scope <@scope>    scope npm_scaffold may create packages in (repeatable;
+                          default: the existing setting, else @<first owner>)
+  --npm-org <org>         also grant the new npm token org read-write on <org>
+                          (repeatable; default: the existing setting, else none)
+  --npm-token-days <n>    lifetime of a newly created npm token (default 90)
   -y, --non-interactive   never prompt; fail if a value/decision is missing
   -h, --help              this help
 
-Non-interactive credentials: for each not already stored, the token is taken from
---secrets-file, then env GH_BROKER_SECRET_<NAME> (NAME upper-cased, non-alnum -> _).
+Credentials: each token comes from, in order, --secret, --secrets-file, env
+GH_BROKER_SECRET_<NAME> (NAME upper-cased, non-alnum -> _), and otherwise an
+interactive prompt (input hidden). A token supplied by any of the first three
+replaces a stored one (rotation). Optional tokens (npm-token) can be skipped.
 Example (unattended):
   sudo GH_BROKER_SECRET_CLDMV_READ=… GH_BROKER_SECRET_CLDMV_WRITE=… \\
     /usr/local/bin/node deploy/install.mjs --agent-user repo \\
     --secrets-provider systemd-creds --non-interactive`;
 
-function parseArgs(argv) {
-	const o = { positional: [], nonInteractive: false, createAgentUser: false };
-	// Consume the value after a value-taking flag, failing if it's missing or is
-	// itself a flag — so `--agent-user --secrets-provider file` can't silently take
-	// "--secrets-provider" as the username and proceed with an unintended user.
-	const value = (i, flag) => {
-		const v = argv[i];
-		if (v === undefined || v.startsWith("-")) die(`${flag} requires a value (see --help)`);
-		return v;
-	};
-	for (let i = 0; i < argv.length; i++) {
-		const a = argv[i];
-		if (a === "-h" || a === "--help") o.help = true;
-		else if (a === "-y" || a === "--non-interactive") o.nonInteractive = true;
-		else if (a === "--create-agent-user") o.createAgentUser = true;
-		else if (a === "--agent-user") o.agentUser = value(++i, a);
-		else if (a === "--secrets-provider") o.provider = value(++i, a);
-		else if (a === "--secrets-file") o.secretsFile = value(++i, a);
-		else if (a.startsWith("-")) die(`unknown flag: ${a} (see --help)`);
-		else o.positional.push(a);
+const NPM_TOKEN_REF = "cred:npm-token";
+
+/** parseArgs with installer-style failure (the parser itself throws). */
+function parseArgsOrDie(argv) {
+	try {
+		return parseArgs(argv);
+	} catch (err) {
+		die(err.message);
 	}
-	return o;
 }
 
-const envSecretKey = (name) => "GH_BROKER_SECRET_" + name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
-
 async function main() {
-	const opts = parseArgs(process.argv.slice(2));
+	const opts = parseArgsOrDie(process.argv.slice(2));
 	if (opts.help) {
 		log(HELP);
 		return;
-	}
-	if (opts.provider && opts.provider !== "systemd-creds" && opts.provider !== "file") {
-		die(`--secrets-provider must be "systemd-creds" or "file"`);
 	}
 	const importTokens = opts.secretsFile ? readJson(opts.secretsFile) : {};
 	// Must be a plain JSON object of { "<name>": "<token>" } — an array parses as an
@@ -202,9 +199,36 @@ async function main() {
 	const current = readJson(paths.config); // null on first install
 	const merged = mergeConfig(example, current);
 
+	// --- npm integration (npm_scaffold): opt-in ---
+	// Offered on a first interactive install; afterwards `--npm` enables it or, when it is
+	// already enabled, rotates the token. Either way a new token is created by driving the
+	// npm web login + token creation from here (see lib/npm-setup.mjs), unless the operator
+	// supplied one through --secrets-file/env.
+	step("npm integration");
+	let npmMint = false;
+	if (opts.npm || (!merged.npm && current === null && !opts.nonInteractive && (await confirm("Enable npm_scaffold (create new npm packages and their trusted publishers)?")))) {
+		let scopes = opts.npmScopes.length ? opts.npmScopes : merged.npm?.scopes;
+		if (!scopes?.length) {
+			const fallback = `@${Object.keys(merged.owners ?? {})[0] ?? ""}`.toLowerCase();
+			const answer = opts.nonInteractive ? fallback : (await promptLine(`  npm scope(s) to allow, comma-separated [${fallback}]: `)) || fallback;
+			scopes = answer.split(",").map((s) => s.trim()).filter(Boolean);
+		}
+		for (const s of scopes) if (!NPM_SCOPE.test(s)) die(`npm scope must be a lowercase npm scope like "@cldmv", got "${s}"`);
+		const tokenOrgs = opts.npmOrgs.length ? opts.npmOrgs : (merged.npm?.tokenOrgs ?? []);
+		merged.npm = { ...(merged.npm ?? {}), token: merged.npm?.token ?? NPM_TOKEN_REF, scopes };
+		if (tokenOrgs.length) merged.npm.tokenOrgs = tokenOrgs;
+		else delete merged.npm.tokenOrgs;
+		npmMint = true;
+		log(`  ${current?.npm ? "rotating the npm token" : "enabling"} for ${scopes.join(", ")}${tokenOrgs.length ? ` (plus org read-write on ${tokenOrgs.join(", ")})` : ""}`);
+	} else {
+		log(merged.npm ? `  enabled for ${merged.npm.scopes.join(", ")} (rotate the token with --npm)` : "  not enabled (enable with --npm)");
+	}
+	const npmTokenName = merged.npm?.token?.startsWith("cred:") ? merged.npm.token.slice("cred:".length) : undefined;
+
 	// --- secrets: operator chooses the backend, then tokens are stored in it ---
 	step("secrets");
 	const needed = referencedCredNames(merged);
+	const optional = new Set(optionalCredNames(merged));
 	const existingFile = readSecretsFile(paths.secrets); // {} if none
 	const credsDir = join(configDir, "creds"); // systemd-creds location
 	const priorProvider = merged.secrets?.provider ?? "systemd-creds";
@@ -243,71 +267,59 @@ async function main() {
 	// single-line prompt can't accept — it must be supplied out-of-band.
 	const appKeyName = merged.app?.privateKey?.startsWith("cred:") ? merged.app.privateKey.slice("cred:".length) : undefined;
 
-	// A token the operator EXPLICITLY supplied for this run — --secrets-file, then
-	// env GH_BROKER_SECRET_<NAME>. Its presence is what makes a re-run ROTATE an
-	// existing credential rather than keep it. Only non-empty strings count.
-	const explicitToken = (name) => {
-		const fromImport = importTokens && importTokens[name];
-		if (typeof fromImport === "string" && fromImport) return fromImport;
-		const fromEnv = process.env[envSecretKey(name)];
-		if (typeof fromEnv === "string" && fromEnv) return fromEnv;
-		return undefined;
-	};
+	let plan;
+	try {
+		plan = credentialPlan({
+			needed,
+			optional,
+			cliSecrets: opts.cliSecrets,
+			imported: importTokens ?? {},
+			env: process.env,
+			existingFile,
+			decrypt: (name) => trySystemdCredDecrypt(name, join(credsDir, `${name}.cred`)),
+			mints: (name) => name === npmTokenName && npmMint,
+			mint: async (name) => {
+				try {
+					const out = await createNpmToken({
+						...(merged.npm.registry ? { registry: merged.npm.registry } : {}),
+						scopes: merged.npm.scopes,
+						...(merged.npm.tokenOrgs?.length ? { orgs: merged.npm.tokenOrgs } : {}),
+						tokenName: `gh-broker ${hostname()} ${new Date().toISOString().slice(0, 10)}`,
+						...(opts.npmTokenDays ? { days: opts.npmTokenDays } : {}),
+						promptHidden,
+						log
+					});
+					log(`  ${name}: created${out.expires ? ` (expires ${out.expires.slice(0, 10)})` : ""}`);
+					return out.token;
+				} catch (err) {
+					throw new Error(`npm token setup failed: ${err.message}`);
+				}
+			},
+			appKeyName,
+			nonInteractive: opts.nonInteractive,
+			promptHidden,
+			log
+		});
 
-	// Resolve a token's plaintext, only when needed. Precedence:
-	//   plaintext secrets file (file → creds migration) → explicit --secrets-file/env
-	//   (a new value = rotation) → decrypt an existing legacy .cred (migration/keep) →
-	//   prompt (interactive only). Explicit MUST beat decrypt, or a rotation would
-	//   just re-encrypt the old decrypted value. Every source yields a non-empty STRING.
-	const resolveToken = async (name) => {
-		const fromFile = existingFile[name];
-		if (typeof fromFile === "string" && fromFile) return fromFile;
-		const explicit = explicitToken(name);
-		if (explicit) return explicit;
-		const dec = trySystemdCredDecrypt(name, join(credsDir, `${name}.cred`));
-		if (dec) {
-			log(`  ${name}: migrated from systemd-creds`);
-			return dec;
-		}
-		if (opts.nonInteractive) die(`missing credential "${name}" — provide via --secrets-file or env ${envSecretKey(name)}`);
-		if (name === appKeyName) {
-			die(`credential "${name}" is a GitHub App private key (multi-line PEM); the single-line prompt can't accept it — supply it via --secrets-file or env ${envSecretKey(name)}`);
-		}
-		const entered = await promptHidden(`  ${name} (input hidden): `);
-		if (!entered) die(`empty value for "${name}"`);
-		return entered;
-	};
-
-	if (provider === "systemd-creds") {
-		ensureCredsDir(configDir, SVC_GROUP);
-		for (const name of needed) {
-			const credFile = join(credsDir, `${name}.cred`);
-			const existed = existsSync(credFile);
-			// Re-encrypt (rotate) only when the operator supplies a new value — a
-			// plaintext entry (file → creds migration) or an explicit --secrets-file/env
-			// token. On a plain re-run with no new value, keep the existing cred as-is.
-			const rotate = Boolean(existingFile[name]) || explicitToken(name) !== undefined;
-			if (existed && !rotate) {
-				log(`  ${name}: existing systemd-creds kept`);
-				continue;
+		if (provider === "systemd-creds") {
+			ensureCredsDir(configDir, SVC_GROUP);
+			const stored = await plan.storeSystemd({
+				exists: (name) => existsSync(join(credsDir, `${name}.cred`)),
+				encrypt: (name, value) => systemdCredsEncrypt(name, value, join(credsDir, `${name}.cred`))
+			});
+			writeCredsDropin(stored, credsDir);
+			// Now that creds are encrypted, a plaintext secrets file from a previous
+			// `file` install must not linger — it would defeat "encrypted at rest".
+			if (existsSync(paths.secrets)) {
+				removeSecretsFile(paths.secrets);
+				log(`  removed plaintext secrets file (now using systemd-creds)`);
 			}
-			systemdCredsEncrypt(name, await resolveToken(name), credFile);
-			log(`  ${name}: ${existed ? "rotated" : "encrypted"} (systemd-creds)`);
+		} else {
+			writeSecretsFile(paths.secrets, await plan.storeFile(), { gid: requireGid(SVC_GROUP) });
+			removeCredsDropin(); // no systemd-creds delivery under the file provider
 		}
-		writeCredsDropin(needed, credsDir);
-		// Now that creds are encrypted, a plaintext secrets file from a previous
-		// `file` install must not linger — it would defeat "encrypted at rest".
-		if (existsSync(paths.secrets)) {
-			removeSecretsFile(paths.secrets);
-			log(`  removed plaintext secrets file (now using systemd-creds)`);
-		}
-	} else {
-		const tokens = { ...existingFile };
-		for (const name of needed) {
-			if (!tokens[name]) tokens[name] = await resolveToken(name);
-		}
-		writeSecretsFile(paths.secrets, tokens, { gid: requireGid(SVC_GROUP) });
-		removeCredsDropin(); // no systemd-creds delivery under the file provider
+	} catch (err) {
+		die(err.message);
 	}
 	writeConfigFile(paths.config, merged, SVC_GROUP);
 

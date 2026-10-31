@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -91,7 +91,21 @@ export function referencedCredNames(config) {
 		add(owner.write);
 	}
 	if (config.app) add(config.app.privateKey);
+	if (config.npm) add(config.npm.token);
 	return [...names];
+}
+
+/**
+ * The referenced cred names that are OPTIONAL: the broker hides the tools that need them
+ * when they aren't stored (src/availability.ts) instead of refusing to start, so the
+ * installer may skip them. Today: the npm token. The owners' PATs and the App key stay
+ * required.
+ */
+export function optionalCredNames(config) {
+	const names = [];
+	const ref = config.npm?.token;
+	if (typeof ref === "string" && ref.startsWith("cred:")) names.push(assertSafeCredName(ref.slice("cred:".length)));
+	return names;
 }
 
 /**

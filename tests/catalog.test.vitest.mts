@@ -11,7 +11,7 @@ describe("buildCatalog", () => {
 	let errSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(() => {
-		secrets = { resolve: vi.fn(() => "tok") };
+		secrets = { resolve: vi.fn(() => "tok"), has: vi.fn(() => true) };
 		upstream = { listToolsFor: vi.fn() };
 		errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 	});
@@ -72,6 +72,26 @@ describe("buildCatalog", () => {
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "report_release_prs" });
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
+	});
+
+	it("does not expose npm_scaffold without an npm block, or when its token is not stored", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const rules = [{ name: "npm_scaffold", mode: "write", custom: true }];
+		expect(await buildCatalog(makeConfig(rules), secrets as any, upstream as any)).toEqual([]);
+		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"npm_scaffold" is not exposed: the npm integration is not configured/));
+		secrets.has.mockReturnValue(false);
+		const noToken = { ...makeConfig(rules), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
+		expect(await buildCatalog(noToken, secrets as any, upstream as any)).toEqual([]);
+		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"npm_scaffold" is not exposed: its credential "npm-token" is not stored/));
+	});
+
+	it("advertises npm_scaffold with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const catalog = await buildCatalog({ ...makeConfig([{ name: "npm_scaffold", mode: "write", custom: true }]), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } }, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "npm_scaffold" });
+		expect(catalog[0]?.description).toMatch(/one-time password/);
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo", "package", "otp"] });
 	});
 
 	it("advertises issue_labels with its local schema", async () => {

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-16T17:17:02-07:00 (1792196222)
+ *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -24,6 +24,8 @@ import { REPORT_SECURITY_ALERTS_SCHEMA } from "./verbs/report_security_alerts.ts
 import { REPORT_RELEASE_PRS_SCHEMA } from "./verbs/report_release_prs.ts";
 import { ISSUE_LABELS_SCHEMA } from "./verbs/issue_labels.ts";
 import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
+import { NPM_SCAFFOLD_SCHEMA } from "./verbs/npm_scaffold.ts";
+import { unavailableReason } from "./availability.ts";
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
@@ -62,6 +64,11 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 
 	const tools: Tool[] = [];
 	for (const rule of config.tools) {
+		const unavailable = unavailableReason(rule, config, secrets);
+		if (unavailable) {
+			console.error(`catalog: "${rule.name}" is not exposed: ${unavailable}`);
+			continue;
+		}
 		if (rule.custom) {
 			// DEFERRED: link_issue (App-token-only addClosingIssueReference) is not wired in — see docs.
 			// Intentionally not advertised even if an allowlist entry is added; re-enable by restoring
@@ -86,6 +93,13 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 					description:
 						'Edit the labels on one issue or PR without touching any other label on it. add / remove take one label or several (combinable in one call); swap { prefix, to } removes every label starting with prefix and adds to (e.g. prefix "status: ", to "status: verified"); set replaces the whole set and only as an explicit choice. Labels already present (add) or absent (remove) are no-ops. A label name to add that does not exist in the repo refuses the call and changes nothing, unless create_missing is true. Returns the resulting label set plus what was added, removed and created. Runs on the write PAT (Issues: write).',
 					inputSchema: ISSUE_LABELS_SCHEMA
+				});
+			} else if (rule.name === "npm_scaffold") {
+				tools.push({
+					name: "npm_scaffold",
+					description:
+						"Create a new npm package and register its GitHub Actions trusted publisher, so the repo's publish workflow can release it through OIDC from then on. Publishes a broker-built placeholder (0.0.0-stage, no code) and never publishes a version of an existing package. Every npm write needs its own one-time password from the user, so it takes two calls: the first publishes the placeholder and returns status needs_otp; ask the user for the next code and call again to add the trusted publisher. Ask for each code right before the call. A refused or expired code also returns needs_otp with the remaining steps. Checks first that the repo's package.json names the package and that the workflow file exists. Uses the broker's npm token (no 2FA bypass) and the read PAT.",
+					inputSchema: NPM_SCAFFOLD_SCHEMA
 				});
 			} else if (rule.name === "report_unlabeled") {
 				tools.push({

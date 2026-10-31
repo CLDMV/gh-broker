@@ -45,6 +45,12 @@ describe("mergeConfig", () => {
 		expect(merged.app).toEqual({ appId: 1, privateKey: "cred:k" });
 	});
 
+	it("keeps the current npm block on upgrade (the example has none)", () => {
+		const npm = { token: "cred:npm-token", scopes: ["@cldmv"] };
+		expect(mergeConfig(example, { ...example, npm }).npm).toEqual(npm);
+		expect(mergeConfig(example, { ...example }).npm).toBeUndefined();
+	});
+
 	it("does not mutate its inputs", () => {
 		const ex = structuredClone(example);
 		mergeConfig(ex, { ...example, listen: "unix:/z" });

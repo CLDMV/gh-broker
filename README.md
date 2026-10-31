@@ -59,6 +59,16 @@ The hosted MCP's `issue_write` takes `labels` as a full replacement, so changing
 
 🏷️ **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#issue_labels)**
 
+### 📦 **New npm Packages Without a Manual First Publish**
+
+npm only accepts a trusted publisher on a package that already exists, so every new package used to need a hand-run first publish and a form on npmjs.com. `npm_scaffold` does both: it publishes a broker-built placeholder (`0.0.0-stage`, no code) and registers the repo's publish workflow as the trusted publisher, after which CI publishes every release through OIDC. The broker's npm token has no 2FA bypass, so every npm write needs a one-time password from the user: one call publishes, a second call with the next code adds the trusted publisher. The verb refuses any package that already exists.
+
+```json
+{ "owner": "cldmv", "repo": "new-thing", "package": "@cldmv/new-thing", "otp": "123456" }
+```
+
+📦 **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#npm_scaffold)**
+
 ### 🛡️ **Org-Wide Security Alerts**
 
 `report_security_alerts` lists every open Dependabot, CodeQL and secret-scanning alert — for one repo or across everything an owner has — using the org-level endpoints where the token can read them and a per-repo sweep where it can't. Secret values are never returned.
@@ -143,12 +153,15 @@ src/
     report_ci_status.ts  tiered CI status for a PR or every open PR in a repo
     rest-client.ts       shared rate-limit-floor + call-budget REST helpers
     issue_labels.ts      add/remove/swap/set labels on an issue or PR (write PAT)
+    npm_scaffold.ts      create an npm package + its trusted publisher (npm token + user OTP)
+    npm-registry.ts      the npm registry requests npm_scaffold makes
+    npm-tarball.ts       minimal npm tarball builder for the placeholder
     review_thread.ts     resolve/reply PR review threads (write PAT)
     link_issue.ts         addClosingIssueReference (App token) — DEFERRED, not wired in
 deploy/
   install.mjs       interactive installer — first install AND upgrade (sudo node)
   install.sh        optional Linux bootstrap — set up node, then hand off to install.mjs
-  lib/              installer pieces (config merge, secret store, system ops, smoke test)
+  lib/              installer pieces (config merge, secret store, system ops, smoke test, npm token setup)
   gh-broker.service systemd unit (hardened)
   README.md         prerequisites + PAT scopes + install/upgrade/wiring
 docs/
@@ -161,7 +174,7 @@ config.example.json  shipped defaults (token-free); merged into the deployed con
 
 ## 📚 Documentation
 
-- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `issue_labels`, `resolve_review_thread`/`reply_review_thread`, and how to add a new one
+- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, and how to add a new one
 - **[Agent-as-Separate-User Model](docs/agent-user-model.md)** — the isolation model behind "use ≠ possession": users, groups, filesystem permissions, verified against a real host
 - **[Deploy Architecture](docs/deploy-architecture.md)** — config merge, secret store backends, node handling, the installer's full flow
 - **[Install Guide](deploy/README.md)** — prerequisites, PAT scopes, install/upgrade command, flags
