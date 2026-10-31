@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
+ *	@Last modified time: 2026-10-31T13:14:38-07:00 (1793477678)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -21,12 +21,22 @@
  */
 
 import type { Config, SecretStore, ToolRule } from "./types.ts";
+import { ghcrCredRefs } from "./verbs/ghcr/config.ts";
+
+const GHCR_TOOLS = new Set(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
 
 /** Why `rule` can't be used on this broker, or undefined when it can. */
 export function unavailableReason(rule: ToolRule, config: Config, secrets: SecretStore): string | undefined {
 	if (rule.name === "npm_scaffold") {
 		if (!config.npm) return "the npm integration is not configured (enable it with the installer's --npm)";
 		if (!secrets.has(config.npm.token)) return `its credential "${config.npm.token.replace(/^cred:/, "")}" is not stored (re-run the installer with --npm)`;
+	}
+	if (GHCR_TOOLS.has(rule.name)) {
+		if (!config.ghcr) return "GHCR pushes are not configured (config.ghcr)";
+		const refs = ghcrCredRefs(config.ghcr);
+		if (!refs.some((ref) => secrets.has(ref))) {
+			return `no GHCR credential is stored (${refs.map((r) => `"${r.replace(/^cred:/, "")}"`).join(", ")}; re-run the installer to add one)`;
+		}
 	}
 	return undefined;
 }

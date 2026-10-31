@@ -197,4 +197,32 @@ describe("buildCatalog", () => {
 		expect(catalog.map((t) => t.name)).toEqual(["get_me"]);
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/timed out after 15ms/));
 	});
+
+	it("advertises ghcr_push / ghcr_push_status / ghcr_tags with their local schemas", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const ghcrTools = [
+			{ name: "ghcr_push", mode: "write", custom: true },
+			{ name: "ghcr_push_status", mode: "read", custom: true },
+			{ name: "ghcr_tags", mode: "read", custom: true }
+		];
+		const ghcr = { owners: { cldmv: { credential: "cred:cldmv-packages" }, other: { credential: "cred:other-packages" } } };
+		const config = { ...makeConfig(ghcrTools), ghcr };
+		// Exposed as soon as any one GHCR owner's credential is stored.
+		secrets.has.mockImplementation((ref: string) => ref === "cred:other-packages");
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog.map((t) => t.name)).toEqual(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
+		expect(catalog[0]?.inputSchema).toMatchObject({ required: ["owner", "image", "tag", "archive"], additionalProperties: false });
+		expect(catalog[0]?.description).toMatch(/background job/);
+	});
+
+	it("does not expose the GHCR tools without config.ghcr, or while no GHCR credential is stored", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const rules = [{ name: "ghcr_push", mode: "write", custom: true }];
+		expect(await buildCatalog(makeConfig(rules), secrets as any, upstream as any)).toEqual([]);
+		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"ghcr_push" is not exposed: GHCR pushes are not configured/));
+		secrets.has.mockReturnValue(false);
+		const config = { ...makeConfig(rules), ghcr: { owners: { cldmv: { credential: "cred:cldmv-packages" } } } };
+		expect(await buildCatalog(config, secrets as any, upstream as any)).toEqual([]);
+		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/no GHCR credential is stored \("cldmv-packages"; re-run the installer/));
+	});
 });

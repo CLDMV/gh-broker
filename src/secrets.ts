@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config, SecretStore } from "./types.ts";
 import { resolveSecretsPath } from "./paths.ts";
+import { ghcrCredRefs } from "./verbs/ghcr/config.ts";
 
 const CRED_PREFIX = "cred:";
 
@@ -84,7 +85,8 @@ function credName(ref: string): string {
 
 /**
  * Eagerly read every REQUIRED credential (the owners' PATs, the App key) so a missing token
- * fails at startup, not on first request. Optional credentials (the npm token) are only
+ * fails at startup, not on first request. Optional credentials (the npm token, the GHCR
+ * credentials) are only
  * format-checked here: when one isn't stored, the tools that need it are hidden instead
  * (see availability.ts), and the rest of the broker runs normally.
  */
@@ -107,6 +109,9 @@ function validateRefs(config: Config, read: (name: string) => string): void {
 		if (!config.npm.token.startsWith(CRED_PREFIX)) throw new Error(`secrets: config.npm.token must be a "cred:<name>" ref, got "${config.npm.token}"`);
 		assertSafeName(config.npm.token.slice(CRED_PREFIX.length));
 	}
+	// GHCR credentials are optional too: format-checked here, and the ghcr_* tools are hidden
+	// while none is stored (availability.ts).
+	for (const ref of ghcrCredRefs(config.ghcr)) credName(ref);
 }
 
 /** systemd-creds provider: read decrypted creds from $CREDENTIALS_DIRECTORY. */

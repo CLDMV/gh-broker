@@ -20,6 +20,7 @@ The merge is **field-level**, because the two halves have different owners:
 | Field | Source of truth | Why |
 |---|---|---|
 | `tools` (the allowlist) | **example** (repo) | It is a security control. A removal or tightening in an update must apply; a naive "current wins" would silently keep a tool the repo dropped. |
+| `ghcr` (GHCR push policy) | **example** (repo) | Also a security control: the drop directory, the image allowlist and release-tag protection. Same reasoning as `tools`. It holds only a `cred:` reference, never the token. |
 | `owners`, `app`, `listen`, `upstream`, `defaultOwner` | **current** (deployed), falling back to example | Deployment data the operator set. Preserved across upgrades; new owners from the example are added, existing ones kept as-is. |
 
 So an upgrade brings new defaults and allowlist changes through the example, while everything the operator configured survives. Nothing is blindly clobbered.

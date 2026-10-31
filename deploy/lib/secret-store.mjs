@@ -77,7 +77,7 @@ export function assertSafeCredName(name) {
 }
 
 /**
- * The distinct cred names a config's owners + app reference (strips the "cred:"
+ * The distinct cred names a config's owners, app and ghcr owners reference (strips the "cred:"
  * prefix). Validates each name — this is the single source feeding the encrypted
  * `.cred` filenames and the systemd drop-in, so hardening here covers both.
  */
@@ -92,19 +92,23 @@ export function referencedCredNames(config) {
 	}
 	if (config.app) add(config.app.privateKey);
 	if (config.npm) add(config.npm.token);
+	for (const owner of Object.values(config.ghcr?.owners ?? {})) add(owner.credential);
 	return [...names];
 }
 
 /**
  * The referenced cred names that are OPTIONAL: the broker hides the tools that need them
  * when they aren't stored (src/availability.ts) instead of refusing to start, so the
- * installer may skip them. Today: the npm token. The owners' PATs and the App key stay
- * required.
+ * installer may skip them: the npm token and the GHCR credentials. The owners' PATs and
+ * the App key stay required.
  */
 export function optionalCredNames(config) {
 	const names = [];
-	const ref = config.npm?.token;
-	if (typeof ref === "string" && ref.startsWith("cred:")) names.push(assertSafeCredName(ref.slice("cred:".length)));
+	const add = (ref) => {
+		if (typeof ref === "string" && ref.startsWith("cred:")) names.push(assertSafeCredName(ref.slice("cred:".length)));
+	};
+	add(config.npm?.token);
+	for (const owner of Object.values(config.ghcr?.owners ?? {})) add(owner.credential);
 	return names;
 }
 

@@ -27,6 +27,8 @@
  *     in current are added (a newly-onboarded org in the repo shows up on upgrade).
  *   - `listen` / `upstream` / `defaultOwner` / `app` / `secrets` / `npm` → current wins if
  *     set, else the example's value.
+ *   - `ghcr` (GHCR push policy: drop dir, image allowlist, protected tags) is a security
+ *     control like `tools` → taken from the example; a deployed edit doesn't survive.
  *
  * On a first install (no current), the example is used as-is.
  */

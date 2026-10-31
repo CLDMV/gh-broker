@@ -18,6 +18,12 @@ GitHub → Settings → Developer settings → **Fine-grained tokens** → Gener
 
 No organization or admin permissions. If the org requires approval for fine-grained PATs, approve them in Org → Settings → Personal access tokens. The two-PAT split (read vs write) is a deliberate least-privilege control — see the design doc.
 
+### GHCR pushes: one classic PAT (`cldmv-packages`)
+
+`ghcr_push` needs a third credential, because the GitHub Container Registry does not accept fine-grained PATs. Create a **classic** token with **`write:packages` only** (it implies `read:packages`; do not add `delete:packages`, and add `repo` only if pushes to a private-repo-linked package are refused without it), and set an expiry: [create the token](https://github.com/settings/tokens/new?scopes=write:packages&description=gh-broker%20ghcr). The installer prompts for it as `cldmv-packages`; it is an **optional credential**, so you can press Enter to skip it (an unattended run skips it with a note), and the broker then starts normally with the `ghcr_*` tools hidden until the token is stored. Supply it on a later run with `--secret cldmv-packages=<token>`, `--secrets-file` or env `GH_BROKER_SECRET_CLDMV_PACKAGES`. The `ghcr.owners.cldmv.username` in `config.example.json` must be the GitHub login that owns the token.
+
+The installer also creates the drop directory from `ghcr.dropDir` (default `/srv/gh-broker/ghcr-drop`) as `2750 <agent-user>:gh-broker`: the agent writes archives there, the setgid bit gives each file the broker's group, and nobody else can look in. Archives must be group-readable (`chmod g+r`); the broker can only read them, so the agent deletes them after a push. See [`../docs/TOOLS.md`](../docs/TOOLS.md#ghcr_push).
+
 ## 2. Install (first install AND upgrade — same command)
 
 ```sh
@@ -28,7 +34,7 @@ sudo node deploy/install.mjs [agent-user]
 
 1. checks prerequisites,
 2. **creates or confirms the agent user** (stops if it can't — no silent half-install),
-3. creates the `gh-broker` service user + `gh-broker-clients` bridge group, adds the agent user to it,
+3. creates the `gh-broker` service user + `gh-broker-clients` bridge group, adds the agent user to it (and, when the config has a `ghcr` block, creates the GHCR drop directory),
 4. points `/usr/local/bin/node` at the running node,
 5. builds `dist/` if it isn't already built, or rebuilds it if a prior run left it (or `node_modules/`) owned by someone other than the checkout's owner — the build itself runs via `sudo -u '#<uid>'` as whoever owns `deploy/install.mjs`, not as root, so the installer never leaves root-owned files behind in your checkout,
 6. regenerates the config by **merging** `config.example.json` with whatever is deployed (your data is preserved; new keys/allowlist changes from the repo arrive),

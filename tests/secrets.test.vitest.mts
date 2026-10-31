@@ -107,6 +107,18 @@ describe("loadSecretStore (file provider)", () => {
 		expect(() => loadSecretStore(config(undefined, { secrets: { provider: "vault", path: SECRETS } }))).toThrow(/unknown provider/);
 	});
 
+	it("treats the ghcr credentials as optional: startup does not need them, has() reports them", () => {
+		const ghcr = { dropDir: "/srv/x/y", protectReleaseTags: true, maxArchiveBytes: 1, owners: { cldmv: { username: "u", credential: "cred:cldmv-packages", images: ["hoot"] } } };
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		expect(loadSecretStore(config(undefined, { ghcr })).has("cred:cldmv-packages")).toBe(false);
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w", "cldmv-packages": "p" });
+		const store = loadSecretStore(config(undefined, { ghcr }));
+		expect(store.has("cred:cldmv-packages")).toBe(true);
+		expect(store.resolve("cred:cldmv-packages")).toBe("p");
+		const bad = { ...ghcr, owners: { cldmv: { ...ghcr.owners.cldmv, credential: "cred:../x" } } };
+		expect(() => loadSecretStore(config(undefined, { ghcr: bad }))).toThrow(/unsafe credential name/);
+	});
+
 	it("rejects a non-cred config.app.privateKey (would inline a secret in the config)", () => {
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
 		expect(() => loadSecretStore(config(undefined, { app: { appId: 1, privateKey: "-----BEGIN PRIVATE KEY-----" } }))).toThrow(

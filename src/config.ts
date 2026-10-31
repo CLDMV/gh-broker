@@ -15,6 +15,7 @@
 
 import { readFileSync } from "node:fs";
 import type { Config, Mode, ToolRule } from "./types.ts";
+import { parseGhcrConfig } from "./verbs/ghcr/config.ts";
 
 const MODES: readonly Mode[] = ["read", "write"];
 
@@ -145,7 +146,8 @@ export function loadConfig(path: string): Config {
 		...(app ? { app } : {}),
 		...(secrets ? { secrets } : {}),
 		...(defaultOwner ? { defaultOwner } : {}),
-		...(npm ? { npm } : {})
+		...(npm ? { npm } : {}),
+		...(c.ghcr !== undefined ? { ghcr: parseGhcrConfig(c.ghcr) } : {})
 	};
 }
 

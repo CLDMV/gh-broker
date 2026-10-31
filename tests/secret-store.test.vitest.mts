@@ -62,6 +62,7 @@ describe("optionalCredNames", () => {
 		expect(optionalCredNames(cfg)).toEqual(["npm-token"]);
 		expect(optionalCredNames({ owners: cfg.owners })).toEqual([]);
 		expect(optionalCredNames({ npm: { token: "npm_inline" } })).toEqual([]);
+		expect(optionalCredNames({ ...cfg, ghcr: { owners: { cldmv: { credential: "cred:cldmv-packages" }, x: { credential: "inline" } } } })).toEqual(["npm-token", "cldmv-packages"]);
 	});
 
 	it("rejects an unsafe cred name", () => {
@@ -81,6 +82,15 @@ describe("referencedCredNames", () => {
 	it("includes the npm token ref", () => {
 		const cfg = { owners: { o: { read: "cred:a", write: "cred:b" } }, npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
 		expect(referencedCredNames(cfg).sort()).toEqual(["a", "b", "npm-token"]);
+	});
+
+	it("includes each ghcr owner's credential, so the installer prompts for it", () => {
+		const cfg = {
+			owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
+			ghcr: { owners: { cldmv: { credential: "cred:cldmv-packages" } } }
+		};
+		expect(referencedCredNames(cfg).sort()).toEqual(["cldmv-packages", "cldmv-read", "cldmv-write"]);
+		expect(() => referencedCredNames({ ghcr: { owners: { o: { credential: "cred:../x" } } } })).toThrow(/unsafe credential name/);
 	});
 
 	it("returns [] with no owners", () => {
