@@ -113,6 +113,15 @@ describe("loadSecretStore (file provider)", () => {
 			/config.app.privateKey must be a "cred:<name>" ref/
 		);
 	});
+
+	it("validates the npm token ref eagerly", () => {
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w", "npm-token": "npm_x" });
+		const store = loadSecretStore(config(undefined, { secrets: { provider: "file", path: SECRETS }, npm: { token: "cred:npm-token", scopes: ["@cldmv"] } }));
+		expect(store.resolve("cred:npm-token")).toBe("npm_x");
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		expect(() => loadSecretStore(config(undefined, { secrets: { provider: "file", path: SECRETS }, npm: { token: "cred:npm-token", scopes: ["@cldmv"] } }))).toThrow(/"npm-token" missing/);
+		expect(() => loadSecretStore(config(undefined, { secrets: { provider: "file", path: SECRETS }, npm: { token: "npm_inline", scopes: ["@cldmv"] } }))).toThrow(/config.npm.token must be a "cred:<name>" ref/);
+	});
 });
 
 describe("loadSecretStore (systemd-creds provider, the default)", () => {

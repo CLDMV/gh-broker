@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T11:04:31-07:00 (1793469871)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -81,6 +81,10 @@ function validateRefs(config: Config, read: (name: string) => string): void {
 			throw new Error(`secrets: config.app.privateKey must be a "cred:<name>" ref, got "${config.app.privateKey}"`);
 		}
 		read(assertSafeName(config.app.privateKey.slice(CRED_PREFIX.length)));
+	}
+	if (config.npm) {
+		if (!config.npm.token.startsWith(CRED_PREFIX)) throw new Error(`secrets: config.npm.token must be a "cred:<name>" ref, got "${config.npm.token}"`);
+		read(assertSafeName(config.npm.token.slice(CRED_PREFIX.length)));
 	}
 }
 

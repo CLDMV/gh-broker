@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-16T17:17:03-07:00 (1792196223)
+ *	@Last modified time: 2026-10-31T11:04:31-07:00 (1793469871)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -32,6 +32,8 @@ import { reportSecurityAlerts, type ReportSecurityAlertsInput } from "./verbs/re
 import { reportReleasePrs, type ReportReleasePrsInput } from "./verbs/report_release_prs.ts";
 import { issueLabels, type IssueLabelsInput } from "./verbs/issue_labels.ts";
 import { reportCiStatus, ciStatusForHeadSha, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
+import { npmScaffold } from "./verbs/npm_scaffold.ts";
+import { NpmRegistry } from "./verbs/npm-registry.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
@@ -156,6 +158,18 @@ export class Router {
 				const octokit = new Octokit({ auth: token });
 				const reportArgs = args as unknown as ReportCiStatusInput;
 				const out = await reportCiStatus(octokit, reportArgs, this.makeJobLogsFetcher(owner, reportArgs.repo, token));
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "npm_scaffold": {
+				const npm = this.config.npm;
+				if (!npm) {
+					throw new Error("npm_scaffold: npm is not configured on this broker — re-run the installer and enable the npm integration");
+				}
+				// The GitHub side only reads (repo metadata, package.json, workflow file), so it
+				// runs on the read PAT even though the verb is a write.
+				const octokit = new Octokit({ auth: this.secrets.resolve(this.config.owners[owner]!.read) });
+				const registry = new NpmRegistry({ token: this.secrets.resolve(npm.token), ...(npm.registry ? { registry: npm.registry } : {}) });
+				const out = await npmScaffold(args, { octokit, registry, scopes: npm.scopes });
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			default:

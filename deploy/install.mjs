@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T11:04:29-07:00 (1793469869)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -38,6 +38,8 @@ import { promptLine, promptHidden, confirm, choose } from "./lib/prompt.mjs";
 import { mergeConfig } from "./lib/config-merge.mjs";
 import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, detectSecretsProvider } from "./lib/secret-store.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
+import { createNpmToken } from "./lib/npm-setup.mjs";
+import { hostname } from "node:os";
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const SVC_USER = "gh-broker";
@@ -72,6 +74,11 @@ Flags:
   --secrets-provider <p>  systemd-creds | file   (skips the prompt)
   --secrets-file <path>   JSON { "<cred-name>": "<token>" } to import tokens from
   --create-agent-user     create the agent user if missing (no confirm)
+  --npm                   set up the npm integration (npm_scaffold), or rotate its
+                          token: walks through an npm web login and creates the token
+  --npm-scope <@scope>    scope npm_scaffold may create packages in (repeatable;
+                          default: the existing setting, else @<first owner>)
+  --npm-token-days <n>    lifetime of a newly created npm token (default 90)
   -y, --non-interactive   never prompt; fail if a value/decision is missing
   -h, --help              this help
 
@@ -83,7 +90,7 @@ Example (unattended):
     --secrets-provider systemd-creds --non-interactive`;
 
 function parseArgs(argv) {
-	const o = { positional: [], nonInteractive: false, createAgentUser: false };
+	const o = { positional: [], nonInteractive: false, createAgentUser: false, npm: false, npmScopes: [] };
 	// Consume the value after a value-taking flag, failing if it's missing or is
 	// itself a flag — so `--agent-user --secrets-provider file` can't silently take
 	// "--secrets-provider" as the username and proceed with an unintended user.
@@ -100,11 +107,17 @@ function parseArgs(argv) {
 		else if (a === "--agent-user") o.agentUser = value(++i, a);
 		else if (a === "--secrets-provider") o.provider = value(++i, a);
 		else if (a === "--secrets-file") o.secretsFile = value(++i, a);
+		else if (a === "--npm") o.npm = true;
+		else if (a === "--npm-scope") o.npmScopes.push(value(++i, a));
+		else if (a === "--npm-token-days") o.npmTokenDays = value(++i, a);
 		else if (a.startsWith("-")) die(`unknown flag: ${a} (see --help)`);
 		else o.positional.push(a);
 	}
 	return o;
 }
+
+const NPM_SCOPE = /^@[a-z0-9][a-z0-9._~-]*$/;
+const NPM_TOKEN_REF = "cred:npm-token";
 
 const envSecretKey = (name) => "GH_BROKER_SECRET_" + name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 
@@ -117,6 +130,8 @@ async function main() {
 	if (opts.provider && opts.provider !== "systemd-creds" && opts.provider !== "file") {
 		die(`--secrets-provider must be "systemd-creds" or "file"`);
 	}
+	for (const s of opts.npmScopes) if (!NPM_SCOPE.test(s)) die(`--npm-scope must be a lowercase npm scope like "@cldmv", got "${s}"`);
+	if (opts.npmTokenDays !== undefined && !/^[1-9][0-9]{0,2}$/.test(opts.npmTokenDays)) die("--npm-token-days must be a whole number of days");
 	const importTokens = opts.secretsFile ? readJson(opts.secretsFile) : {};
 	// Must be a plain JSON object of { "<name>": "<token>" } — an array parses as an
 	// "object" but yields no tokens, so reject it explicitly rather than importing nothing.
@@ -202,6 +217,29 @@ async function main() {
 	const current = readJson(paths.config); // null on first install
 	const merged = mergeConfig(example, current);
 
+	// --- npm integration (npm_scaffold): opt-in ---
+	// Offered on a first interactive install; afterwards `--npm` enables it or, when it is
+	// already enabled, rotates the token. Either way a new token is created by driving the
+	// npm web login + token creation from here (see lib/npm-setup.mjs), unless the operator
+	// supplied one through --secrets-file/env.
+	step("npm integration");
+	let npmMint = false;
+	if (opts.npm || (!merged.npm && current === null && !opts.nonInteractive && (await confirm("Enable npm_scaffold (create new npm packages and their trusted publishers)?")))) {
+		let scopes = opts.npmScopes.length ? opts.npmScopes : merged.npm?.scopes;
+		if (!scopes?.length) {
+			const fallback = `@${Object.keys(merged.owners ?? {})[0] ?? ""}`.toLowerCase();
+			const answer = opts.nonInteractive ? fallback : (await promptLine(`  npm scope(s) to allow, comma-separated [${fallback}]: `)) || fallback;
+			scopes = answer.split(",").map((s) => s.trim()).filter(Boolean);
+		}
+		for (const s of scopes) if (!NPM_SCOPE.test(s)) die(`npm scope must be a lowercase npm scope like "@cldmv", got "${s}"`);
+		merged.npm = { ...(merged.npm ?? {}), token: merged.npm?.token ?? NPM_TOKEN_REF, scopes };
+		npmMint = true;
+		log(`  ${current?.npm ? "rotating the npm token" : "enabling"} for ${scopes.join(", ")}`);
+	} else {
+		log(merged.npm ? `  enabled for ${merged.npm.scopes.join(", ")} (rotate the token with --npm)` : "  not enabled (enable with --npm)");
+	}
+	const npmTokenName = merged.npm?.token?.startsWith("cred:") ? merged.npm.token.slice("cred:".length) : undefined;
+
 	// --- secrets: operator chooses the backend, then tokens are stored in it ---
 	step("secrets");
 	const needed = referencedCredNames(merged);
@@ -259,7 +297,26 @@ async function main() {
 	//   (a new value = rotation) → decrypt an existing legacy .cred (migration/keep) →
 	//   prompt (interactive only). Explicit MUST beat decrypt, or a rotation would
 	//   just re-encrypt the old decrypted value. Every source yields a non-empty STRING.
+	const mintsNpmToken = (name) => name === npmTokenName && npmMint && explicitToken(name) === undefined;
 	const resolveToken = async (name) => {
+		if (mintsNpmToken(name)) {
+			if (opts.nonInteractive) die(`creating the npm token needs a browser login and prompts — run interactively, or supply an existing token via --secrets-file or env ${envSecretKey(name)}`);
+			try {
+				const out = await createNpmToken({
+					...(merged.npm.registry ? { registry: merged.npm.registry } : {}),
+					scopes: merged.npm.scopes,
+					tokenName: `gh-broker ${hostname()} ${new Date().toISOString().slice(0, 10)}`,
+					...(opts.npmTokenDays ? { days: Number(opts.npmTokenDays) } : {}),
+					promptHidden,
+					promptLine,
+					log
+				});
+				log(`  ${name}: created${out.expires ? ` (expires ${out.expires.slice(0, 10)})` : ""}`);
+				return out.token;
+			} catch (err) {
+				die(`npm token setup failed: ${err.message}`);
+			}
+		}
 		const fromFile = existingFile[name];
 		if (typeof fromFile === "string" && fromFile) return fromFile;
 		const explicit = explicitToken(name);
@@ -286,7 +343,7 @@ async function main() {
 			// Re-encrypt (rotate) only when the operator supplies a new value — a
 			// plaintext entry (file → creds migration) or an explicit --secrets-file/env
 			// token. On a plain re-run with no new value, keep the existing cred as-is.
-			const rotate = Boolean(existingFile[name]) || explicitToken(name) !== undefined;
+			const rotate = Boolean(existingFile[name]) || explicitToken(name) !== undefined || mintsNpmToken(name);
 			if (existed && !rotate) {
 				log(`  ${name}: existing systemd-creds kept`);
 				continue;
@@ -304,7 +361,7 @@ async function main() {
 	} else {
 		const tokens = { ...existingFile };
 		for (const name of needed) {
-			if (!tokens[name]) tokens[name] = await resolveToken(name);
+			if (!tokens[name] || mintsNpmToken(name)) tokens[name] = await resolveToken(name);
 		}
 		writeSecretsFile(paths.secrets, tokens, { gid: requireGid(SVC_GROUP) });
 		removeCredsDropin(); // no systemd-creds delivery under the file provider

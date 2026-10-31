@@ -74,6 +74,15 @@ describe("buildCatalog", () => {
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
 	});
 
+	it("advertises npm_scaffold with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const catalog = await buildCatalog(makeConfig([{ name: "npm_scaffold", mode: "write", custom: true }]), secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "npm_scaffold" });
+		expect(catalog[0]?.description).toMatch(/one-time password/);
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo", "package", "otp"] });
+	});
+
 	it("advertises issue_labels with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "issue_labels", mode: "write", custom: true }]);

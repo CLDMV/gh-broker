@@ -241,6 +241,11 @@
 			"custom": true
 		},
 		{
+			"name": "npm_scaffold",
+			"mode": "write",
+			"custom": true
+		},
+		{
 			"name": "resolve_review_thread",
 			"mode": "write",
 			"custom": true

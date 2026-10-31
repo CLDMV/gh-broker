@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T11:04:30-07:00 (1793469870)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -25,7 +25,7 @@
  *     silently keep a tool the repo dropped).
  *   - `owners` → current entries win and are preserved; example owners not present
  *     in current are added (a newly-onboarded org in the repo shows up on upgrade).
- *   - `listen` / `upstream` / `defaultOwner` / `app` / `secrets` → current wins if
+ *   - `listen` / `upstream` / `defaultOwner` / `app` / `secrets` / `npm` → current wins if
  *     set, else the example's value.
  *
  * On a first install (no current), the example is used as-is.
@@ -48,7 +48,7 @@ export function mergeConfig(example, current) {
 	out.owners = { ...(example.owners ?? {}), ...(current.owners ?? {}) };
 
 	// optional blocks: current wins if present.
-	for (const k of ["app", "secrets"]) {
+	for (const k of ["app", "secrets", "npm"]) {
 		if (current[k] !== undefined) out[k] = current[k];
 	}
 

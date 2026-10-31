@@ -312,3 +312,27 @@ describe("indexTools", () => {
 		expect(map.get("missing")).toBeUndefined();
 	});
 });
+
+describe("loadConfig — npm", () => {
+	it("is absent unless configured", () => {
+		expect(loadConfig(writeConfig(baseConfig())).npm).toBeUndefined();
+	});
+
+	it("accepts a token ref, scopes and an https registry", () => {
+		const cfg = loadConfig(writeConfig({ ...baseConfig(), npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://registry.npmjs.org" } }));
+		expect(cfg.npm).toEqual({ token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://registry.npmjs.org" });
+	});
+
+	it.each([
+		[[], /config.npm: must be an object/],
+		[{ scopes: ["@cldmv"] }, /config.npm.token/],
+		[{ token: "npm_inline_secret", scopes: ["@cldmv"] }, /config.npm.token/],
+		[{ token: "cred:npm-token" }, /config.npm.scopes: must be a non-empty array/],
+		[{ token: "cred:npm-token", scopes: [] }, /config.npm.scopes: must be a non-empty array/],
+		[{ token: "cred:npm-token", scopes: ["cldmv"] }, /config.npm.scopes\[0\]/],
+		[{ token: "cred:npm-token", scopes: ["@CLDMV"] }, /config.npm.scopes\[0\]/],
+		[{ token: "cred:npm-token", scopes: ["@cldmv"], registry: "http://registry.npmjs.org" }, /config.npm.registry: must be an https URL/]
+	] as Array<[unknown, RegExp]>)("rejects an invalid npm block (%#)", (npm, msg) => {
+		expect(() => loadConfig(writeConfig({ ...baseConfig(), npm }))).toThrow(msg);
+	});
+});

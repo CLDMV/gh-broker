@@ -32,10 +32,11 @@ sudo node deploy/install.mjs [agent-user]
 4. points `/usr/local/bin/node` at the running node,
 5. builds `dist/` if it isn't already built, or rebuilds it if a prior run left it (or `node_modules/`) owned by someone other than the checkout's owner — the build itself runs via `sudo -u '#<uid>'` as whoever owns `deploy/install.mjs`, not as root, so the installer never leaves root-owned files behind in your checkout,
 6. regenerates the config by **merging** `config.example.json` with whatever is deployed (your data is preserved; new keys/allowlist changes from the repo arrive),
-7. **asks how to store the credentials** — `systemd-creds` (encrypted at rest, host-bound; recommended) or a plaintext `file` (`0640 root:gh-broker`; portable) — then stores the tokens in the chosen backend: it keeps existing creds, decrypts a legacy `systemd-creds` token when you switch to `file`, and **prompts only for what it can't find** (input hidden),
-8. validates the config with the real loader (`--check`),
-9. installs the unit, deploys `dist/`, restarts, and
-10. runs a **smoke test** (MCP handshake + a real read over the socket) → ✅/❌.
+7. sets up the optional **npm integration** when asked (offered on a first install, or `--npm`): an npm web login it waits on, then the token it creates for `npm_scaffold` (see [npm integration](#npm-integration-npm_scaffold)),
+8. **asks how to store the credentials** — `systemd-creds` (encrypted at rest, host-bound; recommended) or a plaintext `file` (`0640 root:gh-broker`; portable) — then stores the tokens in the chosen backend: it keeps existing creds, decrypts a legacy `systemd-creds` token when you switch to `file`, and **prompts only for what it can't find** (input hidden),
+9. validates the config with the real loader (`--check`),
+10. installs the unit, deploys `dist/`, restarts, and
+11. runs a **smoke test** (MCP handshake + a real read over the socket) → ✅/❌.
 
 ### Unattended (single non-interactive command)
 
@@ -77,6 +78,23 @@ Re-login as the agent user first, so its `gh-broker-clients` membership is activ
 ## Adding an org later
 
 Add an `owners` entry to `config.example.json` (name + `cred:<org>-read` / `cred:<org>-write` refs), then re-run the installer — the merge brings the new owner through, and it prompts for the new credentials. No code change.
+
+## npm integration (`npm_scaffold`)
+
+Optional. It lets `npm_scaffold` create new npm packages and their trusted publishers. The broker holds an npm granular access token; the installer creates it for you.
+
+**Enable or rotate:** re-run the installer with `--npm` (a first interactive install also offers it). The installer then:
+
+1. asks which scopes to allow (`--npm-scope @cldmv`, repeatable; defaults to the existing setting, else `@<first owner>`),
+2. starts an npm web login and shows the login link, then **waits** until you approve it in a browser (the same flow as `npm login --auth-type=web`),
+3. asks for your npm password (hidden, used for this one request and never stored) and a one-time password, and creates a granular token: those scopes read-write, `--npm-token-days` lifetime (default 90), **no 2FA bypass**,
+4. revokes the login session, stores the token as `npm-token` in the chosen credential backend, and adds `"npm": { "token": "cred:npm-token", "scopes": [...] }` to the config.
+
+Without 2FA bypass the token can't publish or change trust settings on its own: every `npm_scaffold` call also carries a one-time password from you. Running `--npm` again creates a fresh token and replaces the stored one (the old token stays valid until it expires or you revoke it at `https://www.npmjs.com/settings/<user>/tokens`).
+
+**Unattended:** the web login needs a browser, so `--non-interactive --npm` takes an existing token instead, via `--secrets-file` (`{ "npm-token": "npm_…" }`) or env `GH_BROKER_SECRET_NPM_TOKEN`.
+
+Without the `npm` block nothing changes: the installer says "not enabled" and the verb refuses with a pointer to `--npm`.
 
 ## Enabling `link_issue` (GitHub App) — DEFERRED
 

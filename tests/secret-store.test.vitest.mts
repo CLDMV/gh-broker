@@ -65,6 +65,11 @@ describe("referencedCredNames", () => {
 		expect(referencedCredNames(cfg).sort()).toEqual(["a", "b", "c", "k"]);
 	});
 
+	it("includes the npm token ref", () => {
+		const cfg = { owners: { o: { read: "cred:a", write: "cred:b" } }, npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
+		expect(referencedCredNames(cfg).sort()).toEqual(["a", "b", "npm-token"]);
+	});
+
 	it("returns [] with no owners", () => {
 		expect(referencedCredNames({})).toEqual([]);
 	});

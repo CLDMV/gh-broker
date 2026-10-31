@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T11:04:31-07:00 (1793469871)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -73,6 +73,20 @@ export interface SecretsConfig {
 	path?: string;
 }
 
+/**
+ * npm integration for `npm_scaffold`. Optional: without it the verb refuses. The token is a
+ * granular access token created by the installer without 2FA bypass, so every write it makes
+ * still needs a user-supplied one-time password.
+ */
+export interface NpmConfig {
+	/** Credential reference (e.g. "cred:npm-token") for the granular access token. */
+	token: string;
+	/** Scopes the verb may create packages in, e.g. ["@cldmv"]. */
+	scopes: string[];
+	/** Registry base URL. Defaults to https://registry.npmjs.org. */
+	registry?: string;
+}
+
 export interface Config {
 	/** e.g. "unix:/run/gh-broker/gh-broker.sock" */
 	listen: string;
@@ -96,6 +110,8 @@ export interface Config {
 	app?: AppConfig;
 	/** Optional secret-store backend selection. Defaults to the systemd-creds provider. */
 	secrets?: SecretsConfig;
+	/** Optional npm integration (`npm_scaffold`). */
+	npm?: NpmConfig;
 }
 
 /** Resolves a "cred:<name>" reference to a token, never logging it. */

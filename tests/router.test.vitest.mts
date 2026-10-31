@@ -152,6 +152,21 @@ describe("Router.call", () => {
 			expect(out).toEqual({ content: [{ type: "text", text: "thread PRRT_1: isResolved=true" }] });
 		});
 
+		it("npm_scaffold refuses when the broker has no npm block", async () => {
+			const r = new Router(makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }] }), secrets as any, upstream as any);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(/npm is not configured on this broker/);
+			expect(secrets.resolve).not.toHaveBeenCalledWith("cred:npm-token");
+		});
+
+		it("npm_scaffold reads GitHub on the READ PAT and resolves the npm token", async () => {
+			requestMock.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
+			const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } });
+			const r = new Router(cfg, secrets as any, upstream as any);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(/repository cldmv\/x not found/);
+			expect(Octokit).toHaveBeenLastCalledWith({ auth: "token:cred:cldmv-read" });
+			expect(secrets.resolve).toHaveBeenCalledWith("cred:npm-token");
+		});
+
 		it("throws for an allowlisted custom verb that has no implementation", async () => {
 			const cfg = makeConfig({ tools: [{ name: "weird_verb", mode: "read", custom: true }] });
 			const r = new Router(cfg, secrets as any, upstream as any);

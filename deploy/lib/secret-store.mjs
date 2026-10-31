@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T11:04:30-07:00 (1793469870)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -91,6 +91,7 @@ export function referencedCredNames(config) {
 		add(owner.write);
 	}
 	if (config.app) add(config.app.privateKey);
+	if (config.npm) add(config.npm.token);
 	return [...names];
 }
 
