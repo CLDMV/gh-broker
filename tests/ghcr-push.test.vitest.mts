@@ -8,7 +8,7 @@ import { JobQueue, QueueFull } from "../src/verbs/ghcr/jobs.ts";
 import { Registry, RegistryError } from "../src/verbs/ghcr/registry.ts";
 import { pushImage } from "../src/verbs/ghcr/push.ts";
 import { planImage, MEDIA } from "../src/verbs/ghcr/archive.ts";
-import { parseGhcrConfig } from "../src/verbs/ghcr/config.ts";
+import { DEFAULT_MAX_ARCHIVE_BYTES, type GhcrConfig } from "../src/verbs/ghcr/config.ts";
 import { FakeRegistry, ociArchive, dockerArchive, scratchDir, removeDir, join, sha, type FakeRegistryOptions } from "./helpers/ghcr-fixtures.mts";
 
 const PAT = "ghp_testPatValue0123456789abcdefABCDEF";
@@ -44,11 +44,15 @@ function put(buf: Buffer): string {
 async function service(opts: FakeRegistryOptions = {}, cfg: Record<string, unknown> = {}, queue?: JobQueue) {
 	reg = new FakeRegistry(opts);
 	const base = await reg.start();
-	const ghcr = parseGhcrConfig({
+	// Built directly, not via parseGhcrConfig: the scratch dir lives in the checkout, which in CI is
+	// under /home — a path the parser rightly refuses for a real drop dir (see ghcr-config tests).
+	const ghcr: GhcrConfig = {
 		dropDir: drop,
+		protectReleaseTags: true,
+		maxArchiveBytes: DEFAULT_MAX_ARCHIVE_BYTES,
 		owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot", "hoot-worker-*"] }, other: { username: "o", credential: "cred:other", images: ["x"] } },
 		...cfg
-	});
+	};
 	const secrets = { resolve: vi.fn((ref: string) => (ref === "cred:cldmv-packages" ? PAT : "ghp_otherPat000000000000000000000000")) };
 	return { svc: new GhcrService(ghcr, secrets, { base, ...(queue ? { queue } : {}) }), secrets };
 }
