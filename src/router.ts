@@ -37,6 +37,8 @@ import { npmScaffold } from "./verbs/npm_scaffold.ts";
 import { NpmRegistry } from "./verbs/npm-registry.ts";
 import { GhcrService } from "./verbs/ghcr_push.ts";
 
+const GHCR_TOOLS = new Set(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
+
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
 	forward(tool: string, args: Record<string, unknown>, token: string): Promise<CallToolResult>;
@@ -80,6 +82,9 @@ export class Router {
 			audit({ tool, decision: "deny", detail: `unavailable: ${unavailable}` });
 			throw new Error(`tool "${tool}" is not available on this broker: ${unavailable}`);
 		}
+		// The GHCR verbs authenticate with config.ghcr's own credential, never an owner's GitHub
+		// PAT, so they don't need (or touch) a config.owners entry.
+		if (GHCR_TOOLS.has(tool)) return this.callGhcr(tool, args, rule);
 		// Owner-less reads (global advisory DB, get_me, notifications) fall back to
 		// the configured defaultOwner's READ PAT. Writes never fall back — a write
 		// must always name the owner it targets.
@@ -110,6 +115,21 @@ export class Router {
 			return out;
 		} catch (err) {
 			audit({ tool, owner, mode: rule.mode, repo, decision, ok: false, detail: (err as Error).message });
+			throw err;
+		}
+	}
+
+	/** GHCR verbs: config.ghcr checks the owner and image itself; no GitHub PAT is resolved. */
+	private async callGhcr(tool: string, args: Record<string, unknown>, rule: ToolRule): Promise<CallToolResult> {
+		const owner = extractOwner(args) ?? "";
+		const repo = typeof args.image === "string" ? `${owner}/${args.image}` : owner;
+		try {
+			this.ghcr ??= new GhcrService(this.config.ghcr, this.secrets);
+			const out = tool === "ghcr_push" ? await this.ghcr.push(args) : tool === "ghcr_tags" ? await this.ghcr.tags(args) : this.ghcr.status(args);
+			audit({ tool, owner, mode: rule.mode, repo, decision: "custom", ok: true });
+			return { content: [{ type: "text", text: JSON.stringify(out) }] };
+		} catch (err) {
+			audit({ tool, owner, mode: rule.mode, repo, decision: "custom", ok: false, detail: (err as Error).message });
 			throw err;
 		}
 	}
@@ -177,14 +197,6 @@ export class Router {
 				const octokit = new Octokit({ auth: this.secrets.resolve(this.config.owners[owner]!.read) });
 				const registry = new NpmRegistry({ token: this.secrets.resolve(npm.token), ...(npm.registry ? { registry: npm.registry } : {}) });
 				const out = await npmScaffold(args, { octokit, registry, scopes: npm.scopes });
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "ghcr_push":
-			case "ghcr_push_status":
-			case "ghcr_tags": {
-				// The owner's GitHub PAT resolved above is not used: GHCR needs a classic PAT, kept in config.ghcr.
-				this.ghcr ??= new GhcrService(this.config.ghcr, this.secrets);
-				const out = tool === "ghcr_push" ? await this.ghcr.push(args) : tool === "ghcr_tags" ? await this.ghcr.tags(args) : this.ghcr.status(args);
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			default:

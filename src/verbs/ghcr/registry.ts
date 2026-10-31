@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:13:30-07:00 (1793470410)
+ *	@Last modified time: 2026-10-31T13:01:59-07:00 (1793476919)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -114,7 +114,10 @@ export class Registry {
 			detail = res.body.toString("utf8").replace(/\s+/g, " ").trim();
 		}
 		const hint = res.status === 401 || res.status === 403 ? " — check the ghcr credential is a classic PAT with write:packages, not expired, and allowed for this package" : "";
-		return new RegistryError(this.clean(`ghcr: ${step} failed: HTTP ${res.status}${detail ? ` (${detail.slice(0, 300)})` : ""}${hint}`), res.status);
+		// Scrub before truncating: a secret cut at the 300-character boundary would no longer
+		// match the exact-value replacement.
+		const shown = this.clean(detail).slice(0, 300);
+		return new RegistryError(this.clean(`ghcr: ${step} failed: HTTP ${res.status}${shown ? ` (${shown})` : ""}${hint}`), res.status);
 	}
 
 	/** Resolve a registry-provided URL and refuse anything that would leave the registry's origin. */

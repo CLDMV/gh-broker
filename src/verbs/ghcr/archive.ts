@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:13:29-07:00 (1793470409)
+ *	@Last modified time: 2026-10-31T13:01:59-07:00 (1793476919)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -22,14 +22,18 @@
  * from. So the file is opened exactly once, by descriptor, and every check runs against
  * that descriptor rather than the path:
  *
- *  1. lexical: the normalized path must sit under `dropDir` (refused before any open, so a
- *     path elsewhere reveals nothing about what exists there);
- *  2. `O_NOFOLLOW | O_NONBLOCK`: the last component can't be a symlink, and a FIFO can't
+ *  1. lexical: the normalized path must sit under `dropDir`;
+ *  2. the real (symlink-resolved) parent directory must be the real `dropDir` or under it,
+ *     so a symlinked subdirectory pointing elsewhere is refused before anything is opened;
+ *     steps 1 and 2 give the same answer for every refusal, so a path elsewhere reveals
+ *     nothing about what exists there;
+ *  3. `O_NOFOLLOW | O_NONBLOCK`: the last component can't be a symlink, and a FIFO can't
  *     hang the open;
- *  3. `fstat`: a regular file, exactly one link (no hard link to a file elsewhere), not
- *     empty, not over `maxArchiveBytes`;
- *  4. `/proc/self/fd/<fd>`: the file actually opened lives under the real `dropDir`, which
- *     catches a symlinked parent directory or a rename race between the checks.
+ *  4. `/proc/self/fd/<fd>`: the file actually opened lives under the real `dropDir`. This
+ *     runs before any check that describes the file, and catches a parent directory swapped
+ *     between step 2 and the open;
+ *  5. `fstat`: a regular file, exactly one link (no hard link to a file elsewhere), not
+ *     empty, not over `maxArchiveBytes`.
  *
  * All later reads use positional reads on that descriptor; the path is never reopened.
  *
@@ -45,7 +49,7 @@
 
 import { closeSync, constants, fstatSync, openSync, readlinkSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { isAbsolute, join, normalize } from "node:path";
+import { dirname, isAbsolute, join, normalize } from "node:path";
 import { indexTar, peekMember, readMember, type TarIndex, type TarMember } from "./tar.ts";
 
 export const MEDIA = {
@@ -88,7 +92,10 @@ export interface OpenedArchive {
 export function openArchive(input: unknown, dropDir: string, maxBytes: number): OpenedArchive {
 	if (typeof input !== "string" || !input || input.length > 4096 || input.includes("\0")) fail('"archive" must be a file path inside the drop directory');
 	const candidate = normalize(isAbsolute(input as string) ? (input as string) : join(dropDir, input as string));
-	if (!candidate.startsWith(`${dropDir}/`)) fail(`"archive" must be inside the drop directory ${dropDir}`);
+	// One answer for every path that can't be confirmed to be in the drop dir (outside it,
+	// behind a symlinked or missing subdirectory), so none of them reveals anything.
+	const outside = `"archive" must be an existing file inside the drop directory ${dropDir}`;
+	if (!candidate.startsWith(`${dropDir}/`)) fail(outside);
 
 	let realDrop: string;
 	try {
@@ -96,6 +103,14 @@ export function openArchive(input: unknown, dropDir: string, maxBytes: number): 
 	} catch {
 		return fail(`drop directory ${dropDir} does not exist — the installer creates it`);
 	}
+	// A symlinked subdirectory would make the open below follow it out of the drop dir.
+	let realParent: string;
+	try {
+		realParent = realpathSync(dirname(candidate));
+	} catch {
+		return fail(outside);
+	}
+	if (realParent !== realDrop && !realParent.startsWith(`${realDrop}/`)) fail(outside);
 
 	let fd: number;
 	try {
@@ -108,13 +123,18 @@ export function openArchive(input: unknown, dropDir: string, maxBytes: number): 
 		return fail(`cannot open ${candidate} (${code ?? "error"})`);
 	}
 	try {
+		// Containment first: nothing about a file outside the drop dir is described.
+		const real = readlinkSync(`/proc/self/fd/${fd}`);
+		// Reachable when a parent directory is swapped for a symlink between the realpath check
+		// above and the open (a race the suite cannot drive deterministically); guarded because
+		// that race is exactly how a broker-only file could otherwise be read.
+		/* v8 ignore next */
+		if (!real.startsWith(`${realDrop}/`)) fail(outside);
 		const st = fstatSync(fd);
 		if (!st.isFile()) fail(`${candidate} is not a regular file`);
 		if (st.nlink !== 1) fail(`${candidate} has ${st.nlink} hard links — copy the archive instead of linking it`);
 		if (st.size === 0) fail(`${candidate} is empty`);
 		if (st.size > maxBytes) fail(`${candidate} is ${st.size} bytes — over the ${maxBytes}-byte limit (ghcr.maxArchiveBytes)`);
-		const real = readlinkSync(`/proc/self/fd/${fd}`);
-		if (!real.startsWith(`${realDrop}/`)) fail(`${candidate} resolves outside the drop directory`);
 		let closed = false;
 		return {
 			fd,

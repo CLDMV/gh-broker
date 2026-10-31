@@ -196,6 +196,17 @@ describe("ghcr_push (end to end against a fake registry)", () => {
 		expectNoSecrets(JSON.stringify(failed));
 	});
 
+	it("scrubs a secret before cutting a long registry error, so no fragment survives the cut", async () => {
+		// "DENIED: " is 8 characters, so 285 characters of padding puts the cut inside the token.
+		const { svc } = await service({ manifestStatus: 403, leakBareTokenAfter: 285 });
+		const job = await svc.push({ owner: "cldmv", image: "hoot", tag: "cut", archive: put(ociArchive().archive) });
+		await svc.queue.idle();
+		const failed = svc.status({ owner: "cldmv", job: job.job }) as any;
+		expect(failed.state).toBe("failed");
+		expect(failed.error).not.toMatch(/regtok-/);
+		expectNoSecrets(JSON.stringify(failed));
+	});
+
 	it("refuses an upload Location on another host (the token never leaves the registry)", async () => {
 		const { svc } = await service({ foreignLocation: true });
 		const job = await svc.push({ owner: "cldmv", image: "hoot", tag: "f", archive: put(ociArchive().archive) });
@@ -217,8 +228,8 @@ describe("ghcr_push (end to end against a fake registry)", () => {
 			[{ owner: "cldmv", image: "", tag: "t", archive: "a" }, /"image" must be a non-empty string/],
 			[{ owner: "cldmv", image: "hoot", tag: "-bad", archive: "a" }, /"tag" must be a valid tag/],
 			[{ owner: "cldmv", image: "hoot", tag: 5, archive: "a" }, /"tag" must be a valid tag/],
-			[{ owner: "cldmv", image: "hoot", tag: "t", archive: "/etc/gh-broker/secrets.json" }, /must be inside the drop directory/],
-			[{ owner: "cldmv", image: "hoot", tag: "t", archive: "../../x.tar" }, /must be inside the drop directory/]
+			[{ owner: "cldmv", image: "hoot", tag: "t", archive: "/etc/gh-broker/secrets.json" }, /must be an existing file inside the drop directory/],
+			[{ owner: "cldmv", image: "hoot", tag: "t", archive: "../../x.tar" }, /must be an existing file inside the drop directory/]
 		])("%j", async (args, re) => {
 			const { svc } = await service();
 			await expect(svc.push(args)).rejects.toThrow(re);

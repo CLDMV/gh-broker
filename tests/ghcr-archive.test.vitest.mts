@@ -142,9 +142,9 @@ describe("openArchive", () => {
 	});
 
 	it("refuses paths outside the drop dir lexically, before opening anything", () => {
-		expect(() => openArchive("/etc/gh-broker/secrets.json", drop, MAX)).toThrow(/must be inside the drop directory/);
-		expect(() => openArchive("../outside.tar", drop, MAX)).toThrow(/must be inside the drop directory/);
-		expect(() => openArchive(drop, drop, MAX)).toThrow(/must be inside the drop directory/);
+		expect(() => openArchive("/etc/gh-broker/secrets.json", drop, MAX)).toThrow(/must be an existing file inside the drop directory/);
+		expect(() => openArchive("../outside.tar", drop, MAX)).toThrow(/must be an existing file inside the drop directory/);
+		expect(() => openArchive(drop, drop, MAX)).toThrow(/must be an existing file inside the drop directory/);
 	});
 
 	it("refuses a missing drop dir", () => {
@@ -163,7 +163,26 @@ describe("openArchive", () => {
 		mkdirSync(outside);
 		writeFileSync(join(outside, "secret.tar"), "secret");
 		symlinkSync(outside, join(drop, "escape"));
-		expect(() => openArchive("escape/secret.tar", drop, MAX)).toThrow(/resolves outside the drop directory/);
+		expect(() => openArchive("escape/secret.tar", drop, MAX)).toThrow(/must be an existing file inside the drop directory/);
+	});
+
+	it("gives the same answer for every file behind a symlinked directory, so nothing outside can be probed", () => {
+		const outside = join(root, "probe");
+		mkdirSync(join(outside, "subdir"), { recursive: true });
+		writeFileSync(join(outside, "present.tar"), "x");
+		writeFileSync(join(outside, "empty.tar"), "");
+		writeFileSync(join(outside, "private.tar"), "x", { mode: 0o000 });
+		symlinkSync(outside, join(drop, "probe"));
+		const answers = ["present.tar", "empty.tar", "private.tar", "subdir", "missing.tar", "missing-dir/x.tar"].map((n) => {
+			try {
+				openArchive(`probe/${n}`, drop, MAX);
+				return "opened";
+			} catch (err) {
+				return (err as Error).message.replace(n, "<name>");
+			}
+		});
+		expect(new Set(answers).size).toBe(1);
+		expect(answers[0]).toMatch(/must be an existing file inside the drop directory/);
 	});
 
 	it("refuses a hard-linked file", () => {
@@ -189,7 +208,8 @@ describe("openArchive", () => {
 
 	it("refuses a missing file and names an unreadable one", () => {
 		expect(() => openArchive(join(drop, "nope.tar"), drop, MAX)).toThrow(/not found/);
-		expect(() => openArchive(join(drop, "nodir", "x.tar"), drop, MAX)).toThrow(/not found/);
+		// A missing subdirectory gets the same answer as a path outside: it could be a dangling symlink.
+		expect(() => openArchive(join(drop, "nodir", "x.tar"), drop, MAX)).toThrow(/must be an existing file inside the drop directory/);
 		const p = file(Buffer.from("x"));
 		chmodSync(p, 0o000);
 		try {

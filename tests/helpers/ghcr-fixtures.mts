@@ -201,6 +201,8 @@ export interface FakeRegistryOptions {
 	foreignLink?: boolean;
 	/** Echo the Authorization header back in manifest PUT errors (a leaky registry). */
 	leakyErrors?: boolean;
+	/** Echo the bare bearer token back in manifest PUT errors, after this many padding characters. */
+	leakBareTokenAfter?: number;
 	/** Refuse every manifest PUT with this status. */
 	manifestStatus?: number;
 	/** Invalidate the current token once, after this many authenticated requests in total. */
@@ -333,7 +335,17 @@ export class FakeRegistry {
 		if (kind === "manifests" && req.method === "PUT") {
 			if (this.opts.manifestStatus) {
 				return this.json(res, this.opts.manifestStatus, {
-					errors: [{ code: "DENIED", message: this.opts.leakyErrors ? `request had ${req.headers.authorization}` : "denied" }]
+					errors: [
+						{
+							code: "DENIED",
+							message:
+								this.opts.leakBareTokenAfter !== undefined
+									? `${"x".repeat(this.opts.leakBareTokenAfter)}${String(req.headers.authorization).replace(/^Bearer /, "")}`
+									: this.opts.leakyErrors
+										? `request had ${req.headers.authorization}`
+										: "denied"
+						}
+					]
 				});
 			}
 			const man = JSON.parse(body.toString("utf8")) as { config: { digest: string }; layers: Array<{ digest: string }> };
