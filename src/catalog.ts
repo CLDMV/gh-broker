@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:18:56-07:00 (1793470736)
+ *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -25,6 +25,7 @@ import { REPORT_RELEASE_PRS_SCHEMA } from "./verbs/report_release_prs.ts";
 import { ISSUE_LABELS_SCHEMA } from "./verbs/issue_labels.ts";
 import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 import { NPM_SCAFFOLD_SCHEMA } from "./verbs/npm_scaffold.ts";
+import { unavailableReason } from "./availability.ts";
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
@@ -63,6 +64,11 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 
 	const tools: Tool[] = [];
 	for (const rule of config.tools) {
+		const unavailable = unavailableReason(rule, config, secrets);
+		if (unavailable) {
+			console.error(`catalog: "${rule.name}" is not exposed: ${unavailable}`);
+			continue;
+		}
 		if (rule.custom) {
 			// DEFERRED: link_issue (App-token-only addClosingIssueReference) is not wired in — see docs.
 			// Intentionally not advertised even if an allowlist entry is added; re-enable by restoring

@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:23:21-07:00 (1793471001)
+ *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -36,7 +36,7 @@ import {
 } from "./lib/system.mjs";
 import { promptLine, promptHidden, confirm, choose } from "./lib/prompt.mjs";
 import { mergeConfig } from "./lib/config-merge.mjs";
-import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, detectSecretsProvider } from "./lib/secret-store.mjs";
+import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "./lib/secret-store.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
 import { createNpmToken } from "./lib/npm-setup.mjs";
 import { hostname } from "node:os";
@@ -251,6 +251,7 @@ async function main() {
 	// --- secrets: operator chooses the backend, then tokens are stored in it ---
 	step("secrets");
 	const needed = referencedCredNames(merged);
+	const optional = new Set(optionalCredNames(merged));
 	const existingFile = readSecretsFile(paths.secrets); // {} if none
 	const credsDir = join(configDir, "creds"); // systemd-creds location
 	const priorProvider = merged.secrets?.provider ?? "systemd-creds";
@@ -335,6 +336,12 @@ async function main() {
 			log(`  ${name}: migrated from systemd-creds`);
 			return dec;
 		}
+		// An optional credential (one whose tools are simply hidden without it) is never a
+		// reason to fail the install: an unattended run skips it, an interactive one may.
+		if (optional.has(name)) {
+			if (opts.nonInteractive) return undefined;
+			return (await promptHidden(`  ${name} (input hidden; Enter to skip — its tools stay hidden): `)) || undefined;
+		}
 		if (opts.nonInteractive) die(`missing credential "${name}" — provide via --secrets-file or env ${envSecretKey(name)}`);
 		if (name === appKeyName) {
 			die(`credential "${name}" is a GitHub App private key (multi-line PEM); the single-line prompt can't accept it — supply it via --secrets-file or env ${envSecretKey(name)}`);
@@ -343,9 +350,11 @@ async function main() {
 		if (!entered) die(`empty value for "${name}"`);
 		return entered;
 	};
+	const skipped = (name) => log(`  ${name}: not stored — its tools stay hidden until it is (re-run the installer to add it)`);
 
 	if (provider === "systemd-creds") {
 		ensureCredsDir(configDir, SVC_GROUP);
+		const stored = [];
 		for (const name of needed) {
 			const credFile = join(credsDir, `${name}.cred`);
 			const existed = existsSync(credFile);
@@ -355,12 +364,23 @@ async function main() {
 			const rotate = Boolean(existingFile[name]) || explicitToken(name) !== undefined || mintsNpmToken(name);
 			if (existed && !rotate) {
 				log(`  ${name}: existing systemd-creds kept`);
+				stored.push(name);
 				continue;
 			}
-			systemdCredsEncrypt(name, await resolveToken(name), credFile);
+			const token = await resolveToken(name);
+			if (token === undefined) {
+				// Keep an existing cred rather than drop it when a rotation is skipped.
+				if (existed) stored.push(name);
+				skipped(name);
+				continue;
+			}
+			systemdCredsEncrypt(name, token, credFile);
+			stored.push(name);
 			log(`  ${name}: ${existed ? "rotated" : "encrypted"} (systemd-creds)`);
 		}
-		writeCredsDropin(needed, credsDir);
+		// Only credentials that exist: a LoadCredentialEncrypted= line for a missing file
+		// would stop the unit from starting at all.
+		writeCredsDropin(stored, credsDir);
 		// Now that creds are encrypted, a plaintext secrets file from a previous
 		// `file` install must not linger — it would defeat "encrypted at rest".
 		if (existsSync(paths.secrets)) {
@@ -370,7 +390,11 @@ async function main() {
 	} else {
 		const tokens = { ...existingFile };
 		for (const name of needed) {
-			if (!tokens[name] || mintsNpmToken(name)) tokens[name] = await resolveToken(name);
+			if (!tokens[name] || mintsNpmToken(name)) {
+				const token = await resolveToken(name);
+				if (token !== undefined) tokens[name] = token;
+				else if (!tokens[name]) skipped(name);
+			}
 		}
 		writeSecretsFile(paths.secrets, tokens, { gid: requireGid(SVC_GROUP) });
 		removeCredsDropin(); // no systemd-creds delivery under the file provider

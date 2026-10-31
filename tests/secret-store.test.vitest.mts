@@ -9,7 +9,7 @@ vi.mock("node:fs", () => ({
 }));
 
 import { readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
-import { readSecretsFile, removeSecretsFile, referencedCredNames, detectSecretsProvider } from "../deploy/lib/secret-store.mjs";
+import { readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "../deploy/lib/secret-store.mjs";
 
 const mockRead = vi.mocked(readFileSync);
 const mockExists = vi.mocked(existsSync);
@@ -53,6 +53,19 @@ describe("removeSecretsFile", () => {
 		removeSecretsFile("/x/secrets.json");
 		expect(mockWrite).not.toHaveBeenCalled();
 		expect(mockRm).not.toHaveBeenCalled();
+	});
+});
+
+describe("optionalCredNames", () => {
+	it("lists the npm token and nothing required", () => {
+		const cfg = { owners: { o: { read: "cred:a", write: "cred:b" } }, app: { privateKey: "cred:k" }, npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
+		expect(optionalCredNames(cfg)).toEqual(["npm-token"]);
+		expect(optionalCredNames({ owners: cfg.owners })).toEqual([]);
+		expect(optionalCredNames({ npm: { token: "npm_inline" } })).toEqual([]);
+	});
+
+	it("rejects an unsafe cred name", () => {
+		expect(() => optionalCredNames({ npm: { token: "cred:../x" } })).toThrow(/unsafe credential name/);
 	});
 });
 

@@ -95,7 +95,7 @@ Without 2FA bypass the token can't publish or change trust settings on its own: 
 
 **Unattended:** the web login needs a browser, so `--non-interactive --npm` takes an existing token instead, via `--secrets-file` (`{ "npm-token": "npm_…" }`) or env `GH_BROKER_SECRET_NPM_TOKEN`.
 
-Without the `npm` block nothing changes: the installer says "not enabled" and the verb refuses with a pointer to `--npm`.
+Without the `npm` block nothing changes: the installer says "not enabled", and the broker does not expose `npm_scaffold` at all (startup logs why). The token is an **optional credential**: if it is missing (skipped at the prompt, or an unattended run without it), the installer carries on and the broker starts normally with `npm_scaffold` hidden. Only the owners' PATs are required.
 
 ## Enabling `link_issue` (GitHub App) — DEFERRED
 

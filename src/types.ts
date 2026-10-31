@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:23:23-07:00 (1793471003)
+ *	@Last modified time: 2026-10-31T12:12:12-07:00 (1793473932)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -119,4 +119,6 @@ export interface Config {
 /** Resolves a "cred:<name>" reference to a token, never logging it. */
 export interface SecretStore {
 	resolve(ref: string): string;
+	/** Whether an optional credential is stored (non-empty). Never throws for a missing one. */
+	has(ref: string): boolean;
 }

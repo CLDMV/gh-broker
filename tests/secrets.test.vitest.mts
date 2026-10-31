@@ -114,13 +114,18 @@ describe("loadSecretStore (file provider)", () => {
 		);
 	});
 
-	it("validates the npm token ref eagerly", () => {
+	it("treats the npm token as optional: has() reports it, startup does not require it", () => {
+		const npm = { token: "cred:npm-token", scopes: ["@cldmv"] };
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w", "npm-token": "npm_x" });
-		const store = loadSecretStore(config(undefined, { secrets: { provider: "file", path: SECRETS }, npm: { token: "cred:npm-token", scopes: ["@cldmv"] } }));
+		const store = loadSecretStore(config(undefined, { npm }));
+		expect(store.has("cred:npm-token")).toBe(true);
 		expect(store.resolve("cred:npm-token")).toBe("npm_x");
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
-		expect(() => loadSecretStore(config(undefined, { secrets: { provider: "file", path: SECRETS }, npm: { token: "cred:npm-token", scopes: ["@cldmv"] } }))).toThrow(/"npm-token" missing/);
-		expect(() => loadSecretStore(config(undefined, { secrets: { provider: "file", path: SECRETS }, npm: { token: "npm_inline", scopes: ["@cldmv"] } }))).toThrow(/config.npm.token must be a "cred:<name>" ref/);
+		const without = loadSecretStore(config(undefined, { npm }));
+		expect(without.has("cred:npm-token")).toBe(false);
+		expect(without.has("cred:cldmv-read")).toBe(true);
+		expect(() => loadSecretStore(config(undefined, { npm: { ...npm, token: "npm_inline" } }))).toThrow(/config.npm.token must be a "cred:<name>" ref/);
+		expect(() => loadSecretStore(config(undefined, { npm: { ...npm, token: "cred:../x" } }))).toThrow(/unsafe credential name/);
 	});
 });
 

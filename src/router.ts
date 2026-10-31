@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:04:31-07:00 (1793469871)
+ *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,6 +19,7 @@ import type { AppAuth } from "./appauth.ts";
 import { Octokit } from "@octokit/core";
 import { indexTools } from "./config.ts";
 import { audit } from "./audit.ts";
+import { unavailableReason } from "./availability.ts";
 // DEFERRED: link_issue is App-token-only and not wired in — see docs.
 // import { linkIssue, type LinkIssueInput } from "./verbs/link_issue.ts";
 import {
@@ -61,7 +62,7 @@ export class Router {
 
 	/** Tools advertised to the agent (used to build tools/list). */
 	advertisedTools(): ToolRule[] {
-		return this.config.tools;
+		return this.config.tools.filter((rule) => !unavailableReason(rule, this.config, this.secrets));
 	}
 
 	async call(tool: string, args: Record<string, unknown>): Promise<CallToolResult> {
@@ -69,6 +70,12 @@ export class Router {
 		if (!rule) {
 			audit({ tool, decision: "deny", detail: "not in allowlist" });
 			throw new Error(`tool "${tool}" is not allowed`);
+		}
+		// An optional integration that isn't set up hides its tools: refuse them the same way.
+		const unavailable = unavailableReason(rule, this.config, this.secrets);
+		if (unavailable) {
+			audit({ tool, decision: "deny", detail: `unavailable: ${unavailable}` });
+			throw new Error(`tool "${tool}" is not available on this broker: ${unavailable}`);
 		}
 		// Owner-less reads (global advisory DB, get_me, notifications) fall back to
 		// the configured defaultOwner's READ PAT. Writes never fall back — a write
@@ -161,10 +168,7 @@ export class Router {
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			case "npm_scaffold": {
-				const npm = this.config.npm;
-				if (!npm) {
-					throw new Error("npm_scaffold: npm is not configured on this broker — re-run the installer and enable the npm integration");
-				}
+				const npm = this.config.npm!; // availability already required it
 				// The GitHub side only reads (repo metadata, package.json, workflow file), so it
 				// runs on the read PAT even though the verb is a write.
 				const octokit = new Octokit({ auth: this.secrets.resolve(this.config.owners[owner]!.read) });
