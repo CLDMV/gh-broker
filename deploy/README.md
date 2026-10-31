@@ -90,7 +90,7 @@ Optional. It lets `npm_scaffold` create new npm packages and their trusted publi
 3. asks for your npm password (hidden, used for this one request and never stored) and a one-time password, and creates a granular token: those scopes read-write, `--npm-token-days` lifetime (default 90), **no 2FA bypass**,
 4. revokes the login session, stores the token as `npm-token` in the chosen credential backend, and adds `"npm": { "token": "cred:npm-token", "scopes": [...] }` to the config.
 
-Without 2FA bypass the token can't publish or change trust settings on its own: every `npm_scaffold` call also carries a one-time password from you. Running `--npm` again creates a fresh token and replaces the stored one (the old token stays valid until it expires or you revoke it at `https://www.npmjs.com/settings/<user>/tokens`).
+Without 2FA bypass the token can't publish or change trust settings on its own: every npm write `npm_scaffold` makes carries its own one-time password from you (one for the publish, one for the trusted publisher). Running `--npm` again creates a fresh token and replaces the stored one (the old token stays valid until it expires or you revoke it at `https://www.npmjs.com/settings/<user>/tokens`).
 
 **Unattended:** the web login needs a browser, so `--non-interactive --npm` takes an existing token instead, via `--secrets-file` (`{ "npm-token": "npm_…" }`) or env `GH_BROKER_SECRET_NPM_TOKEN`.
 

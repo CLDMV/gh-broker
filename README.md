@@ -61,7 +61,7 @@ The hosted MCP's `issue_write` takes `labels` as a full replacement, so changing
 
 ### 📦 **New npm Packages Without a Manual First Publish**
 
-npm only accepts a trusted publisher on a package that already exists, so every new package used to need a hand-run first publish and a form on npmjs.com. `npm_scaffold` does both: it publishes a broker-built placeholder (`0.0.0-stage`, no code) and registers the repo's publish workflow as the trusted publisher, after which CI publishes every release through OIDC. The broker's npm token has no 2FA bypass, so each call needs a one-time password from the user, and the verb refuses any package that already exists.
+npm only accepts a trusted publisher on a package that already exists, so every new package used to need a hand-run first publish and a form on npmjs.com. `npm_scaffold` does both: it publishes a broker-built placeholder (`0.0.0-stage`, no code) and registers the repo's publish workflow as the trusted publisher, after which CI publishes every release through OIDC. The broker's npm token has no 2FA bypass, so every npm write needs a one-time password from the user: one call publishes, a second call with the next code adds the trusted publisher. The verb refuses any package that already exists.
 
 ```json
 { "owner": "cldmv", "repo": "new-thing", "package": "@cldmv/new-thing", "otp": "123456" }

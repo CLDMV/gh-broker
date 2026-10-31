@@ -332,7 +332,7 @@ A failure before the first write (the read of the issue's labels, or a label loo
 
 Create a new npm package and register its GitHub Actions trusted publisher, so the repo's own publish workflow can release it through OIDC from then on. Write, `mode: "write"`, `custom: true`. It needs the optional `npm` integration (set up by the installer, see [deploy/README.md](../deploy/README.md#npm-integration-npm_scaffold)); without it the call is refused with a message saying how to enable it.
 
-npm only accepts a trusted publisher on a package that already exists, and that first publish needs a human's 2FA. The broker holds an npm granular access token created **without** 2FA bypass, and each call carries a one-time password the user reads from their authenticator. The token alone cannot write anything; the OTP is the human's approval for that one call. Ask the user for the code right before calling, since codes expire in about 30 seconds.
+npm only accepts a trusted publisher on a package that already exists, and that first publish needs a human's 2FA. The broker holds an npm granular access token created **without** 2FA bypass, and each call carries a one-time password the user reads from their authenticator. The token alone cannot write anything; the OTP is the human's approval for that one call. Ask the user for each code right before the call that uses it, since codes expire in about 30 seconds.
 
 ```json
 { "owner": "cldmv", "repo": "new-thing", "package": "@cldmv/new-thing", "otp": "123456" }
@@ -357,7 +357,7 @@ npm only accepts a trusted publisher on a package that already exists, and that 
 1. **Placeholder publish** (`PUT /<package>`, the request `npm publish` sends). The broker builds the tarball itself, so the agent supplies no files: a `package.json` (name, `0.0.0-stage`, the repo's `license` or `UNLICENSED`, repository, homepage, the `scaffoldedBy` marker) and a README pointing at the repo. Access is `public` for a public repo and `restricted` for a private one, the rule the CI publish uses too.
 2. **Trusted publisher** (`POST /-/package/<package>/trust`, the request `npm trust github <package> --repo <owner>/<repo> --file <workflow> --allow-publish` sends). Permission `createPackage` is npm's internal name for publish.
 
-**One code or two.** npm may refuse to accept the same code for both writes, and a code can expire between them. A refused code is not an error: the result is `status: "needs_otp"` with `done` and `remaining`, and calling again with a fresh code picks up from there (the publish is skipped, since the placeholder now exists). A trusted publisher that is already configured (HTTP 409) counts as done.
+**One code per write, so two calls.** npm requires a one-time password for every write, and a code works once. The first call publishes the placeholder and returns `status: "needs_otp"` with `done: ["publish"]` and `remaining: ["trust"]`, without sending the spent code again. Ask the user for the next code (after the authenticator changes) and call again: the publish is skipped, since the placeholder now exists, and the trusted publisher is added. A refused or expired code also returns `needs_otp` with what is left, and a trusted publisher that is already configured (HTTP 409) counts as done.
 
 **Result.**
 
@@ -368,7 +368,8 @@ npm only accepts a trusted publisher on a package that already exists, and that 
 	"repository": "CLDMV/new-thing",
 	"workflow": "publish.yml",
 	"access": "public",
-	"done": ["publish", "trust"],
+	"done": ["trust"],
+	"skipped": ["publish"],
 	"version": "0.0.0-stage",
 	"url": "https://www.npmjs.com/package/@cldmv/new-thing",
 	"trustId": "…",
@@ -376,7 +377,7 @@ npm only accepts a trusted publisher on a package that already exists, and that 
 }
 ```
 
-After a resumed call, `skipped` lists the steps an earlier call already did. Any other registry or GitHub failure fails the call with npm's or GitHub's own message; neither the OTP nor the token ever appears in a result, an error or the audit log.
+That is the second call's result; `skipped` lists the steps an earlier call already did. Any other registry or GitHub failure fails the call with npm's or GitHub's own message; neither the OTP nor the token ever appears in a result, an error or the audit log.
 
 **Calls.** GitHub: one repo read and two file reads (read PAT). npm: one package lookup, at most one publish and one trust request.
 

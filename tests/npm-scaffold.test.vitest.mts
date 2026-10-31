@@ -171,37 +171,40 @@ describe("npm_scaffold", () => {
 		expect(NPM_SCAFFOLD_SCHEMA.additionalProperties).toBe(false);
 	});
 
-	it("publishes the placeholder and adds the trusted publisher in one call", async () => {
-		// The fake accepts each listed code once; listing OTP twice models a registry that
-		// lets one code cover both writes (the single-use case is the needs_otp test below).
-		const reg2 = fakeRegistry({ otps: [OTP, OTP] });
-		const out = await npmScaffold(args(), deps(fakeGitHub(), reg2));
-		expect(out).toMatchObject({ status: "done", done: ["publish", "trust"], access: "public", repository: "CLDMV/new-thing", workflow: "publish.yml", version: PLACEHOLDER_VERSION, trustId: "trust-1" });
-		expect(out.url).toBe(`https://www.npmjs.com/package/${PKG}`);
-		expect(reg2.trust).toEqual([{ type: "github", claims: { repository: "CLDMV/new-thing", workflow_ref: { file: "publish.yml" } }, permissions: ["createPackage"] }]);
-		const put = reg2.calls.find((c) => c.method === "PUT")!;
+	it("publishes the placeholder, then adds the trusted publisher on a second call with the next code", async () => {
+		const reg = fakeRegistry({ otps: [OTP, OTP2] });
+		const first = await npmScaffold(args(), deps(fakeGitHub(), reg));
+		expect(first).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"], access: "public", repository: "CLDMV/new-thing", version: PLACEHOLDER_VERSION });
+		expect(first.message).toMatch(/needs its own one-time password/);
+		// The spent code is never sent again: no trust request on the first call.
+		expect(reg.calls.filter((c) => c.url.endsWith("/trust"))).toHaveLength(0);
+		const put = reg.calls.find((c) => c.method === "PUT")!;
 		expect(put.headers["npm-otp"]).toBe(OTP);
 		expect(put.body.access).toBe("public");
+
+		const second = await npmScaffold(args({ otp: OTP2 }), deps(fakeGitHub(), reg));
+		expect(second).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"], workflow: "publish.yml", trustId: "trust-1" });
+		expect(second.url).toBe(`https://www.npmjs.com/package/${PKG}`);
+		expect(reg.trust).toEqual([{ type: "github", claims: { repository: "CLDMV/new-thing", workflow_ref: { file: "publish.yml" } }, permissions: ["createPackage"] }]);
+		expect(reg.calls.find((c) => c.url.endsWith("/trust"))!.headers["npm-otp"]).toBe(OTP2);
+		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(1);
 	});
 
 	it("uses restricted access for a private repo", async () => {
-		const reg = fakeRegistry({ otps: [OTP, OTP] });
+		const reg = fakeRegistry({ otps: [OTP] });
 		const out = await npmScaffold(args(), deps(fakeGitHub({ private: true }), reg));
 		expect(out.access).toBe("restricted");
 		expect(reg.calls.find((c) => c.method === "PUT")!.body.access).toBe("restricted");
 	});
 
-	it("returns needs_otp naming trust when the code is spent on the publish, then resumes with a fresh code", async () => {
-		const gh = fakeGitHub();
+	it("returns needs_otp when the trust code is refused, and finishes with a new one", async () => {
 		const reg = fakeRegistry({ otps: [OTP, OTP2] });
-		const first = await npmScaffold(args(), deps(gh, reg));
-		expect(first).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"] });
-		expect(first.message).toMatch(/placeholder is published/);
-		expect(reg.trust).toEqual([]);
-
-		const second = await npmScaffold(args({ otp: OTP2 }), deps(gh, reg));
-		expect(second).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"] });
-		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(1);
+		await npmScaffold(args(), deps(fakeGitHub(), reg));
+		const refused = await npmScaffold(args({ otp: "999999" }), deps(fakeGitHub(), reg));
+		expect(refused).toMatchObject({ status: "needs_otp", done: [], skipped: ["publish"], remaining: ["trust"] });
+		expect(refused.message).toMatch(/refused the one-time password for the trusted publisher/);
+		const done = await npmScaffold(args({ otp: OTP2 }), deps(fakeGitHub(), reg));
+		expect(done).toMatchObject({ status: "done", done: ["trust"] });
 	});
 
 	it("returns needs_otp with nothing written when the code is refused before publishing", async () => {
@@ -252,8 +255,9 @@ describe("npm_scaffold", () => {
 	});
 
 	it("honours a custom workflow file name", async () => {
-		const reg = fakeRegistry({ otps: [OTP, OTP] });
-		const out = await npmScaffold(args({ workflow: "release.yaml" }), deps(fakeGitHub(), reg));
+		const reg = fakeRegistry({ otps: [OTP, OTP2] });
+		await npmScaffold(args({ workflow: "release.yaml" }), deps(fakeGitHub(), reg));
+		const out = await npmScaffold(args({ workflow: "release.yaml", otp: OTP2 }), deps(fakeGitHub(), reg));
 		expect(out.workflow).toBe("release.yaml");
 		expect(reg.trust[0].claims.workflow_ref.file).toBe("release.yaml");
 	});
@@ -276,7 +280,7 @@ describe("npm_scaffold", () => {
 	});
 
 	it("never puts the OTP or the token in a result or an error", async () => {
-		const ok = await npmScaffold(args(), deps(fakeGitHub(), fakeRegistry({ otps: [OTP, OTP] })));
+		const ok = await npmScaffold(args(), deps(fakeGitHub(), fakeRegistry({ otps: [OTP] })));
 		const needs = await npmScaffold(args(), deps(fakeGitHub(), fakeRegistry({ otps: [] })));
 		const errors: string[] = [];
 		for (const reg of [fakeRegistry({ publishStatus: 403 }), fakeRegistry({ lookupStatus: 500 })]) {
@@ -305,8 +309,9 @@ describe("npm_scaffold", () => {
 	});
 
 	it("passes a trust failure that is not an OTP refusal through, after the publish", async () => {
-		const reg = fakeRegistry({ otps: [OTP, OTP], trustStatus: 400 });
-		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/trusted publisher setup failed \(HTTP 400\)/);
+		const reg = fakeRegistry({ otps: [OTP, OTP2], trustStatus: 400 });
+		await npmScaffold(args(), deps(fakeGitHub(), reg));
+		await expect(npmScaffold(args({ otp: OTP2 }), deps(fakeGitHub(), reg))).rejects.toThrow(/trusted publisher setup failed \(HTTP 400\)/);
 		expect(reg.packages.has(PKG)).toBe(true);
 	});
 

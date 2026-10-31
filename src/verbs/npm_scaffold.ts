@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:04:31-07:00 (1793469871)
+ *	@Last modified time: 2026-10-31T11:18:58-07:00 (1793470738)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -37,9 +37,10 @@ import { buildTarball, tarballDigests } from "./npm-tarball.ts";
  * marked `scaffoldedBy: "gh-broker"` and a README pointing at the repo. Access follows the
  * repo's visibility (public repo → public package), the rule the CI publish also uses.
  *
- * One OTP may not cover both writes (it can expire, or the registry may refuse a reused
- * code), so a refused OTP is not an error: the result is `needs_otp` naming what is left,
- * and calling again with a fresh code resumes from there.
+ * Every npm write needs its own one-time password, so each call makes exactly one write:
+ * the first call publishes the placeholder and returns `needs_otp` for the trusted
+ * publisher; the second call (with the next code) adds it. A refused or expired code is
+ * not an error either: the result is `needs_otp` naming what is left.
  */
 
 export const PLACEHOLDER_VERSION = "0.0.0-stage";
@@ -245,13 +246,21 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 	} else {
 		try {
 			await deps.registry.publish(placeholderDocument(args.package, facts, access, deps.registry.registry), args.package, args.otp);
-			done.push("publish");
 		} catch (err) {
 			if (err instanceof NpmOtpRequired) {
 				return { ...base, status: "needs_otp", done, remaining: ["publish", "trust"], message: "npm refused the one-time password before publishing; nothing was written. Call again with a fresh code." };
 			}
 			throw err;
 		}
+		// That code is spent: every npm write needs its own one-time password, so don't
+		// send it again (a guaranteed refusal that counts as a failed 2FA attempt).
+		return {
+			...base,
+			status: "needs_otp",
+			done: ["publish"],
+			remaining: ["trust"],
+			message: "The placeholder is published. Each npm write needs its own one-time password: call again with the next code (wait for the authenticator to change) to add the trusted publisher."
+		};
 	}
 
 	let trustId: string | undefined;
@@ -270,7 +279,7 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 				done,
 				remaining: ["trust"],
 				...(skipped.length ? { skipped } : {}),
-				message: `${done.includes("publish") ? "The placeholder is published, but n" : "N"}pm refused the one-time password for the trusted publisher. Call again with a fresh code to finish.`
+				message: "The placeholder is published, but npm refused the one-time password for the trusted publisher (expired or already used). Call again with a new code to finish."
 			};
 		}
 		throw err;
