@@ -35,6 +35,7 @@ import { issueLabels, type IssueLabelsInput } from "./verbs/issue_labels.ts";
 import { reportCiStatus, ciStatusForHeadSha, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
 import { npmScaffold } from "./verbs/npm_scaffold.ts";
 import { NpmRegistry } from "./verbs/npm-registry.ts";
+import { GhcrService } from "./verbs/ghcr_push.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
@@ -51,6 +52,8 @@ export class Router {
 	private readonly upstream: Upstream;
 	private readonly appAuth?: AppAuth;
 	private readonly rules: Map<string, ToolRule>;
+	/** GHCR verbs run on config.ghcr's own credential, not the owner's GitHub PAT (created on first use). */
+	private ghcr?: GhcrService;
 
 	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth) {
 		this.config = config;
@@ -174,6 +177,14 @@ export class Router {
 				const octokit = new Octokit({ auth: this.secrets.resolve(this.config.owners[owner]!.read) });
 				const registry = new NpmRegistry({ token: this.secrets.resolve(npm.token), ...(npm.registry ? { registry: npm.registry } : {}) });
 				const out = await npmScaffold(args, { octokit, registry, scopes: npm.scopes });
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "ghcr_push":
+			case "ghcr_push_status":
+			case "ghcr_tags": {
+				// The owner's GitHub PAT resolved above is not used: GHCR needs a classic PAT, kept in config.ghcr.
+				this.ghcr ??= new GhcrService(this.config.ghcr, this.secrets);
+				const out = tool === "ghcr_push" ? await this.ghcr.push(args) : tool === "ghcr_tags" ? await this.ghcr.tags(args) : this.ghcr.status(args);
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			default:

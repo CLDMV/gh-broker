@@ -26,6 +26,7 @@ import { ISSUE_LABELS_SCHEMA } from "./verbs/issue_labels.ts";
 import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 import { NPM_SCAFFOLD_SCHEMA } from "./verbs/npm_scaffold.ts";
 import { unavailableReason } from "./availability.ts";
+import { GHCR_CATALOG } from "./verbs/ghcr_push.ts";
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
@@ -129,6 +130,8 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 						"Report CI health for a PR, or every open PR in a repo, at a chosen verbosity: 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log. Detail beyond tier 0 is only fetched for runs that are actually failing. Runs on the read PAT.",
 					inputSchema: REPORT_CI_STATUS_SCHEMA
 				});
+			} else if (GHCR_CATALOG[rule.name]) {
+				tools.push({ name: rule.name, ...GHCR_CATALOG[rule.name]! });
 			}
 			continue;
 		}

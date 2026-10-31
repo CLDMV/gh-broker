@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config, SecretStore } from "./types.ts";
 import { resolveSecretsPath } from "./paths.ts";
+import { ghcrCredRefs } from "./verbs/ghcr/config.ts";
 
 const CRED_PREFIX = "cred:";
 
@@ -107,6 +108,7 @@ function validateRefs(config: Config, read: (name: string) => string): void {
 		if (!config.npm.token.startsWith(CRED_PREFIX)) throw new Error(`secrets: config.npm.token must be a "cred:<name>" ref, got "${config.npm.token}"`);
 		assertSafeName(config.npm.token.slice(CRED_PREFIX.length));
 	}
+	for (const ref of ghcrCredRefs(config.ghcr)) read(credName(ref));
 }
 
 /** systemd-creds provider: read decrypted creds from $CREDENTIALS_DIRECTORY. */

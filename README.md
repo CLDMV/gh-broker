@@ -81,6 +81,16 @@ npm only accepts a trusted publisher on a package that already exists, so every 
 
 🚢 **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_release_prs)**
 
+### 🐳 **Container Image Pushes Without a Registry Token**
+
+`ghcr_push` pushes a `docker save` archive to `ghcr.io/<owner>/<image>:<tag>` with a classic `write:packages` PAT the agent never sees. The image must be on an allowlist, the archive must sit in a dedicated drop directory (symlinks, hard links and paths outside it are refused), and an existing release tag is never overwritten. The push runs as a background job, uploads only the blobs the registry doesn't already have, and is tracked with `ghcr_push_status`; `ghcr_tags` checks the result.
+
+```json
+{ "owner": "cldmv", "image": "hoot", "tag": "1.4.0", "archive": "hoot-1.4.0.tar" }
+```
+
+🐳 **Full parameter reference and threat model: [docs/TOOLS.md](docs/TOOLS.md#ghcr_push)**
+
 ### 🔧 **Extensible By Design**
 
 The broker presents its **own** MCP contract to the agent — a proxied tool's schema and response are not required to match the hosted MCP's exactly. Adding a custom verb or extending a proxied tool with new parameters follows a documented pattern, not a one-off hack.
@@ -157,6 +167,8 @@ src/
     npm-registry.ts      the npm registry requests npm_scaffold makes
     npm-tarball.ts       minimal npm tarball builder for the placeholder
     review_thread.ts     resolve/reply PR review threads (write PAT)
+    ghcr_push.ts         ghcr_push / ghcr_push_status / ghcr_tags (GHCR classic PAT)
+    ghcr/                config policy, tar + image-archive reader, OCI registry client, push, job queue
     link_issue.ts         addClosingIssueReference (App token) — DEFERRED, not wired in
 deploy/
   install.mjs       interactive installer — first install AND upgrade (sudo node)
@@ -174,7 +186,7 @@ config.example.json  shipped defaults (token-free); merged into the deployed con
 
 ## 📚 Documentation
 
-- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, and how to add a new one
+- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, and how to add a new one
 - **[Agent-as-Separate-User Model](docs/agent-user-model.md)** — the isolation model behind "use ≠ possession": users, groups, filesystem permissions, verified against a real host
 - **[Deploy Architecture](docs/deploy-architecture.md)** — config merge, secret store backends, node handling, the installer's full flow
 - **[Install Guide](deploy/README.md)** — prerequisites, PAT scopes, install/upgrade command, flags

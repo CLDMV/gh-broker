@@ -32,7 +32,7 @@ import {
 	ensureServiceUser, createAgentUser, addUserToGroup,
 	pointNodeSymlinks, currentNodeBin, ensureDirs, installUnit,
 	enableService, restartService, serviceActive, deployDist, writeConfigFile,
-	trySystemdCredDecrypt, systemdCredsEncrypt, ensureCredsDir, writeCredsDropin, removeCredsDropin
+	trySystemdCredDecrypt, systemdCredsEncrypt, ensureCredsDir, writeCredsDropin, removeCredsDropin, ensureDropDir
 } from "./lib/system.mjs";
 import { promptLine, promptHidden, confirm, choose } from "./lib/prompt.mjs";
 import { mergeConfig } from "./lib/config-merge.mjs";
@@ -198,6 +198,10 @@ async function main() {
 	if (!example) die("config.example.json missing or invalid");
 	const current = readJson(paths.config); // null on first install
 	const merged = mergeConfig(example, current);
+	if (merged.ghcr?.dropDir) {
+		ensureDropDir(merged.ghcr.dropDir, agentUser, SVC_GROUP);
+		log(`  ghcr drop dir: ${merged.ghcr.dropDir} (2750 ${agentUser}:${SVC_GROUP})`);
+	}
 
 	// --- npm integration (npm_scaffold): opt-in ---
 	// Offered on a first interactive install; afterwards `--npm` enables it or, when it is

@@ -23,6 +23,8 @@
  * safe to copy between machines.
  */
 
+import type { GhcrConfig } from "./verbs/ghcr/config.ts";
+
 export type Mode = "read" | "write";
 
 /**
@@ -114,6 +116,8 @@ export interface Config {
 	secrets?: SecretsConfig;
 	/** Optional npm integration (`npm_scaffold`). */
 	npm?: NpmConfig;
+	/** Optional GHCR push policy + credentials for the ghcr_* verbs (src/verbs/ghcr/config.ts). */
+	ghcr?: GhcrConfig;
 }
 
 /** Resolves a "cred:<name>" reference to a token, never logging it. */

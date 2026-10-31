@@ -77,7 +77,7 @@ export function assertSafeCredName(name) {
 }
 
 /**
- * The distinct cred names a config's owners + app reference (strips the "cred:"
+ * The distinct cred names a config's owners, app and ghcr owners reference (strips the "cred:"
  * prefix). Validates each name — this is the single source feeding the encrypted
  * `.cred` filenames and the systemd drop-in, so hardening here covers both.
  */
@@ -92,6 +92,7 @@ export function referencedCredNames(config) {
 	}
 	if (config.app) add(config.app.privateKey);
 	if (config.npm) add(config.npm.token);
+	for (const owner of Object.values(config.ghcr?.owners ?? {})) add(owner.credential);
 	return [...names];
 }
 
