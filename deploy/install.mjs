@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
+ *	@Last modified time: 2026-10-31T12:30:45-07:00 (1793475045)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -37,6 +37,7 @@ import {
 import { promptLine, promptHidden, confirm, choose } from "./lib/prompt.mjs";
 import { mergeConfig } from "./lib/config-merge.mjs";
 import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "./lib/secret-store.mjs";
+import { parseArgs, envSecretKey, NPM_SCOPE } from "./lib/install-args.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
 import { createNpmToken } from "./lib/npm-setup.mjs";
 import { hostname } from "node:os";
@@ -73,6 +74,8 @@ Flags:
                           (also positional; defaults to $SUDO_USER)
   --secrets-provider <p>  systemd-creds | file   (skips the prompt)
   --secrets-file <path>   JSON { "<cred-name>": "<token>" } to import tokens from
+  --secret <name>=<tok>   one token on the command line (repeatable). Visible in
+                          the process list and shell history: prefer the file or env
   --create-agent-user     create the agent user if missing (no confirm)
   --npm                   set up the npm integration (npm_scaffold), or rotate its
                           token: walks through an npm web login and creates the token
@@ -84,59 +87,32 @@ Flags:
   -y, --non-interactive   never prompt; fail if a value/decision is missing
   -h, --help              this help
 
-Non-interactive credentials: for each not already stored, the token is taken from
---secrets-file, then env GH_BROKER_SECRET_<NAME> (NAME upper-cased, non-alnum -> _).
+Credentials: each token comes from, in order, --secret, --secrets-file, env
+GH_BROKER_SECRET_<NAME> (NAME upper-cased, non-alnum -> _), and otherwise an
+interactive prompt (input hidden). A token supplied by any of the first three
+replaces a stored one (rotation). Optional tokens (npm-token) can be skipped.
 Example (unattended):
   sudo GH_BROKER_SECRET_CLDMV_READ=… GH_BROKER_SECRET_CLDMV_WRITE=… \\
     /usr/local/bin/node deploy/install.mjs --agent-user repo \\
     --secrets-provider systemd-creds --non-interactive`;
 
-function parseArgs(argv) {
-	const o = { positional: [], nonInteractive: false, createAgentUser: false, npm: false, npmScopes: [], npmOrgs: [] };
-	// Consume the value after a value-taking flag, failing if it's missing or is
-	// itself a flag — so `--agent-user --secrets-provider file` can't silently take
-	// "--secrets-provider" as the username and proceed with an unintended user.
-	const value = (i, flag) => {
-		const v = argv[i];
-		if (v === undefined || v.startsWith("-")) die(`${flag} requires a value (see --help)`);
-		return v;
-	};
-	for (let i = 0; i < argv.length; i++) {
-		const a = argv[i];
-		if (a === "-h" || a === "--help") o.help = true;
-		else if (a === "-y" || a === "--non-interactive") o.nonInteractive = true;
-		else if (a === "--create-agent-user") o.createAgentUser = true;
-		else if (a === "--agent-user") o.agentUser = value(++i, a);
-		else if (a === "--secrets-provider") o.provider = value(++i, a);
-		else if (a === "--secrets-file") o.secretsFile = value(++i, a);
-		else if (a === "--npm") o.npm = true;
-		else if (a === "--npm-scope") o.npmScopes.push(value(++i, a));
-		else if (a === "--npm-org") o.npmOrgs.push(value(++i, a));
-		else if (a === "--npm-token-days") o.npmTokenDays = value(++i, a);
-		else if (a.startsWith("-")) die(`unknown flag: ${a} (see --help)`);
-		else o.positional.push(a);
-	}
-	return o;
-}
-
-const NPM_SCOPE = /^@[a-z0-9][a-z0-9._~-]*$/;
-const NPM_ORG = /^[a-z0-9][a-z0-9._~-]*$/;
 const NPM_TOKEN_REF = "cred:npm-token";
 
-const envSecretKey = (name) => "GH_BROKER_SECRET_" + name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+/** parseArgs with installer-style failure (the parser itself throws). */
+function parseArgsOrDie(argv) {
+	try {
+		return parseArgs(argv);
+	} catch (err) {
+		die(err.message);
+	}
+}
 
 async function main() {
-	const opts = parseArgs(process.argv.slice(2));
+	const opts = parseArgsOrDie(process.argv.slice(2));
 	if (opts.help) {
 		log(HELP);
 		return;
 	}
-	if (opts.provider && opts.provider !== "systemd-creds" && opts.provider !== "file") {
-		die(`--secrets-provider must be "systemd-creds" or "file"`);
-	}
-	for (const s of opts.npmScopes) if (!NPM_SCOPE.test(s)) die(`--npm-scope must be a lowercase npm scope like "@cldmv", got "${s}"`);
-	for (const org of opts.npmOrgs) if (!NPM_ORG.test(org)) die(`--npm-org must be a lowercase npm org name like "cldmv", got "${org}"`);
-	if (opts.npmTokenDays !== undefined && !/^[1-9][0-9]{0,2}$/.test(opts.npmTokenDays)) die("--npm-token-days must be a whole number of days");
 	const importTokens = opts.secretsFile ? readJson(opts.secretsFile) : {};
 	// Must be a plain JSON object of { "<name>": "<token>" } — an array parses as an
 	// "object" but yields no tokens, so reject it explicitly rather than importing nothing.
@@ -294,6 +270,8 @@ async function main() {
 	// env GH_BROKER_SECRET_<NAME>. Its presence is what makes a re-run ROTATE an
 	// existing credential rather than keep it. Only non-empty strings count.
 	const explicitToken = (name) => {
+		const fromCli = opts.cliSecrets[name];
+		if (typeof fromCli === "string" && fromCli) return fromCli;
 		const fromImport = importTokens && importTokens[name];
 		if (typeof fromImport === "string" && fromImport) return fromImport;
 		const fromEnv = process.env[envSecretKey(name)];
@@ -302,10 +280,11 @@ async function main() {
 	};
 
 	// Resolve a token's plaintext, only when needed. Precedence:
-	//   plaintext secrets file (file → creds migration) → explicit --secrets-file/env
-	//   (a new value = rotation) → decrypt an existing legacy .cred (migration/keep) →
-	//   prompt (interactive only). Explicit MUST beat decrypt, or a rotation would
-	//   just re-encrypt the old decrypted value. Every source yields a non-empty STRING.
+	//   explicit --secret / --secrets-file / env (a new value = rotation) → plaintext
+	//   secrets file (file → creds migration, or keep) → decrypt an existing legacy .cred
+	//   (migration/keep) → prompt (interactive only). Explicit MUST beat the stored
+	//   values, or a rotation would just re-store the old one. Every source yields a
+	//   non-empty STRING.
 	const mintsNpmToken = (name) => name === npmTokenName && npmMint && explicitToken(name) === undefined;
 	const resolveToken = async (name) => {
 		if (mintsNpmToken(name)) {
@@ -316,7 +295,7 @@ async function main() {
 					scopes: merged.npm.scopes,
 					...(merged.npm.tokenOrgs?.length ? { orgs: merged.npm.tokenOrgs } : {}),
 					tokenName: `gh-broker ${hostname()} ${new Date().toISOString().slice(0, 10)}`,
-					...(opts.npmTokenDays ? { days: Number(opts.npmTokenDays) } : {}),
+					...(opts.npmTokenDays ? { days: opts.npmTokenDays } : {}),
 					promptHidden,
 					promptLine,
 					log
@@ -327,10 +306,10 @@ async function main() {
 				die(`npm token setup failed: ${err.message}`);
 			}
 		}
-		const fromFile = existingFile[name];
-		if (typeof fromFile === "string" && fromFile) return fromFile;
 		const explicit = explicitToken(name);
 		if (explicit) return explicit;
+		const fromFile = existingFile[name];
+		if (typeof fromFile === "string" && fromFile) return fromFile;
 		const dec = trySystemdCredDecrypt(name, join(credsDir, `${name}.cred`));
 		if (dec) {
 			log(`  ${name}: migrated from systemd-creds`);
@@ -390,7 +369,9 @@ async function main() {
 	} else {
 		const tokens = { ...existingFile };
 		for (const name of needed) {
-			if (!tokens[name] || mintsNpmToken(name)) {
+			// Same rule as systemd-creds: an explicitly supplied token (--secret, --secrets-file,
+			// env) rotates the stored one; otherwise the stored one is kept.
+			if (!tokens[name] || mintsNpmToken(name) || explicitToken(name) !== undefined) {
 				const token = await resolveToken(name);
 				if (token !== undefined) tokens[name] = token;
 				else if (!tokens[name]) skipped(name);
