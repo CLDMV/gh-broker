@@ -342,3 +342,28 @@ describe("loadConfig — npm", () => {
 		expect(() => loadConfig(writeConfig({ ...baseConfig(), npm }))).toThrow(msg);
 	});
 });
+
+describe("loadConfig — ghcr", () => {
+	const ghcr = { dropDir: "/srv/gh-broker/ghcr-drop", owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot"] } } };
+
+	it("parses a ghcr block", () => {
+		const c = loadConfig(writeConfig({ ...baseConfig(), ghcr }));
+		expect(c.ghcr?.owners.cldmv?.credential).toBe("cred:cldmv-packages");
+		expect(c.ghcr?.protectReleaseTags).toBe(true);
+	});
+
+	it("omits ghcr when absent and rejects a malformed block", () => {
+		expect(loadConfig(writeConfig(baseConfig())).ghcr).toBeUndefined();
+		expect(() => loadConfig(writeConfig({ ...baseConfig(), ghcr: { ...ghcr, dropDir: "/etc/x/y" } }))).toThrow(/config.ghcr.dropDir: may not be under \/etc/);
+	});
+
+	it("accepts the shipped config.example.json", () => {
+		const c = loadConfig(join(process.cwd(), "config.example.json"));
+		expect(c.ghcr?.dropDir).toBe("/srv/gh-broker/ghcr-drop");
+		expect(c.tools.filter((t) => t.name.startsWith("ghcr_")).map((t) => [t.name, t.mode, t.custom])).toEqual([
+			["ghcr_push", "write", true],
+			["ghcr_push_status", "read", true],
+			["ghcr_tags", "read", true]
+		]);
+	});
+});

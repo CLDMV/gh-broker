@@ -197,4 +197,17 @@ describe("buildCatalog", () => {
 		expect(catalog.map((t) => t.name)).toEqual(["get_me"]);
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/timed out after 15ms/));
 	});
+
+	it("advertises ghcr_push / ghcr_push_status / ghcr_tags with their local schemas", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const config = makeConfig([
+			{ name: "ghcr_push", mode: "write", custom: true },
+			{ name: "ghcr_push_status", mode: "read", custom: true },
+			{ name: "ghcr_tags", mode: "read", custom: true }
+		]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog.map((t) => t.name)).toEqual(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
+		expect(catalog[0]?.inputSchema).toMatchObject({ required: ["owner", "image", "tag", "archive"], additionalProperties: false });
+		expect(catalog[0]?.description).toMatch(/background job/);
+	});
 });

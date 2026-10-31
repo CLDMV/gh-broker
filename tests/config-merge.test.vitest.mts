@@ -61,4 +61,18 @@ describe("mergeConfig", () => {
 		expect(() => mergeConfig([], null)).toThrow(/example config must be an object/);
 		expect(() => mergeConfig(example, [])).toThrow(/current config must be an object/);
 	});
+
+	describe("ghcr", () => {
+		const ghcr = { dropDir: "/srv/gh-broker/ghcr-drop", owners: { cldmv: { username: "u", credential: "cred:p", images: ["hoot"] } } };
+
+		it("takes ghcr from the example (a security policy, like tools), ignoring a deployed edit", () => {
+			const current = { ...example, ghcr: { ...ghcr, owners: { cldmv: { ...ghcr.owners.cldmv, images: ["*"] } } } };
+			expect(mergeConfig({ ...example, ghcr }, current).ghcr).toEqual(ghcr);
+		});
+
+		it("adds ghcr on upgrade and drops it when the example no longer ships it", () => {
+			expect(mergeConfig({ ...example, ghcr }, example).ghcr).toEqual(ghcr);
+			expect(mergeConfig(example, { ...example, ghcr }).ghcr).toBeUndefined();
+		});
+	});
 });

@@ -83,6 +83,15 @@ describe("referencedCredNames", () => {
 		expect(referencedCredNames(cfg).sort()).toEqual(["a", "b", "npm-token"]);
 	});
 
+	it("includes each ghcr owner's credential, so the installer prompts for it", () => {
+		const cfg = {
+			owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
+			ghcr: { owners: { cldmv: { credential: "cred:cldmv-packages" } } }
+		};
+		expect(referencedCredNames(cfg).sort()).toEqual(["cldmv-packages", "cldmv-read", "cldmv-write"]);
+		expect(() => referencedCredNames({ ghcr: { owners: { o: { credential: "cred:../x" } } } })).toThrow(/unsafe credential name/);
+	});
+
 	it("returns [] with no owners", () => {
 		expect(referencedCredNames({})).toEqual([]);
 	});
