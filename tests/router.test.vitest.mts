@@ -31,6 +31,7 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "report_release_prs", mode: "read", custom: true },
 			{ name: "report_release_changes", mode: "read", custom: true },
 			{ name: "report_alert_status", mode: "read", custom: true },
+			{ name: "report_dependents", mode: "read", custom: true },
 			{ name: "report_ci_status", mode: "read", custom: true },
 			{ name: "pull_request_read", mode: "read", augment: true },
 			{ name: "list_pull_requests", mode: "read", augment: true }
@@ -322,6 +323,29 @@ describe("Router.call", () => {
 					}
 				]
 			});
+		});
+
+		it("report_dependents runs on a read-PAT Octokit and returns the JSON report as text", async () => {
+			requestMock.mockResolvedValue({ data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("report_dependents", { owner: "cldmv", name: "@cldmv/x" });
+			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
+			expect(JSON.parse((out as any).content[0].text)).toMatchObject({ package: "@cldmv/x", scanned: { candidates: 0 }, dependents: [] });
+		});
+
+		it("report_dependents looks up latest on the configured npm registry", async () => {
+			requestMock.mockResolvedValue({ data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} });
+			const fetchMock = vi.fn(async () => ({ status: 200, headers: { get: () => null }, text: async () => '{"version":"2.0.0"}' }));
+			vi.stubGlobal("fetch", fetchMock);
+			try {
+				const cfg = makeConfig({ npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://npm.example.test" } });
+				const r = new Router(cfg, secrets as any, upstream as any);
+				const out = await r.call("report_dependents", { owner: "cldmv", name: "@cldmv/x", latest: true });
+				expect(fetchMock.mock.calls[0]![0]).toBe("https://npm.example.test/@cldmv%2fx/latest");
+				expect(JSON.parse((out as any).content[0].text).latest).toBe("2.0.0");
+			} finally {
+				vi.unstubAllGlobals();
+			}
 		});
 
 		it("report_ci_status runs on a read-PAT Octokit and returns the JSON report as text", async () => {

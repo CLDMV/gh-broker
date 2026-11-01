@@ -1,0 +1,406 @@
+/**
+ *
+ *	@Project: @cldmv/gh-broker
+ *	@Filename: /src/verbs/report_dependents.ts
+ *	@Date: 2026-10-03T05:10:00+00:00 (1791004200)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-03T05:10:00+00:00 (1791004200)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+import type { Octokit } from "@octokit/core";
+import { CallBudget, CallBudgetExhausted, RateLimited, reqOne } from "./rest-client.ts";
+import { classifyRepo, type RepoTier } from "./repo-tier.ts";
+import { latestVersion, type FetchLike } from "./npm-registry.ts";
+
+/**
+ * Custom verb: report_dependents — every repo an owner has that declares a given npm
+ * package, with the declared range, the version the lockfile resolved, and the repo's flow tier.
+ *
+ * Built for the fleet-update skills (bump fix-headers / vitest-runner / slothlet), which all
+ * start by finding every consumer of one package. Discovery is ONE org-wide code search for
+ * the package name restricted to `package.json` files; every candidate is then verified by
+ * reading the manifest at the repo's default branch. The search is only a candidate list:
+ * GitHub's index lags new commits, only covers the default branch, and caps at 1000 hits, so
+ * a repo whose manifest changed recently may be missing from it. The result says so
+ * (`discovery.note`) and reports `incomplete-search` / `max-results` when the search itself
+ * tells us it is partial.
+ *
+ * Workspace members: a `package.json` below the repo root that declares the package is
+ * reported against its repo with the member path, and resolved against the repo's root
+ * lockfile (`package-lock.json` or `pnpm-lock.yaml`; other lockfiles are not read).
+ *
+ * Fan-out safety mirrors the other report verbs (see rest-client.ts): `maxRepos`,
+ * `maxFileBytes` and `maxApiCalls` cap the work; hitting a cap or GitHub's rate limit
+ * returns whatever was verified with `truncated: true` and a reason.
+ */
+
+export interface ReportDependentsInput {
+	owner: string;
+	/** npm package name, e.g. `@cldmv/fix-headers`. */
+	name: string;
+	/** Compare each resolved version with the latest published one and set `behind`. Default false. */
+	latest?: boolean;
+	/** Add each repo's flow tier (`v4` / `dev-trunk` / `non-v4`) and signals. About 3 REST calls per dependent repo. Default true. */
+	classify?: boolean;
+	/** Safety cap on candidate repos verified. Default 200, hard-capped at 500. */
+	maxRepos?: number;
+	/** Largest file (package.json or lockfile) that is read; bigger ones are listed in `unread`. Default 5 MB, hard-capped at 20 MB. */
+	maxFileBytes?: number;
+	/** Hard ceiling on total REST calls for this invocation. Default 600, hard-capped at 3000. */
+	maxApiCalls?: number;
+}
+
+export type DependencyField = "dependencies" | "devDependencies" | "peerDependencies";
+
+const FIELDS: DependencyField[] = ["dependencies", "devDependencies", "peerDependencies"];
+
+export interface Declaration {
+	/** Path of the declaring package.json within the repo. */
+	path: string;
+	/** Workspace member directory; absent for the root package.json. */
+	member?: string;
+	declared: { field: DependencyField; range: string }[];
+	/** Version the lockfile resolved for this package.json; absent when no readable lockfile has it. */
+	resolved?: string;
+	/** Only with `latest`: the resolved version is older than the latest published one. */
+	behind?: boolean;
+}
+
+export interface Dependent {
+	repo: string;
+	private: boolean;
+	defaultBranch: string;
+	/** Only with `classify`. */
+	tier?: RepoTier["tier"];
+	tierSignals?: RepoTier["signals"];
+	/** The lockfile the resolved versions came from. */
+	lockfile?: string;
+	declarations: Declaration[];
+	/** Files that could not be read or parsed, with why. Omitted when none. */
+	unread?: { path: string; reason: "missing" | "too-large" | "invalid-json" }[];
+}
+
+export type DependentsTruncatedReason = "max-results" | "incomplete-search" | "max-repos" | "max-api-calls" | "rate-limited";
+
+export interface ReportDependentsResult {
+	package: string;
+	/** Only with `latest`; absent when the lookup failed (see `latestError`) or the package is unpublished. */
+	latest?: string;
+	latestError?: string;
+	discovery: { source: "code-search"; note: string };
+	scanned: {
+		/** Distinct repos the search returned. */
+		candidates: number;
+		/** Candidates that turned out to be archived. */
+		archived: number;
+		/** Candidates that turned out to be forks. */
+		forks: number;
+		/** Candidates that were gone by the time they were read (search lag). */
+		missing: number;
+		/** Verified repos whose package.json files do not declare the package (the name only appeared in the text). */
+		notDeclared: number;
+	};
+	dependents: Dependent[];
+	truncated?: boolean;
+	truncatedReason?: DependentsTruncatedReason;
+	/** Only set when truncatedReason is "rate-limited" and GitHub sent a Retry-After. */
+	retryAfterSeconds?: number;
+}
+
+const DEFAULT_MAX_REPOS = 200;
+const HARD_MAX_REPOS = 500;
+const DEFAULT_MAX_FILE_BYTES = 5_000_000;
+const HARD_MAX_FILE_BYTES = 20_000_000;
+const DEFAULT_MAX_API_CALLS = 600;
+const HARD_MAX_API_CALLS = 3000;
+const SEARCH_PAGE_SIZE = 100;
+/** GitHub serves at most 1000 search results, i.e. 10 pages of 100. */
+const SEARCH_MAX_PAGES = 10;
+const LOCKFILES = ["package-lock.json", "pnpm-lock.yaml"];
+const NAME_PATTERN = /^(@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/;
+const DISCOVERY_NOTE =
+	"Candidates come from GitHub code search, which lags recent commits and only indexes default branches (a dev-trunk repo's real manifests live on `dev` and are not found this way); each candidate was verified against its default-branch package.json. A repo that changed very recently can be missing.";
+
+interface SearchHit {
+	path: string;
+	repository: { name: string; owner: { login: string } };
+}
+
+interface SearchResponse {
+	total_count: number;
+	incomplete_results: boolean;
+	items: SearchHit[];
+}
+
+interface RawRepo {
+	archived?: boolean;
+	fork?: boolean;
+	private?: boolean;
+	default_branch: string;
+}
+
+interface RawFile {
+	size: number;
+	content?: string;
+}
+
+/** Numeric parts of `1.2.3-pre`, padded to three, and whether a prerelease tag follows. */
+function parseVersion(v: string): { nums: number[]; pre: boolean } {
+	const [core = "", pre] = v.split(/-(.+)/);
+	const parts = core.split(".").map(Number);
+	return { nums: [0, 1, 2].map((i) => parts[i] || 0), pre: pre !== undefined };
+}
+
+/** True when `resolved` is an older version than `latest` (a prerelease sorts below its release). */
+export function isBehind(resolved: string, latest: string): boolean {
+	const a = parseVersion(resolved);
+	const b = parseVersion(latest);
+	for (let i = 0; i < 3; i++) if (a.nums[i] !== b.nums[i]) return a.nums[i]! < b.nums[i]!;
+	return a.pre && !b.pre;
+}
+
+/** Version of `name` in an npm lockfile (v2/v3 `packages`, v1 `dependencies`) for the workspace `member` (`.` = root). */
+function resolveNpmLock(text: string, member: string, name: string): string | undefined {
+	const lock = JSON.parse(text) as { packages?: Record<string, { version?: string }>; dependencies?: Record<string, { version?: string }> };
+	// Node resolves a member's own node_modules first, then the hoisted root copy.
+	const key = member === "." ? `node_modules/${name}` : `${member}/node_modules/${name}`;
+	return lock.packages?.[key]?.version ?? lock.packages?.[`node_modules/${name}`]?.version ?? lock.dependencies?.[name]?.version;
+}
+
+/** Version of `name` under the `importers:` entry for `member` in a pnpm lockfile (v6+ layout), or undefined. */
+function resolvePnpmLock(text: string, member: string, name: string): string | undefined {
+	let inImporters = false;
+	let importer: string | undefined;
+	let dep: string | undefined;
+	for (const line of text.split("\n")) {
+		if (/^\S/.test(line)) {
+			inImporters = line.startsWith("importers:");
+			importer = undefined;
+			continue;
+		}
+		if (!inImporters) continue;
+		let m = /^ {2}(?=\S)(['"]?)(.+?)\1:\s*$/.exec(line);
+		if (m) {
+			importer = m[2];
+			dep = undefined;
+			continue;
+		}
+		if (importer !== member) continue;
+		m = /^ {6}(?=\S)(['"]?)(.+?)\1:\s*$/.exec(line);
+		if (m) {
+			dep = m[2];
+			continue;
+		}
+		if (dep === name) {
+			m = /^ {8}version:\s*['"]?(\d[^\s'"(_]*)/.exec(line);
+			if (m) return m[1];
+		}
+	}
+	return undefined;
+}
+
+type ReadResult = { text: string } | { skipped: "missing" | "too-large" };
+
+/** Reads a file at `ref`: JSON metadata first (carries `size`), raw media type only for files the API leaves out (over 1 MB). */
+async function readFile(octokit: Octokit, budget: CallBudget, owner: string, repo: string, path: string, ref: string, maxBytes: number): Promise<ReadResult> {
+	let meta: RawFile;
+	try {
+		meta = await reqOne<RawFile>(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", { owner, repo, path, ref });
+	} catch (err) {
+		if ((err as { status?: number }).status !== 404) throw err;
+		return { skipped: "missing" };
+	}
+	if (meta.size > maxBytes) return { skipped: "too-large" };
+	if (meta.content) return { text: Buffer.from(meta.content, "base64").toString("utf8") };
+	const raw = await reqOne<string>(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", {
+		owner,
+		repo,
+		path,
+		ref,
+		headers: { accept: "application/vnd.github.raw+json" }
+	});
+	return { text: String(raw) };
+}
+
+export interface ReportDependentsDeps {
+	/** Injected for tests; defaults to global fetch. */
+	fetch?: FetchLike;
+	/** npm registry base URL for the `latest` lookup; defaults to registry.npmjs.org. */
+	registry?: string;
+}
+
+export async function reportDependents(octokit: Octokit, input: ReportDependentsInput, deps: ReportDependentsDeps = {}): Promise<ReportDependentsResult> {
+	if (!NAME_PATTERN.test(input.name)) throw new Error(`report_dependents: "${input.name}" is not a valid npm package name`);
+	const maxRepos = Math.min(input.maxRepos ?? DEFAULT_MAX_REPOS, HARD_MAX_REPOS);
+	const maxBytes = Math.min(input.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES, HARD_MAX_FILE_BYTES);
+	const budget = new CallBudget(Math.min(input.maxApiCalls ?? DEFAULT_MAX_API_CALLS, HARD_MAX_API_CALLS));
+	const { owner, name } = input;
+
+	const dependents: Dependent[] = [];
+	const scanned = { candidates: 0, archived: 0, forks: 0, missing: 0, notDeclared: 0 };
+	let truncatedReason: DependentsTruncatedReason | undefined;
+	let retryAfterSeconds: number | undefined;
+
+	let latest: string | undefined;
+	let latestError: string | undefined;
+	if (input.latest) {
+		try {
+			latest = await latestVersion(name, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.registry ? { registry: deps.registry } : {}) });
+		} catch (err) {
+			latestError = (err as Error).message;
+		}
+	}
+
+	try {
+		// Candidate manifests, grouped by repo.
+		const byRepo = new Map<string, Set<string>>();
+		const hits: SearchHit[] = [];
+		for (let page = 1; page <= SEARCH_MAX_PAGES; page++) {
+			const res = await reqOne<SearchResponse>(
+				octokit,
+				budget,
+				"GET /search/code",
+				{ q: `"${name}" org:${owner} filename:package.json`, per_page: SEARCH_PAGE_SIZE, page },
+				{ ignoreRateFloor: true }
+			);
+			hits.push(...res.items);
+			if (res.incomplete_results) truncatedReason ??= "incomplete-search";
+			if (res.items.length < SEARCH_PAGE_SIZE) break;
+			if (hits.length < res.total_count && page === SEARCH_MAX_PAGES) truncatedReason ??= "max-results";
+		}
+		for (const h of hits) {
+			if (h.path.split("/").pop() !== "package.json") continue;
+			const key = h.repository.name;
+			if (!byRepo.has(key)) byRepo.set(key, new Set());
+			byRepo.get(key)!.add(h.path);
+		}
+		const repoNames = [...byRepo.keys()].sort((a, b) => a.localeCompare(b));
+		scanned.candidates = repoNames.length;
+		if (repoNames.length > maxRepos) truncatedReason ??= "max-repos";
+
+		for (const repo of repoNames.slice(0, maxRepos)) {
+			let info: RawRepo;
+			try {
+				info = await reqOne<RawRepo>(octokit, budget, "GET /repos/{owner}/{repo}", { owner, repo });
+			} catch (err) {
+				if ((err as { status?: number }).status !== 404) throw err;
+				scanned.missing++;
+				continue;
+			}
+			if (info.archived) {
+				scanned.archived++;
+				continue;
+			}
+			if (info.fork) {
+				scanned.forks++;
+				continue;
+			}
+			const ref = info.default_branch;
+
+			const declarations: Declaration[] = [];
+			const unread: NonNullable<Dependent["unread"]> = [];
+			for (const path of [...byRepo.get(repo)!].sort()) {
+				const file = await readFile(octokit, budget, owner, repo, path, ref, maxBytes);
+				if ("skipped" in file) {
+					unread.push({ path, reason: file.skipped });
+					continue;
+				}
+				let manifest: Record<string, unknown>;
+				try {
+					manifest = JSON.parse(file.text) as Record<string, unknown>;
+				} catch {
+					unread.push({ path, reason: "invalid-json" });
+					continue;
+				}
+				const declared: Declaration["declared"] = [];
+				for (const field of FIELDS) {
+					const range = (manifest[field] as Record<string, unknown> | undefined)?.[name];
+					if (typeof range === "string") declared.push({ field, range });
+				}
+				if (declared.length === 0) continue;
+				const dir = path.slice(0, -"package.json".length).replace(/\/$/, "");
+				declarations.push({ path, ...(dir ? { member: dir } : {}), declared });
+			}
+			if (declarations.length === 0 && unread.length === 0) {
+				scanned.notDeclared++;
+				continue;
+			}
+
+			const entry: Dependent = { repo: `${owner}/${repo}`, private: info.private ?? false, defaultBranch: ref, declarations };
+			if (unread.length > 0) entry.unread = unread;
+
+			if (declarations.length > 0) {
+				for (const lockfile of LOCKFILES) {
+					const file = await readFile(octokit, budget, owner, repo, lockfile, ref, maxBytes);
+					if ("skipped" in file) {
+						if (file.skipped === "too-large") (entry.unread ??= []).push({ path: lockfile, reason: "too-large" });
+						continue;
+					}
+					const resolve = lockfile === "package-lock.json" ? resolveNpmLock : resolvePnpmLock;
+					try {
+						for (const d of declarations) {
+							const resolved = resolve(file.text, d.member ?? ".", name);
+							if (resolved === undefined) continue;
+							d.resolved = resolved;
+							if (latest !== undefined) d.behind = isBehind(resolved, latest);
+						}
+					} catch {
+						(entry.unread ??= []).push({ path: lockfile, reason: "invalid-json" });
+						continue;
+					}
+					entry.lockfile = lockfile;
+					break;
+				}
+			}
+
+			if (input.classify !== false && declarations.length > 0) {
+				const t = await classifyRepo(octokit, budget, owner, repo, ref);
+				entry.tier = t.tier;
+				entry.tierSignals = t.signals;
+			}
+			dependents.push(entry);
+		}
+	} catch (err) {
+		if (err instanceof RateLimited) {
+			truncatedReason = "rate-limited";
+			retryAfterSeconds = err.retryAfterSeconds;
+		} else if (err instanceof CallBudgetExhausted) {
+			truncatedReason = "max-api-calls";
+		} else {
+			throw err;
+		}
+	}
+
+	return {
+		package: name,
+		...(latest !== undefined ? { latest } : {}),
+		...(latestError !== undefined ? { latestError } : {}),
+		discovery: { source: "code-search", note: DISCOVERY_NOTE },
+		scanned,
+		dependents,
+		...(truncatedReason ? { truncated: true, truncatedReason } : {}),
+		...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {})
+	};
+}
+
+/** JSON Schema advertised to the agent for report_dependents. */
+export const REPORT_DEPENDENTS_SCHEMA = {
+	type: "object" as const,
+	required: ["owner", "name"],
+	additionalProperties: false,
+	properties: {
+		owner: { type: "string", description: "repository owner (org/user login) — selects the read credential" },
+		name: { type: "string", description: "npm package name to look for, e.g. @cldmv/fix-headers" },
+		latest: { type: "boolean", description: "compare each resolved version with the latest published version and mark the ones that are behind", default: false },
+		classify: { type: "boolean", description: "add each dependent repo's flow tier (v4 / dev-trunk / non-v4) and signals; about 3 REST calls per repo (default true)", default: true },
+		maxRepos: { type: "number", description: `safety cap on candidate repos verified (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})` },
+		maxFileBytes: { type: "number", description: `largest package.json or lockfile that is read, in bytes; bigger ones are listed in unread (default ${DEFAULT_MAX_FILE_BYTES}, hard cap ${HARD_MAX_FILE_BYTES})` },
+		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` }
+	}
+};

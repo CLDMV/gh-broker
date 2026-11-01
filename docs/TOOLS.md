@@ -5,7 +5,7 @@ Every tool the broker advertises falls into one of three categories, set per ent
 | Category | Config flag | What happens | Example |
 |---|---|---|---|
 | **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
+| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_dependents`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
 | **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s and `list_pull_requests`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
@@ -173,6 +173,63 @@ Each lockfile state is `fixed`, `vulnerable` or `unknown`, with the `path` read 
 ```
 
 **Fan-out safety** works like the other report verbs: hitting `maxRepos`, `alertLimit`, `maxApiCalls` or GitHub's rate limit returns what was finished with `truncated: true` and a `truncatedReason` (`"max-repos"` | `"max-alerts"` | `"max-api-calls"` | `"rate-limited"`, plus `retryAfterSeconds` when GitHub sent one). A repo is only reported once all of its alerts are classified; repos a cap stopped are listed in `pending`. Per-repo reads count repos where Dependabot alerts are off or unreadable in `disabled`. Each repo costs one repo read, three branch reads, one call per 100 PRs and the lockfile reads.
+
+---
+
+## `report_dependents`
+
+Every non-archived, non-fork repo an owner has that declares an npm package, with the declared range, the version the lockfile resolved and the repo's flow tier. Built for the fleet-update skills (bump a shared package everywhere), which all start by finding its consumers. Read-only, `mode: "read"`, `custom: true`.
+
+```json
+{
+	"owner": "cldmv",
+	"name": "@cldmv/fix-headers",
+	"latest": true
+}
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | Selects the read credential. |
+| `name` | string | — (required) | npm package name, e.g. `@cldmv/fix-headers`. Anything that is not a valid npm name is rejected before any call is made. |
+| `latest` | boolean | `false` | Look up the latest published version on the npm registry and set `behind` on each declaration whose resolved version is older. The lookup is unauthenticated and uses `npm.registry` from the broker config when one is set. A failed lookup is reported as `latestError` and does not fail the verb. |
+| `classify` | boolean | `true` | Add each dependent repo's flow tier (`v4` / `dev-trunk` / `non-v4`) and `tierSignals`, the same classifier `report_security_alerts` uses. About 3 REST calls per dependent repo; pass `false` to skip them. |
+| `maxRepos` | number | 200 (hard cap 500) | Candidate repos verified. |
+| `maxFileBytes` | number | 5000000 (hard cap 20000000) | Largest `package.json` or lockfile that is read. Bigger files are listed in `unread` with reason `too-large`. |
+| `maxApiCalls` | number | 600 (hard cap 3000) | Hard ceiling on total REST calls for one invocation. |
+
+**How it finds repos.** One org-wide code search (`"<name>" org:<owner> filename:package.json`, up to 10 pages of 100) produces the candidate list. Each candidate repo is then read directly: its repo record (archived and fork repos are skipped and counted), then every matching `package.json` at the default branch. A manifest counts only when the package appears as a key in `dependencies`, `devDependencies` or `peerDependencies`; a repo that merely mentions the name in text lands in `scanned.notDeclared`. Code search is not trusted for completeness: it lags recent commits, only indexes default branches and returns at most 1000 hits, so `discovery.note` says so on every result, and `incomplete_results` / a full result window set `truncated`. A dev-trunk repo whose real manifests live on `dev` is only found when its default-branch manifest also mentions the package.
+
+**Workspace members.** A `package.json` below the repo root that declares the package is reported as a declaration of its repo with `member` set to the directory, so an umbrella repo and its children appear in one place:
+
+```json
+{
+	"package": "@cldmv/fix-headers",
+	"latest": "1.5.0",
+	"discovery": { "source": "code-search", "note": "…" },
+	"scanned": { "candidates": 14, "archived": 1, "forks": 0, "missing": 0, "notDeclared": 2 },
+	"dependents": [
+		{
+			"repo": "CLDMV/electron",
+			"private": false,
+			"defaultBranch": "master",
+			"tier": "v4",
+			"tierSignals": { "v4Workflow": true, "defaultBranch": "master", "next": true, "dev": false },
+			"lockfile": "pnpm-lock.yaml",
+			"declarations": [
+				{ "path": "package.json", "declared": [{ "field": "devDependencies", "range": "^1.4.0" }], "resolved": "1.4.2", "behind": true },
+				{ "path": "tools/rummage/package.json", "member": "tools/rummage", "declared": [{ "field": "devDependencies", "range": "^1.5.0" }], "resolved": "1.5.0", "behind": false }
+			]
+		}
+	]
+}
+```
+
+**Lockfile resolution.** The root `package-lock.json` is tried first, then `pnpm-lock.yaml` (other lockfiles are not read). For npm, a member resolves against its own `node_modules` entry and then the hoisted root one; for pnpm, against that member's `importers:` entry (peer suffixes such as `1.2.3(typescript@5)` are stripped, `link:` entries yield no version). `resolved` is simply absent when there is no lockfile, it does not contain the package, or it was too large or unparseable (`unread` says which). Lockfiles over 1 MB are fetched with the raw media type, since the contents API leaves their body out.
+
+`unread` also lists manifests that could not be read: `missing` (the search is stale), `too-large` or `invalid-json`.
+
+**Fan-out safety** works like the other report verbs: hitting `maxRepos`, `maxApiCalls`, the search window or GitHub's rate limit returns what was verified so far with `truncated: true` and a `truncatedReason` (`"max-results"` | `"incomplete-search"` | `"max-repos"` | `"max-api-calls"` | `"rate-limited"`). Code search has its own small quota (10 requests a minute), so the proactive rate-limit floor is not applied to it; a real 403/429 still stops the run with `rate-limited`.
 
 ---
 

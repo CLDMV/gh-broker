@@ -59,9 +59,10 @@ async function getOrUndefined<T>(octokit: Octokit, budget: CallBudget, route: st
 	}
 }
 
-export async function classifyRepo(octokit: Octokit, budget: CallBudget, owner: string, repo: string): Promise<RepoTier> {
-	const info = await getOrUndefined<{ default_branch?: string }>(octokit, budget, "GET /repos/{owner}/{repo}", { owner, repo });
-	const defaultBranch = info?.default_branch;
+/** `knownDefaultBranch` lets a caller that already read the repo skip the extra GET. */
+export async function classifyRepo(octokit: Octokit, budget: CallBudget, owner: string, repo: string, knownDefaultBranch?: string): Promise<RepoTier> {
+	const defaultBranch =
+		knownDefaultBranch ?? (await getOrUndefined<{ default_branch?: string }>(octokit, budget, "GET /repos/{owner}/{repo}", { owner, repo }))?.default_branch;
 	const workflow = await getOrUndefined<unknown>(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", {
 		owner,
 		repo,

@@ -97,6 +97,12 @@ npm only accepts a trusted publisher on a package that already exists, so every 
 
 🚢 **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_release_prs)**
 
+### 📦 **Package Dependents**
+
+`report_dependents` finds every repo an owner has that declares an npm package, with the declared range, the lockfile-resolved version and the repo's flow tier — where a fleet-wide version bump starts.
+
+📦 **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_dependents)**
+
 ### 🐳 **Container Image Pushes Without a Registry Token**
 
 `ghcr_push` pushes a `docker save` archive to `ghcr.io/<owner>/<image>:<tag>` with a classic `write:packages` PAT the agent never sees. The image must be on an allowlist, the archive must sit in a dedicated drop directory (symlinks, hard links and paths outside it are refused), and an existing release tag is never overwritten. The push runs as a background job, uploads only the blobs the registry doesn't already have, and is tracked with `ghcr_push_status`; `ghcr_tags` checks the result.
@@ -187,6 +193,7 @@ src/
     report_unlabeled.ts  issues/PRs with no labels, one repo or org-wide
     report_security_alerts.ts  open Dependabot/CodeQL/secret alerts, one repo or org-wide
     report_release_prs.ts  open release PRs + whether each has its changelog file
+    report_dependents.ts  repos that declare an npm package, with range, resolved version and flow tier
     report_ci_status.ts  tiered CI status for a PR or every open PR in a repo
     rest-client.ts       shared rate-limit-floor + call-budget REST helpers
     issue_labels.ts      add/remove/swap/set labels on an issue or PR (write PAT)
@@ -216,7 +223,7 @@ config.sample.json   a full config with placeholder values, for reference only
 
 ## 📚 Documentation
 
-- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, and how to add a new one
+- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_dependents`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, and how to add a new one
 - **[Agent-as-Separate-User Model](docs/agent-user-model.md)** — the isolation model behind "use ≠ possession": users, groups, filesystem permissions, verified against a real host
 - **[Deploy Architecture](docs/deploy-architecture.md)** — config merge, secret store backends, node handling, the installer's full flow
 - **[Install Guide](deploy/README.md)** — prerequisites, PAT scopes, install/upgrade command, flags

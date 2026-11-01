@@ -29,6 +29,7 @@ import {
 	type ReplyReviewThreadInput
 } from "./verbs/review_thread.ts";
 import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlabeled.ts";
+import { reportDependents, type ReportDependentsInput } from "./verbs/report_dependents.ts";
 import { reportSecurityAlerts, type ReportSecurityAlertsInput } from "./verbs/report_security_alerts.ts";
 import { reportReleasePrs, type ReportReleasePrsInput } from "./verbs/report_release_prs.ts";
 import { reportReleaseChanges, type ReportReleaseChangesInput } from "./verbs/report_release_changes.ts";
@@ -179,6 +180,11 @@ export class Router {
 			case "report_security_alerts": {
 				const octokit = new Octokit({ auth: token });
 				const out = await reportSecurityAlerts(octokit, args as unknown as ReportSecurityAlertsInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "report_dependents": {
+				const octokit = new Octokit({ auth: token });
+				const out = await reportDependents(octokit, args as unknown as ReportDependentsInput, this.config.npm?.registry ? { registry: this.config.npm.registry } : {});
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			case "report_release_prs": {

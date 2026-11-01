@@ -135,6 +135,12 @@ describe("classifyRepo", () => {
 		});
 	const run = (o: any) => classifyRepo(o, new CallBudget(50), "cldmv", "r");
 
+	it("skips the repo GET when the default branch is already known", async () => {
+		const o = make({ workflow: true, next: "n" });
+		const out = await classifyRepo(o, new CallBudget(50), "cldmv", "r", "master");
+		expect(out.tier).toBe("v4");
+		expect(o.request.mock.calls.map((c: any[]) => c[0])).not.toContain("GET /repos/{owner}/{repo}");
+	});
 	it("non-v4 when the release workflow is missing, even with next/hotfixes branches", async () => {
 		const out = await run(make({ workflow: false, next: "m" }));
 		expect(out).toEqual({ tier: "non-v4", signals: { v4Workflow: false, defaultBranch: "master" } });
