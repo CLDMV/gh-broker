@@ -32,7 +32,7 @@ import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlab
 import { reportSecurityAlerts, type ReportSecurityAlertsInput } from "./verbs/report_security_alerts.ts";
 import { reportReleasePrs, type ReportReleasePrsInput } from "./verbs/report_release_prs.ts";
 import { issueLabels, type IssueLabelsInput } from "./verbs/issue_labels.ts";
-import { reportCiStatus, ciStatusForHeadSha, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
+import { reportCiStatus, ciStatusForHeadSha, ciStatusForHeads, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
 import { npmScaffold } from "./verbs/npm_scaffold.ts";
 import { NpmRegistry } from "./verbs/npm-registry.ts";
 import { GhcrService } from "./verbs/ghcr_push.ts";
@@ -273,6 +273,40 @@ export class Router {
 					fetchFailedJobLogs: this.makeJobLogsFetcher(owner, repo, token)
 				});
 				textBlock.text = JSON.stringify({ ...(pr as object), ci });
+				return result;
+			}
+			case "list_pull_requests": {
+				// Same opt-in contract as pull_request_read, applied to each item of the list.
+				// Detail is capped by maxDetail; see ciStatusForHeads for the shared budget.
+				const { ciVerbosity, logLines, maxDetail, ...upstreamArgs } = args as Record<string, unknown> & { ciVerbosity?: number; logLines?: number; maxDetail?: number };
+				const result = await this.upstream.forward(tool, upstreamArgs, token);
+				if (ciVerbosity === undefined) return result;
+
+				const textBlock = result.content?.find((c) => (c as { type?: string }).type === "text") as { text?: string } | undefined;
+				if (!textBlock?.text) return result;
+				let list: unknown;
+				try {
+					list = JSON.parse(textBlock.text);
+				} catch {
+					return result;
+				}
+				if (!Array.isArray(list)) return result;
+				const heads: Array<{ number: number; sha: string }> = [];
+				for (const item of list as Array<{ number?: unknown; head?: { sha?: unknown } }>) {
+					if (typeof item?.number === "number" && typeof item.head?.sha === "string") heads.push({ number: item.number, sha: item.head.sha });
+				}
+				if (heads.length === 0) return result;
+
+				const repo = String(upstreamArgs.repo ?? "");
+				const octokit = new Octokit({ auth: token });
+				const cis = await ciStatusForHeads(octokit, owner, repo, heads, {
+					verbosity: Number(ciVerbosity),
+					logLines: logLines !== undefined ? Number(logLines) : undefined,
+					maxDetail: maxDetail !== undefined ? Number(maxDetail) : undefined,
+					fetchFailedJobLogs: this.makeJobLogsFetcher(owner, repo, token)
+				});
+				const byNumber = new Map(cis.map((c) => [c.pull, c]));
+				textBlock.text = JSON.stringify((list as Array<{ number?: unknown }>).map((item) => (typeof item?.number === "number" && byNumber.has(item.number) ? { ...item, ci: byNumber.get(item.number) } : item)));
 				return result;
 			}
 			default:

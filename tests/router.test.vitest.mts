@@ -30,7 +30,8 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "report_security_alerts", mode: "read", custom: true },
 			{ name: "report_release_prs", mode: "read", custom: true },
 			{ name: "report_ci_status", mode: "read", custom: true },
-			{ name: "pull_request_read", mode: "read", augment: true }
+			{ name: "pull_request_read", mode: "read", augment: true },
+			{ name: "list_pull_requests", mode: "read", augment: true }
 		],
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
 		...overrides
@@ -434,6 +435,96 @@ describe("Router.call", () => {
 			const out = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get", ciVerbosity: 0 });
 			expect(out).toEqual({ content: [{ type: "text", text: "not json" }] });
 			expect(Octokit).not.toHaveBeenCalled();
+		});
+
+		describe("list_pull_requests", () => {
+			const listText = (items: unknown) => ({ content: [{ type: "text", text: JSON.stringify(items) }] });
+			const prs = [
+				{ number: 5, title: "a", head: { sha: "s5" } },
+				{ number: 6, title: "b", head: { sha: "s6" } }
+			];
+			const base = { owner: "cldmv", repo: "gh-broker", state: "open" };
+
+			it("forwards byte-identically when ciVerbosity is absent", async () => {
+				upstream.forward.mockResolvedValue(listText(prs));
+				const r = new Router(makeConfig(), secrets as any, upstream as any);
+				const out = await r.call("list_pull_requests", base);
+				expect(out).toEqual(listText(prs));
+				expect(upstream.forward).toHaveBeenCalledWith("list_pull_requests", base, "token:cred:cldmv-read");
+				expect(Octokit).not.toHaveBeenCalled();
+			});
+
+			it("tier 0 adds a ci summary to each item, strips the extension params and keeps other fields", async () => {
+				upstream.forward.mockResolvedValue(listText(prs));
+				requestMock
+					.mockResolvedValueOnce({ data: { workflow_runs: [{ id: 1, name: "CI", status: "completed", conclusion: "failure", html_url: "u" }] }, headers: {} })
+					.mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
+				const r = new Router(makeConfig(), secrets as any, upstream as any);
+				const out: any = await r.call("list_pull_requests", { ...base, ciVerbosity: 0, logLines: 5, maxDetail: 1 });
+				expect(upstream.forward).toHaveBeenCalledWith("list_pull_requests", base, "token:cred:cldmv-read");
+				expect(JSON.parse(out.content[0].text)).toEqual([
+					{ ...prs[0], ci: { pull: 5, summary: { passed: 0, failed: 1, pending: 0 } } },
+					{ ...prs[1], ci: { pull: 6, summary: { passed: 0, failed: 0, pending: 0 } } }
+				]);
+			});
+
+			it("tier 1 caps detail at maxDetail and flags the rest", async () => {
+				upstream.forward.mockResolvedValue(listText(prs));
+				const failing = { id: 1, name: "CI", status: "completed", conclusion: "failure", html_url: "u" };
+				requestMock.mockImplementation(async (route: string) =>
+					route.endsWith("/jobs")
+						? { data: { jobs: [{ id: 7, name: "test", status: "completed", conclusion: "failure", html_url: "j", steps: [] }] }, headers: {} }
+						: { data: { workflow_runs: [failing] }, headers: {} }
+				);
+				const r = new Router(makeConfig(), secrets as any, upstream as any);
+				const out: any = await r.call("list_pull_requests", { ...base, ciVerbosity: 1, maxDetail: 1 });
+				const items = JSON.parse(out.content[0].text);
+				expect(items[0].ci.failures).toEqual([{ workflow: "CI", job: "test", runId: 1, runUrl: "u", conclusion: "failure" }]);
+				expect(items[1].ci).toEqual({ pull: 6, summary: { passed: 0, failed: 1, pending: 0 }, truncated: true, truncatedReason: "max-detail" });
+			});
+
+			it("tier 3 fetches failing job logs via get_job_logs", async () => {
+				upstream.forward.mockImplementation(async (tool: string) => {
+					if (tool === "list_pull_requests") return listText([prs[0]]);
+					return { content: [{ type: "text", text: JSON.stringify({ logs: [{ job_id: 7, logs_content: "boom" }] }) }] };
+				});
+				requestMock.mockImplementation(async (route: string) =>
+					route.endsWith("/jobs")
+						? { data: { jobs: [{ id: 7, name: "test", status: "completed", conclusion: "failure", html_url: "j", steps: [] }] }, headers: {} }
+						: { data: { workflow_runs: [{ id: 1, name: "CI", status: "completed", conclusion: "failure", html_url: "u" }] }, headers: {} }
+				);
+				const r = new Router(makeConfig(), secrets as any, upstream as any);
+				const out: any = await r.call("list_pull_requests", { ...base, ciVerbosity: 3, logLines: 9 });
+				expect(upstream.forward).toHaveBeenCalledWith("get_job_logs", expect.objectContaining({ run_id: 1, tail_lines: 9 }), "token:cred:cldmv-read");
+				expect(JSON.parse(out.content[0].text)[0].ci.failures[0].logTail).toBe("boom");
+			});
+
+			it("marks PRs truncated once the rate-limit floor is hit", async () => {
+				upstream.forward.mockResolvedValue(listText(prs));
+				requestMock.mockResolvedValue({ data: { workflow_runs: [] }, headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "10" } });
+				const r = new Router(makeConfig(), secrets as any, upstream as any);
+				const out: any = await r.call("list_pull_requests", { ...base, ciVerbosity: 0 });
+				const items = JSON.parse(out.content[0].text);
+				expect(items.map((i: any) => i.ci.truncatedReason)).toEqual(["rate-limited", "rate-limited"]);
+				expect(requestMock).toHaveBeenCalledTimes(1);
+			});
+
+			it("leaves items without number/head.sha untouched and resolves a missing repo to empty", async () => {
+				upstream.forward.mockResolvedValue(listText([null, { title: "odd" }, prs[0]]));
+				requestMock.mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
+				const r = new Router(makeConfig(), secrets as any, upstream as any);
+				const out: any = await r.call("list_pull_requests", { owner: "cldmv", ciVerbosity: 0 });
+				expect(JSON.parse(out.content[0].text)).toEqual([null, { title: "odd" }, { ...prs[0], ci: { pull: 5, summary: { passed: 0, failed: 0, pending: 0 } } }]);
+			});
+
+			it("returns the result untouched for no text block, non-JSON, non-array, or nothing to look up", async () => {
+				const r = new Router(makeConfig(), secrets as any, upstream as any);
+				for (const res of [{ content: [] }, { content: [{ type: "text", text: "not json" }] }, listText({ not: "an array" }), listText([]), listText([{ title: "x" }])]) {
+					upstream.forward.mockResolvedValue(res);
+					expect(await r.call("list_pull_requests", { ...base, ciVerbosity: 0 })).toEqual(res);
+				}
+				expect(Octokit).not.toHaveBeenCalled();
+			});
 		});
 
 		it("just forwards an augment-flagged tool with no dispatchAugmented case for it", async () => {

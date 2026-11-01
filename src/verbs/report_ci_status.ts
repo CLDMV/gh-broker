@@ -105,7 +105,7 @@ export interface CiFailure {
 	logTail?: string;
 }
 
-export type TruncatedReason = "max-pulls" | "max-api-calls" | "rate-limited";
+export type TruncatedReason = "max-pulls" | "max-api-calls" | "rate-limited" | "max-detail";
 
 interface Truncation {
 	truncated: true;
@@ -128,6 +128,8 @@ const DEFAULT_LOG_LINES = 200;
 const HARD_LOG_LINES = 2000;
 const DEFAULT_MAX_PULLS = 50;
 const HARD_MAX_PULLS = 200;
+const DEFAULT_MAX_DETAIL = 10;
+const HARD_MAX_DETAIL = 50;
 const DEFAULT_MAX_API_CALLS = 250;
 const HARD_MAX_API_CALLS = 1000;
 
@@ -278,6 +280,51 @@ export async function ciStatusForHeadSha(
 		Math.min(opts.logLines ?? DEFAULT_LOG_LINES, HARD_LOG_LINES),
 		opts.fetchFailedJobLogs
 	);
+}
+
+/**
+ * CI status for a whole list of PRs whose head shas are already known — used by
+ * router.ts's `list_pull_requests` augmentation. Returns one result per input, in
+ * order. One call budget and rate-limit floor are shared across the list, and the
+ * list stops being evaluated the moment either runs out: every PR from there on gets
+ * an empty summary plus the same `truncated`/`truncatedReason`.
+ *
+ * Detail (tier >= 1) is capped at the first `maxDetail` PRs (default 10, hard cap 50).
+ * Later PRs still get their tier-0 counts, flagged `truncated: true` with
+ * `truncatedReason: "max-detail"` so the caller can tell the detail was withheld
+ * rather than that those PRs are healthy.
+ */
+export async function ciStatusForHeads(
+	octokit: Octokit,
+	owner: string,
+	repo: string,
+	heads: Array<{ number: number; sha: string }>,
+	opts: { verbosity?: number; logLines?: number; maxDetail?: number; maxApiCalls?: number; fetchFailedJobLogs?: FailedJobLogsFetcher } = {}
+): Promise<CiStatusResult[]> {
+	const budget = new CallBudget(Math.min(opts.maxApiCalls ?? DEFAULT_MAX_API_CALLS, HARD_MAX_API_CALLS));
+	const verbosity = clampVerbosity(opts.verbosity);
+	const logLines = Math.min(opts.logLines ?? DEFAULT_LOG_LINES, HARD_LOG_LINES);
+	const maxDetail = Math.min(Math.max(opts.maxDetail ?? DEFAULT_MAX_DETAIL, 0), HARD_MAX_DETAIL);
+
+	const results: CiStatusResult[] = [];
+	let stopped: Truncation | undefined;
+	for (const [i, head] of heads.entries()) {
+		if (stopped) {
+			results.push({ pull: head.number, summary: { passed: 0, failed: 0, pending: 0 }, ...stopped });
+			continue;
+		}
+		const detailed = i < maxDetail;
+		const r = await computeForPull(octokit, budget, owner, repo, head.number, head.sha, detailed ? verbosity : 0, logLines, opts.fetchFailedJobLogs);
+		if (r.truncated) {
+			stopped = { truncated: true, truncatedReason: r.truncatedReason as TruncatedReason, ...(r.retryAfterSeconds !== undefined ? { retryAfterSeconds: r.retryAfterSeconds } : {}) };
+			results.push(r);
+		} else if (!detailed && verbosity >= 1) {
+			results.push({ ...r, truncated: true, truncatedReason: "max-detail" });
+		} else {
+			results.push(r);
+		}
+	}
+	return results;
 }
 
 export async function reportCiStatus(

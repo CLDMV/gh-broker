@@ -142,12 +142,29 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 			continue;
 		}
 		const base = up ?? { name: rule.name, description: `(${rule.mode}) proxied to the GitHub MCP`, inputSchema: { type: "object" } };
-		if (rule.augment && rule.name === "pull_request_read") {
+		if (rule.augment && (rule.name === "pull_request_read" || rule.name === "list_pull_requests")) {
 			// Layer gh-broker's own extension params onto the real upstream schema — the
 			// forwarded call still needs pull_request_read's actual params (method,
 			// pullNumber, ...); this ADDS to that, it doesn't replace it. See router.ts's
 			// dispatchAugmented for why gh-broker can extend a proxied tool's contract.
 			const baseSchema = base.inputSchema as { properties?: Record<string, unknown>; [k: string]: unknown };
+			if (rule.name === "list_pull_requests") {
+				tools.push({
+					...base,
+					description: `${base.description} gh-broker extension: pass "ciVerbosity" (0-3) to add a "ci" field to each listed PR — 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log. Costs at least one API call per listed PR; detail (1-3) is only fetched for the first "maxDetail" PRs (default 10, max 50), and later PRs carry counts with truncated:true. "logLines" tunes tier 3's tail length.`,
+					inputSchema: {
+						...baseSchema,
+						type: "object",
+						properties: {
+							...(baseSchema.properties ?? {}),
+							ciVerbosity: { type: "number", enum: [0, 1, 2, 3], description: "gh-broker extension: add a ci field to each listed PR at this verbosity" },
+							logLines: { type: "number", description: "gh-broker extension: tier-3 log tail length" },
+							maxDetail: { type: "number", description: "gh-broker extension: how many PRs get tier 1-3 detail (default 10, hard cap 50)" }
+						}
+					}
+				});
+				continue;
+			}
 			tools.push({
 				...base,
 				description: `${base.description} gh-broker extension: with method "get", pass "ciVerbosity" (0-3) to also compute CI status for the PR's current head — 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log; "logLines" tunes tier 3's tail length.`,
