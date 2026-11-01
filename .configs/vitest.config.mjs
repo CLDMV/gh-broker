@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T12:58:10-07:00 (1793476690)
+ *	@Last modified time: 2026-10-31T23:26:18-07:00 (1793514378)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -29,9 +29,9 @@ export default defineConfig({
 		reporters: ["dot"],
 		coverage: {
 			provider: "v8",
-			// The installer's pure decision modules are measured too; the rest of deploy/lib
-			// (systemd, prompts, smoke test) drives the host and isn't unit-tested.
-			include: ["src/**/*.ts", "deploy/lib/credentials.mjs", "deploy/lib/install-args.mjs", "deploy/lib/npm-setup.mjs"],
+			// Every installer module is measured; the host-facing ones (systemd, prompts, smoke
+			// test) are tested with their child processes and sockets mocked.
+			include: ["src/**/*.ts", "deploy/lib/**/*.mjs"],
 			// index.ts is the process entrypoint (arg parse + wire + listen);
 			// types.ts is type-only (elided at compile time — zero runtime code).
 			// Neither is unit-testable. server.ts (the stdio<->socket bridge) is

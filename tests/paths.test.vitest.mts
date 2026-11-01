@@ -46,6 +46,11 @@ describe("paths", () => {
 		const win = await import("../src/paths.ts");
 		expect(win.configDir()).toContain("gh-broker");
 
+		vi.resetModules();
+		vi.doMock("node:process", () => ({ platform: "win32", env: {} }));
+		const winDefault = await import("../src/paths.ts");
+		expect(winDefault.configDir()).toContain("C:\\ProgramData");
+
 		vi.doUnmock("node:process");
 		vi.resetModules();
 	});

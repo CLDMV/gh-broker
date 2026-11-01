@@ -203,6 +203,16 @@ describe("reportReleasePrs", () => {
 		expect(out.releasePrs).toEqual([]);
 	});
 
+	it("stops with rate-limited when the changelog lookup itself is rate limited", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === "GET /search/issues") return search([hit("a", 1, "release: v1.0.0")]);
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pull();
+			throw status(429, "Too Many Requests");
+		});
+		const out = await reportReleasePrs(octokit, { owner: "cldmv" });
+		expect(out.truncatedReason).toBe("rate-limited");
+	});
+
 	it("omits retryAfterSeconds when GitHub sent none", async () => {
 		const octokit = octokitWith(async () => { throw status(429, "Too Many Requests"); });
 		const out = await reportReleasePrs(octokit, { owner: "cldmv" });

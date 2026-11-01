@@ -124,6 +124,12 @@ describe("buildCatalog", () => {
 		expect(without[0]?.description).toMatch(/pass the full set/);
 	});
 
+	it("warns on issue_write even when the upstream tool carries no description", async () => {
+		upstream.listToolsFor.mockResolvedValue([{ name: "issue_write", inputSchema: { type: "object" } }]);
+		const catalog = await buildCatalog(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);
+		expect(catalog[0]?.description).toMatch(/^WARNING \(gh-broker\): "labels" REPLACES/);
+	});
+
 	it("still warns on issue_write when the upstream fetch fails (minimal schema)", async () => {
 		upstream.listToolsFor.mockRejectedValue(new Error("down"));
 		const catalog = await buildCatalog(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:13:27-07:00 (1793470407)
+ *	@Last modified time: 2026-10-31T23:26:29-07:00 (1793514389)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -171,6 +171,8 @@ export function currentNodeBin() {
 function mkdirp(path, mode, uid, gid) {
 	if (!existsSync(path)) mkdirSync(path, { recursive: true, mode });
 	chmodSync(path, mode);
+	// Every caller passes a resolved uid and gid (requireUid/requireGid throw otherwise), so the skipped-chown branch is unreachable.
+	/* v8 ignore else */
 	if (uid !== undefined && gid !== undefined) chownSync(path, uid, gid);
 }
 

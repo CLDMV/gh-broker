@@ -245,6 +245,21 @@ describe("issueLabels", () => {
 			expect(gh.issue).toEqual(["type: bug"]);
 		});
 
+		it("reports a set as applied when only building the result fails", async () => {
+			// The PUT succeeds but answers with a label that has no name, which the result builder cannot lowercase.
+			const g = fakeGitHub(REPO, ["type: bug"]);
+			const inner = g.request.getMockImplementation()!;
+			g.request.mockImplementation(async (route: string, p: any) => (route.startsWith("PUT") ? { data: [{}] } : inner(route, p)));
+			const err = await issueLabels(g.octokit, { ...base, set: ["type: bug"] }).catch((e) => e);
+			expect(err.message).toMatch(/failed part-way on cldmv\/gh-broker#117: .*Applied: set \[type: bug\]\. Not applied: nothing\.$/);
+		});
+
+		it("treats label lists that are not arrays as empty", async () => {
+			const request = vi.fn(async (route: string) => (route.startsWith("POST /repos/{owner}/{repo}/issues") ? { data: null } : route.startsWith("GET /repos/{owner}/{repo}/issues") ? { data: {} } : { data: { name: "x" } }));
+			const out = await issueLabels({ request } as any, { ...base, add: "x" });
+			expect(out.labels).toEqual([]);
+		});
+
 		it("a failing first read or label lookup writes nothing and is passed through unchanged", async () => {
 			gh = fakeGitHub(REPO, ["type: bug"], { fail: (route) => (route === "GET /repos/{owner}/{repo}/labels/{name}" ? httpError(500, "Server Error") : undefined) });
 			await expect(issueLabels(gh.octokit, { ...base, add: "area: auth" })).rejects.toThrow(/^Server Error$/);

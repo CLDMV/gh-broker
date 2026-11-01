@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T13:01:59-07:00 (1793476919)
+ *	@Last modified time: 2026-10-31T23:26:34-07:00 (1793514394)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -188,6 +188,8 @@ export class Registry {
 		const go = () => this.send(method, url, { ...headers, Authorization: `Bearer ${this.token}` }, body, onBytes);
 		const res = await go();
 		if (res.status !== 401) return res;
+		// login() sets scope together with token and a token is always present here, so the "pull" fallback is unreachable; it only satisfies the type.
+		/* v8 ignore next */
 		await this.login((this.scope as "pull" | "push,pull") ?? "pull");
 		return go();
 	}

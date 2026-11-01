@@ -479,6 +479,11 @@ describe("Router.call — GHCR verbs", () => {
 		expect(secrets.resolve).not.toHaveBeenCalledWith("cred:cldmv-packages");
 	});
 
+	it("audits and rethrows a GHCR call that names no owner", async () => {
+		const r = new Router(makeConfig({ tools, ghcr }), secrets as any, { forward: vi.fn() } as any);
+		await expect(r.call("ghcr_push_status", {})).rejects.toThrow();
+	});
+
 	it("refuses GHCR verbs when config.ghcr is absent", async () => {
 		const r = new Router(makeConfig({ tools }), secrets as any, { forward: vi.fn() } as any);
 		await expect(r.call("ghcr_push", { owner: "cldmv", image: "hoot", tag: "t", archive: "a" })).rejects.toThrow(/tool "ghcr_push" is not available on this broker: GHCR pushes are not configured/);

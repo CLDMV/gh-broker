@@ -69,6 +69,49 @@ describe("indexTar", () => {
 		});
 	});
 
+	it("reads a full-width 100-character name, a GNU long link name, an empty size field and a PAX record with no value", () => {
+		const hundred = "d".repeat(100);
+		const buf = tar([
+			{ name: hundred, data: "hundred" },
+			{ name: "././@LongLink", type: "K", data: "target-file\0" },
+			{ name: "lnk", type: "2" },
+			{ name: "tgt-holder", data: "x" },
+			{ name: "empty-size", sizeField: "" },
+			{ name: "p", type: "x", data: "6 abc\n" + paxRecord("path", "after-pax") },
+			{ name: "ignored", data: "ok" }
+		]);
+		withFd(buf, (fd, size) => {
+			const { files } = indexTar(fd, size);
+			expect(readMember(fd, files.get(hundred)!, 10, "x").toString()).toBe("hundred");
+			expect(files.get("empty-size")!.size).toBe(0);
+			expect(readMember(fd, files.get("after-pax")!, 10, "x").toString()).toBe("ok");
+		});
+	});
+
+	it("stops reading a PAX header at a record with no length separator", () => {
+		const buf = tar([{ name: "p", type: "x", data: "nolengthhere" }, { name: "a", data: "x" }]);
+		withFd(buf, (fd, size) => expect(indexTar(fd, size).files.has("a")).toBe(true));
+	});
+
+	it("resolves a link whose target the GNU long link name supplies", () => {
+		const buf = tar([
+			{ name: "real", data: "payload" },
+			{ name: "././@LongLink", type: "K", data: "real\0" },
+			{ name: "alias", type: "2", linkname: "ignored" }
+		]);
+		withFd(buf, (fd, size) => expect(readMember(fd, indexTar(fd, size).files.get("alias")!, 10, "x").toString()).toBe("payload"));
+	});
+
+	it("refuses a base-256 size that is not a safe integer", () => {
+		const buf = tar([{ name: "a", data: "x", base256: true }]);
+		buf.fill(0xff, 125, 136); // 11 bytes of 0xff after the 0x80 marker: far beyond 2^53
+		let sum = 0;
+		buf.fill(0x20, 148, 156);
+		for (let i = 0; i < 512; i++) sum += buf[i]!;
+		buf.write(sum.toString(8).padStart(6, "0") + "\0 ", 148);
+		withFd(buf, (fd, size) => expect(() => indexTar(fd, size)).toThrow(/member size out of range/));
+	});
+
 	it("lets a later member replace an earlier link of the same name", () => {
 		const buf = tar([
 			{ name: "t", data: "target" },
@@ -80,6 +123,7 @@ describe("indexTar", () => {
 
 	it.each([
 		["a bad checksum", tar([{ name: "a", data: "x", badChecksum: true }]), /bad tar header checksum/],
+		["a non-octal checksum field", (() => { const b = tar([{ name: "a", data: "x" }]); b.write("zzzzzz\0 ", 148); return b; })(), /bad tar header checksum/],
 		["a non-octal size", tar([{ name: "a", data: "x", sizeField: "99999999999" }]), /bad size field/],
 		["a member past the end", tar([{ name: "a", data: "x", sizeField: "00000077777" }], { end: false }), /runs past the end/],
 		["a bad PAX record", tar([{ name: "p", type: "x", data: "zz path=x\n" }, { name: "a", data: "x" }]), /bad PAX header record/],
@@ -145,6 +189,7 @@ describe("openArchive", () => {
 		expect(() => openArchive("/etc/gh-broker/secrets.json", drop, MAX)).toThrow(/must be an existing file inside the drop directory/);
 		expect(() => openArchive("../outside.tar", drop, MAX)).toThrow(/must be an existing file inside the drop directory/);
 		expect(() => openArchive(drop, drop, MAX)).toThrow(/must be an existing file inside the drop directory/);
+		expect(() => openArchive("n".repeat(300), drop, MAX)).toThrow(/cannot open .* \(ENAMETOOLONG\)/);
 	});
 
 	it("refuses a missing drop dir", () => {
@@ -295,6 +340,38 @@ describe("planImage", () => {
 		expect(() => plan(ociArchive({ gzip: true, configMediaType: "application/x-cfg" }).archive)).toThrow(/config media type/);
 		expect(() => plan(ociArchive({ gzip: true, layerMediaType: "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip" }).archive)).toThrow(/non-distributable/);
 		expect(() => plan(ociArchive({ gzip: true, mutateManifest: (m) => (m.layers = Array.from({ length: MAX_LAYERS + 1 }, () => m.layers[0])) }).archive)).toThrow(/at most 256/);
+	});
+
+	it("refuses descriptors that carry no media type", () => {
+		expect(() => plan(ociArchive({ mutateManifest: (m) => delete m.mediaType }).archive)).toThrow(/manifest media type "undefined" is not supported/);
+		expect(() => plan(ociArchive({ mutateManifest: (m) => delete m.config.mediaType }).archive)).toThrow(/config media type "undefined" is not supported/);
+	});
+
+	it("refuses a nested index that holds more than one saved image", () => {
+		const img = ociArchive();
+		const second = { mediaType: MEDIA.ociManifest, digest: sha(img.config), size: img.config.length };
+		expect(() => plan(ociArchive({ nested: true, extraIndexEntries: [second] }).archive)).toThrow(/archive holds 2 images/);
+	});
+
+	it("refuses a docker-archive whose layer entry is not a file name", () => {
+		const config = Buffer.from(JSON.stringify({ rootfs: { diff_ids: [] } }));
+		const manifest = Buffer.from(JSON.stringify([{ Config: "cfg.json", Layers: [5] }]));
+		const buf = tar([{ name: "cfg.json", data: config }, { name: "manifest.json", data: manifest }]);
+		expect(() => plan(buf)).toThrow(/layer 1 "5" is missing from the archive/);
+	});
+
+	it("rebuilds the manifest when a layer's declared type differs from how it will be pushed", () => {
+		const p = plan(
+			ociArchive({
+				gzip: true,
+				mutateManifest: (m) => {
+					m.layers[0].mediaType = MEDIA.dockerLayerGzip;
+					m.layers[1].mediaType = MEDIA.ociLayer;
+				}
+			}).archive
+		);
+		expect(p.verbatimManifest).toBeUndefined();
+		expect(p.layers.map((l) => l.mediaType)).toEqual([MEDIA.dockerLayerGzip, MEDIA.ociLayerGzip]);
 	});
 
 	it("refuses a manifest blob whose bytes don't match its digest", () => {
