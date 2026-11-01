@@ -200,7 +200,8 @@ docs/
   deploy-architecture.md  config merge, secret store, node handling, installer flow
   agent-user-model.md     the agent-as-separate-user isolation model (example setup)
   changelog/              per-version release notes
-config.example.json  shipped defaults (token-free); merged into the deployed config
+config.example.json  shipped generic defaults (socket, upstream, tools allowlist)
+config.sample.json   a full config with placeholder values, for reference only
 ```
 
 ---
