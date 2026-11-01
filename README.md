@@ -132,7 +132,15 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ### Install
 
-gh-broker is published on npm as [`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker), but it is a system service, not a library or a global CLI. Install it from a checkout with the installer, which handles both the first install and every upgrade:
+gh-broker is a system service, not a library. The installer handles both the first install and every upgrade, and you can run it from npm or from a checkout.
+
+From npm ([`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker)), with the prebuilt bundle:
+
+```sh
+sudo npx @cldmv/gh-broker <agent-user>
+```
+
+From a checkout:
 
 ```sh
 git clone https://github.com/CLDMV/gh-broker.git
@@ -140,7 +148,7 @@ cd gh-broker
 sudo node deploy/install.mjs <agent-user>
 ```
 
-The installer creates the service user and the socket group, builds as the checkout's owner, merges the shipped defaults with the deployed config, stores the PATs in the backend you pick, installs the unit and runs a smoke test. Prerequisites, PAT scopes, unattended installs and every flag: [deploy/README.md](deploy/README.md).
+Both take the same flags. The installer creates the service user and the socket group, builds as the checkout's owner when there's no bundle yet, merges the shipped defaults with the deployed config, stores the PATs in the backend you pick, installs the unit and runs a smoke test. Prerequisites, PAT scopes, unattended installs and every flag: [deploy/README.md](deploy/README.md).
 
 ---
 

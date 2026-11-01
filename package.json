@@ -5,9 +5,15 @@
 	"type": "module",
 	"license": "Apache-2.0",
 	"bin": {
-		"gh-broker": "./dist/index.mjs"
+		"gh-broker": "./deploy/install.mjs"
 	},
 	"main": "./dist/index.mjs",
+	"files": [
+		"dist",
+		"deploy",
+		"config.example.json",
+		"config.sample.json"
+	],
 	"engines": {
 		"node": ">=22.12.0"
 	},
@@ -68,5 +74,9 @@
 	},
 	"allowScripts": {
 		"esbuild": true
+	},
+	"overrides": {
+		"katex": ">=0.19.1 <1.0.0",
+		"minimatch": "^11.0.3"
 	}
 }
