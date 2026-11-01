@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:13:29-07:00 (1793470409)
+ *	@Last modified time: 2026-11-01T00:40:55-07:00 (1793518855)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -20,14 +20,14 @@
  * `config.owners`: the registry does not accept fine-grained PATs, so it needs a classic
  * PAT with `write:packages`, and that token must only ever reach `ghcr.io`. Keeping it in
  * its own block (rather than a third ref on `owners.<o>`) keeps the existing owner
- * credentials untouched and lets the installer's merge treat the whole block as shipped
- * policy, like `tools` (see deploy/lib/config-merge.mjs).
+ * credentials untouched and lets the installer treat the whole block as operator data, set with
+ * `--ghcr-*` flags or a `--config` file (see deploy/lib/config-merge.mjs).
  *
  *   "ghcr": {
  *     "dropDir": "/srv/gh-broker/ghcr-drop",
  *     "protectReleaseTags": true,
  *     "owners": {
- *       "cldmv": { "username": "Shinrai", "credential": "cred:cldmv-packages", "images": ["hoot", "hoot-worker-*"] }
+ *       "your-org": { "username": "your-login", "credential": "cred:your-org-packages", "images": ["your-image", "your-image-worker-*"] }
  *     }
  *   }
  *
