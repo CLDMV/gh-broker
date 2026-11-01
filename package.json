@@ -4,10 +4,13 @@
 	"description": "Local credential-routing MCP proxy: holds per-org GitHub PATs out of the agent's reach, routes by repo owner, exposes a config-driven default-deny toolset in front of GitHub's hosted MCP.",
 	"type": "module",
 	"license": "Apache-2.0",
-	"bin": {
-		"gh-broker": "./dist/index.mjs"
-	},
 	"main": "./dist/index.mjs",
+	"files": [
+		"dist",
+		"deploy",
+		"config.example.json",
+		"config.sample.json"
+	],
 	"engines": {
 		"node": ">=22.12.0"
 	},
