@@ -107,19 +107,19 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ## ✨ What's New
 
-### Latest: v0.7.0 (October 2026)
+### Latest: v0.8.0 (October 2026)
 
-- **`issue_labels`: edit labels without replacing the set.** The new write verb adds, removes or swaps individual labels on an issue or PR (`swap { prefix: "status: ", to: "status: verified" }` moves a status in one call), so the priority, area and type labels next to it are never dropped the way they are by `issue_write`'s whole-set `labels`. Unknown label names are refused unless `create_missing` is set, and the call returns the resulting set.
-- **`issue_write` warns about the replacement.** Its advertised description now says that `labels` replaces the whole set and points at `issue_labels`.
-- **Dependencies.** MCP SDK 1.32.1 and a patched `proxy-addr` (CVE-2026-90711) at runtime; `@cldmv/configs` 1.3.0 and other dev-tooling bumps.
-- [View full v0.7.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.7.0.md)
+- **`npm_scaffold`: new npm packages without a manual first publish.** The new write verb publishes a broker-built `0.0.0-stage` placeholder and registers the repo's publish workflow as its trusted publisher, so CI publishes the first real release through OIDC. The npm token has no 2FA bypass: each write takes a one-time password from the user, so it's two calls, and the verb refuses any package that already exists.
+- **`ghcr_push`: container image pushes without a registry token.** Push a `docker save` archive from a drop directory to an allowlisted `ghcr.io/<owner>/<image>` as a background job, follow it with `ghcr_push_status` and check it with `ghcr_tags`. Release tags are never overwritten, and the classic PAT stays with the broker.
+- **Optional credentials.** The npm and GHCR tokens can be skipped at install; their tools stay hidden until the token is stored. The installer also takes tokens via `--secret <cred-name>=<token>`.
+- [View full v0.8.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.8.0.md)
 
 ### Recent Releases
 
+- **v0.7.0** (October 2026) — `issue_labels` adds, removes or swaps single labels without replacing the set, and `issue_write` warns that its `labels` does ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.7.0.md))
 - **v0.6.1** (October 2026) — MCP SDK 1.32.0 (same-origin redirects only) and a refreshed vitest toolchain; no broker source changes ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.1.md))
 - **v0.6.0** (October 2026) — Compact per-repo roll-up, filters and flow tier for `report_security_alerts`, and release-readiness analysis for `report_release_prs` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.0.md))
 - **v0.5.1** (October 2026) — The installer keeps the existing secrets backend instead of prompting on every upgrade ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.1.md))
-- **v0.5.0** (October 2026) — New `report_security_alerts` and `report_release_prs` verbs, and a permission 403 is no longer mistaken for a rate limit ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.0.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
