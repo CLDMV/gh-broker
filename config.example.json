@@ -290,23 +290,5 @@
 			"mode": "read",
 			"custom": true
 		}
-	],
-	"owners": {
-		"cldmv": {
-			"read": "cred:cldmv-read",
-			"write": "cred:cldmv-write"
-		}
-	},
-	"ghcr": {
-		"dropDir": "/srv/gh-broker/ghcr-drop",
-		"protectReleaseTags": true,
-		"owners": {
-			"cldmv": {
-				"username": "Shinrai",
-				"credential": "cred:cldmv-packages",
-				"images": ["hoot", "hoot-worker-*"]
-			}
-		}
-	},
-	"defaultOwner": "cldmv"
+	]
 }

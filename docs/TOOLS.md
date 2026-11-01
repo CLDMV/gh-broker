@@ -401,18 +401,18 @@ Push a container image to `ghcr.io/<owner>/<image>:<tag>` from a `docker save` a
 
 ```sh
 # as the agent
-docker save hoot:1.4.0 -o /srv/gh-broker/ghcr-drop/hoot-1.4.0.tar
-chmod g+r /srv/gh-broker/ghcr-drop/hoot-1.4.0.tar
+docker save your-image:1.4.0 -o /srv/gh-broker/ghcr-drop/your-image-1.4.0.tar
+chmod g+r /srv/gh-broker/ghcr-drop/your-image-1.4.0.tar
 ```
 
 ```json
-{ "owner": "cldmv", "image": "hoot", "tag": "1.4.0", "archive": "hoot-1.4.0.tar" }
+{ "owner": "your-org", "image": "your-image", "tag": "1.4.0", "archive": "your-image-1.4.0.tar" }
 ```
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
 | `owner` | string | — (required) | Must be configured in `config.ghcr.owners` (registry credential + allowlist), with its credential stored. No `config.owners` entry or GitHub PAT is needed. |
-| `image` | string | — (required) | The name under `ghcr.io/<owner>/`, e.g. `hoot`. Lowercase OCI path syntax. Must match one of `config.ghcr.owners.<owner>.images`. |
+| `image` | string | — (required) | The name under `ghcr.io/<owner>/`, e.g. `your-image`. Lowercase OCI path syntax. Must match one of `config.ghcr.owners.<owner>.images`. |
 | `tag` | string | — (required) | OCI tag grammar: `[A-Za-z0-9_][A-Za-z0-9._-]{0,127}`. |
 | `archive` | string | — (required) | Path to the archive inside `config.ghcr.dropDir`, absolute or relative to it. |
 
@@ -420,10 +420,10 @@ The call validates everything, exchanges the PAT for a registry token, checks a 
 
 ```json
 {
-	"owner": "cldmv",
-	"image": "ghcr.io/cldmv/hoot",
+	"owner": "your-org",
+	"image": "ghcr.io/your-org/your-image",
 	"tag": "1.4.0",
-	"archive": "/srv/gh-broker/ghcr-drop/hoot-1.4.0.tar",
+	"archive": "/srv/gh-broker/ghcr-drop/your-image-1.4.0.tar",
 	"archiveBytes": 1288490188,
 	"format": "oci-layout",
 	"job": "4c0f2a8e-61b1-4f3e-9b0e-5d1a7e9b2c11",
@@ -462,7 +462,7 @@ The call validates everything, exchanges the PAT for a registry token, checks a 
 Progress of a `ghcr_push` job, then its result. Read, `mode: "read"`, `custom: true`. No network call.
 
 ```json
-{ "owner": "cldmv", "job": "4c0f2a8e-61b1-4f3e-9b0e-5d1a7e9b2c11" }
+{ "owner": "your-org", "job": "4c0f2a8e-61b1-4f3e-9b0e-5d1a7e9b2c11" }
 ```
 
 Omit `job` to list this owner's recent jobs (the newest 50 finished jobs are kept, plus everything queued or running). A job id from another owner reads as unknown.
@@ -471,7 +471,7 @@ Omit `job` to list this owner's recent jobs (the newest 50 finished jobs are kep
 {
 	"job": "4c0f2a8e-61b1-4f3e-9b0e-5d1a7e9b2c11",
 	"state": "succeeded",
-	"image": "ghcr.io/cldmv/hoot",
+	"image": "ghcr.io/your-org/your-image",
 	"tag": "1.4.0",
 	"progress": { "phase": "done", "layersTotal": 9, "blobsUploaded": 4, "blobsSkipped": 6, "bytesTotal": 431209876, "bytesSent": 118220311 },
 	"result": { "digest": "sha256:9f2c…", "mediaType": "application/vnd.oci.image.manifest.v1+json", "size": 431209876, "blobsUploaded": 4, "blobsSkipped": 6 }
@@ -487,11 +487,11 @@ Omit `job` to list this owner's recent jobs (the newest 50 finished jobs are kep
 List the tags of an allowlisted image, e.g. to check a push landed. Read, `mode: "read"`, `custom: true`. Runs on the GHCR credential with a pull-only registry token.
 
 ```json
-{ "owner": "cldmv", "image": "hoot" }
+{ "owner": "your-org", "image": "your-image" }
 ```
 
 ```json
-{ "image": "ghcr.io/cldmv/hoot", "exists": true, "tags": ["1.3.2", "1.4.0", "latest"] }
+{ "image": "ghcr.io/your-org/your-image", "exists": true, "tags": ["1.3.2", "1.4.0", "latest"] }
 ```
 
 `exists: false` with an empty list means the repository hasn't been pushed yet. The same allowlist as `ghcr_push` applies, so this can't be used to probe other images.
@@ -505,7 +505,7 @@ List the tags of an allowlisted image, e.g. to check a push landed. Read, `mode:
 	"dropDir": "/srv/gh-broker/ghcr-drop",
 	"protectReleaseTags": true,
 	"owners": {
-		"cldmv": { "username": "Shinrai", "credential": "cred:cldmv-packages", "images": ["hoot", "hoot-worker-*"] }
+		"your-org": { "username": "your-login", "credential": "cred:your-org-packages", "images": ["your-image", "your-image-worker-*"] }
 	}
 }
 ```
@@ -519,7 +519,7 @@ List the tags of an allowlisted image, e.g. to check a push landed. Read, `mode:
 | `owners.<o>.credential` | — (required) | `cred:<name>` ref to a classic PAT with `write:packages` only. The credential itself is optional: while no owner's credential is stored the `ghcr_*` tools are not exposed, and a call for an owner whose credential is missing is refused. |
 | `owners.<o>.images` | — (required) | Allowlist of image names under `ghcr.io/<o>/`. `*` matches `[a-z0-9._-]*` within one segment. |
 
-Unknown keys anywhere in the block are refused. Like `tools`, the block is shipped policy: the installer's config merge always takes it from `config.example.json`, so a tightening in the repo can't be outvoted by a stale deployed copy.
+Unknown keys anywhere in the block are refused. The block is operator data, not shipped policy: `config.example.json` carries none of it. Set it with `--ghcr-owner <org> --ghcr-username <login> --ghcr-image <glob>` (plus `--ghcr-drop-dir`, `--ghcr-max-archive-bytes`, `--[no-]protect-release-tags`) or with a `ghcr` block in an installer `--config` file, which is the way to configure several owners. The installer keeps the deployed block on upgrade. See [`deploy/README.md`](../deploy/README.md#configuring-the-install).
 
 **Threat model.** The agent is untrusted with credentials but trusted to decide what to push within the allowlist.
 

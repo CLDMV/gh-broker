@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, indexTools } from "../src/config.ts";
 
@@ -367,13 +367,22 @@ describe("loadConfig — ghcr", () => {
 		expect(() => loadConfig(writeConfig({ ...baseConfig(), ghcr: { ...ghcr, dropDir: "/etc/x/y" } }))).toThrow(/config.ghcr.dropDir: may not be under \/etc/);
 	});
 
-	it("accepts the shipped config.example.json", () => {
-		const c = loadConfig(join(process.cwd(), "config.example.json"));
-		expect(c.ghcr?.dropDir).toBe("/srv/gh-broker/ghcr-drop");
+	it("ships no owner-specific data in config.example.json, and it loads once an owner is added", () => {
+		const raw = JSON.parse(readFileSync(join(process.cwd(), "config.example.json"), "utf8"));
+		expect(Object.keys(raw).sort()).toEqual(["listen", "tools", "upstream"]);
+		const c = loadConfig(writeConfig({ ...raw, owners: { acme: { read: "cred:acme-read", write: "cred:acme-write" } } }));
 		expect(c.tools.filter((t) => t.name.startsWith("ghcr_")).map((t) => [t.name, t.mode, t.custom])).toEqual([
 			["ghcr_push", "write", true],
 			["ghcr_push_status", "read", true],
 			["ghcr_tags", "read", true]
 		]);
+	});
+
+	it("accepts the documentation-only config.sample.json merged onto the example tools", () => {
+		const raw = JSON.parse(readFileSync(join(process.cwd(), "config.example.json"), "utf8"));
+		const sample = JSON.parse(readFileSync(join(process.cwd(), "config.sample.json"), "utf8"));
+		const c = loadConfig(writeConfig({ ...sample, tools: raw.tools }));
+		expect(c.ghcr?.dropDir).toBe("/srv/gh-broker/ghcr-drop");
+		expect(c.defaultOwner).toBe("your-org");
 	});
 });
