@@ -51,6 +51,12 @@ describe("mergeConfig", () => {
 		expect(mergeConfig(example, { ...example }).npm).toBeUndefined();
 	});
 
+	it("keeps the example's scalars when current omits them, and tolerates configs with no owners", () => {
+		const merged = mergeConfig({ tools: [], listen: "unix:/a" }, { tools: [] });
+		expect(merged.listen).toBe("unix:/a");
+		expect(merged.owners).toEqual({});
+	});
+
 	it("does not mutate its inputs", () => {
 		const ex = structuredClone(example);
 		mergeConfig(ex, { ...example, listen: "unix:/z" });

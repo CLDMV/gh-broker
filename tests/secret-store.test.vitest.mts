@@ -5,16 +5,42 @@ vi.mock("node:fs", () => ({
 	readFileSync: vi.fn(),
 	writeFileSync: vi.fn(),
 	statSync: vi.fn(() => ({ size: 8 })),
-	rmSync: vi.fn()
+	rmSync: vi.fn(),
+	chmodSync: vi.fn(),
+	chownSync: vi.fn()
 }));
 
-import { readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
-import { readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "../deploy/lib/secret-store.mjs";
+import { readFileSync, existsSync, writeFileSync, rmSync, chmodSync, chownSync } from "node:fs";
+import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "../deploy/lib/secret-store.mjs";
 
 const mockRead = vi.mocked(readFileSync);
 const mockExists = vi.mocked(existsSync);
 const mockWrite = vi.mocked(writeFileSync);
 const mockRm = vi.mocked(rmSync);
+
+describe("writeSecretsFile", () => {
+	beforeEach(() => {
+		vi.mocked(writeFileSync).mockReset();
+		vi.mocked(chmodSync).mockReset();
+		vi.mocked(chownSync).mockReset();
+	});
+
+	it("writes tab-indented JSON at 0640 and chowns to root:<gid> when a gid is given", () => {
+		writeSecretsFile("/etc/s.json", { a: "tok" }, { gid: 42 });
+		expect(writeFileSync).toHaveBeenCalledWith("/etc/s.json", '{\n\t"a": "tok"\n}\n', { mode: 0o640 });
+		expect(chmodSync).toHaveBeenCalledWith("/etc/s.json", 0o640);
+		expect(chownSync).toHaveBeenCalledWith("/etc/s.json", 0, 42);
+	});
+
+	it("honours a custom uid/mode, and skips chown without a gid (including no options at all)", () => {
+		writeSecretsFile("/etc/s.json", {}, { uid: 7, gid: 9, mode: 0o600 });
+		expect(chmodSync).toHaveBeenCalledWith("/etc/s.json", 0o600);
+		expect(chownSync).toHaveBeenCalledWith("/etc/s.json", 7, 9);
+		vi.mocked(chownSync).mockClear();
+		writeSecretsFile("/etc/s.json", {});
+		expect(chownSync).not.toHaveBeenCalled();
+	});
+});
 
 describe("readSecretsFile", () => {
 	beforeEach(() => mockRead.mockReset());
@@ -22,6 +48,12 @@ describe("readSecretsFile", () => {
 	it("keeps only non-empty string values (drops numbers/objects/empties)", () => {
 		mockRead.mockReturnValue(JSON.stringify({ a: "tok", b: 123, c: "", d: { x: 1 }, e: "ok" }) as any);
 		expect(readSecretsFile("/x")).toEqual({ a: "tok", e: "ok" });
+	});
+
+	it("returns {} when the file is absent", () => {
+		mockExists.mockReturnValueOnce(false);
+		expect(readSecretsFile("/x")).toEqual({});
+		expect(mockRead).not.toHaveBeenCalled();
 	});
 
 	it("returns {} for a non-object or unparseable file", () => {
@@ -77,6 +109,7 @@ describe("referencedCredNames", () => {
 			app: { privateKey: "cred:k" }
 		};
 		expect(referencedCredNames(cfg).sort()).toEqual(["a", "b", "c", "k"]);
+		expect(referencedCredNames({ owners: { o: { read: "plain-token", write: 5 } } })).toEqual([]);
 	});
 
 	it("includes the npm token ref", () => {

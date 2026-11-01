@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T13:01:59-07:00 (1793476919)
+ *	@Last modified time: 2026-10-31T23:26:33-07:00 (1793514393)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -120,6 +120,8 @@ export function openArchive(input: unknown, dropDir: string, maxBytes: number): 
 		if (code === "ELOOP") return fail(`${candidate} is a symlink — put the archive file itself in the drop directory`);
 		if (code === "ENOENT" || code === "ENOTDIR") return fail(`${candidate} not found`);
 		if (code === "EACCES") return fail(`${candidate} is not readable by the broker — make it group-readable (chmod g+r)`);
+		// openSync errors always carry an errno code, so the "error" fallback is unreachable; it only satisfies the type.
+		/* v8 ignore next */
 		return fail(`cannot open ${candidate} (${code ?? "error"})`);
 	}
 	try {

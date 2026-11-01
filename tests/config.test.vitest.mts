@@ -263,6 +263,16 @@ describe("loadConfig — secrets", () => {
 		expect(out.secrets).toEqual({ provider: "file", path: "/etc/gh-broker/secrets.json" });
 	});
 
+	it("carries an empty secrets block, and a provider without a path, through", () => {
+		const c = baseConfig();
+		c.secrets = {};
+		expect(loadConfig(writeConfig(c)).secrets).toEqual({});
+		c.secrets = { provider: "file" };
+		expect(loadConfig(writeConfig(c)).secrets).toEqual({ provider: "file" });
+		c.secrets = { provider: "systemd-creds" };
+		expect(loadConfig(writeConfig(c)).secrets).toEqual({ provider: "systemd-creds" });
+	});
+
 	it("rejects a path without the file provider (omitted → systemd-creds default)", () => {
 		const c = baseConfig();
 		c.secrets = { path: "/etc/gh-broker/secrets.json" };

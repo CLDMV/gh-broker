@@ -9,7 +9,17 @@ import { Registry, RegistryError } from "../src/verbs/ghcr/registry.ts";
 import { pushImage } from "../src/verbs/ghcr/push.ts";
 import { planImage, MEDIA } from "../src/verbs/ghcr/archive.ts";
 import { DEFAULT_MAX_ARCHIVE_BYTES, type GhcrConfig } from "../src/verbs/ghcr/config.ts";
-import { FakeRegistry, ociArchive, dockerArchive, scratchDir, removeDir, join, sha, type FakeRegistryOptions } from "./helpers/ghcr-fixtures.mts";
+import { FakeRegistry, tar, ociArchive, dockerArchive, scratchDir, removeDir, join, sha, type FakeRegistryOptions } from "./helpers/ghcr-fixtures.mts";
+
+/** A docker-archive whose single layer member is empty (0 bytes). */
+function dockerArchiveFromParts(config: Buffer, manifest: Buffer): Buffer {
+	return tar([
+		{ name: "e/", type: "5" },
+		{ name: "e/layer.tar" },
+		{ name: "cfg.json", data: config },
+		{ name: "manifest.json", data: manifest }
+	]);
+}
 
 const PAT = "ghp_testPatValue0123456789abcdefABCDEF";
 
@@ -395,6 +405,59 @@ describe("Registry edge cases", () => {
 	it("refuses an unparseable Location", async () => {
 		const r = client();
 		expect(() => (r as any).sameOrigin("http://[", "x")).toThrow(/unparseable URL/);
+	});
+});
+
+describe("pushImage edge cases", () => {
+	it("pushes an image with an empty layer, and rewrites docker gzip layer types in a rebuilt manifest", async () => {
+		const { svc } = await service();
+		const config = Buffer.from(JSON.stringify({ architecture: "amd64", os: "linux", rootfs: { type: "layers", diff_ids: [] } }));
+		const manifest = Buffer.from(JSON.stringify([{ Config: "cfg.json", Layers: ["e/layer.tar"] }]));
+		const empty = dockerArchiveFromParts(config, manifest);
+		const job = await svc.push({ owner: "cldmv", image: "hoot", tag: "empty", archive: put(empty) });
+		await svc.queue.idle();
+		expect((svc.status({ owner: "cldmv", job: job.job }) as any).state).toBe("succeeded");
+
+		const mixed = ociArchive({
+			gzip: true,
+			mutateManifest: (m) => {
+				m.layers[0].mediaType = MEDIA.dockerLayerGzip;
+				m.layers[1].mediaType = MEDIA.ociLayer;
+			}
+		});
+		const job2 = await svc.push({ owner: "cldmv", image: "hoot", tag: "mixed", archive: put(mixed.archive) });
+		await svc.queue.idle();
+		expect((svc.status({ owner: "cldmv", job: job2.job }) as any).state).toBe("succeeded");
+		const man = JSON.parse(reg.manifests.get("mixed")!.bytes.toString());
+		expect(man.layers.map((l: any) => l.mediaType)).toEqual([MEDIA.ociLayerGzip, MEDIA.ociLayerGzip]);
+	});
+
+	it("fails the push when the archive cannot be read while gzipping a layer", async () => {
+		reg = new FakeRegistry();
+		await reg.start();
+		const r = new Registry({ base: reg.base, username: "Shinrai", password: PAT, repository: "cldmv/hoot" });
+		const buf = ociArchive().archive;
+		const p = join(drop, "closed-fd.tar");
+		writeFileSync(p, buf);
+		const fd = openSync(p, "r");
+		const plan = planImage(fd, buf.length);
+		closeSync(fd); // the stream over a closed descriptor fails with EBADF
+		await expect(pushImage(r, fd, plan, "t", { protectReleaseTags: true })).rejects.toThrow(/EBADF/);
+	});
+});
+
+describe("errors that are not Error objects", () => {
+	it("scrubs a non-Error thrown before hand-off, from the tag listing, and from a queued job", async () => {
+		const { svc } = await service();
+		const login = vi.spyOn(Registry.prototype, "login").mockRejectedValue("plain failure");
+		await expect(svc.push({ owner: "cldmv", image: "hoot", tag: "x", archive: put(ociArchive().archive) })).rejects.toThrow("plain failure");
+		await expect(svc.tags({ owner: "cldmv", image: "hoot" })).rejects.toThrow("plain failure");
+		login.mockRestore();
+
+		vi.spyOn(Registry.prototype, "blobExists").mockRejectedValue("job failure");
+		const job = await svc.push({ owner: "cldmv", image: "hoot", tag: "y", archive: put(ociArchive().archive) });
+		await svc.queue.idle();
+		expect((svc.status({ owner: "cldmv", job: job.job }) as any)).toMatchObject({ state: "failed", error: "job failure" });
 	});
 });
 
