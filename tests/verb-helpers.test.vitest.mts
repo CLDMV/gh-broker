@@ -79,6 +79,17 @@ describe("report_security_alerts — summaryOnly / filters / roll-up", () => {
 		expect(by).toEqual({ "CLDMV/v4repo": "dev-trunk", "CLDMV/old": "non-v4" });
 	});
 
+	it("classify resolves a repo name that has no owner prefix against the queried owner", async () => {
+		const o = octokitWith(async (route, p) => {
+			if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [dep(1, "x", "high", { repository: { full_name: "plain" } })], headers: {} };
+			if (route.startsWith("GET /orgs/")) return { data: [], headers: {} };
+			expect(p).toMatchObject({ owner: "cldmv", repo: "plain" });
+			throw status(404);
+		});
+		const out = await reportSecurityAlerts(o, { owner: "cldmv", classify: true });
+		expect(out.byRepo[0]).toMatchObject({ repo: "plain", tier: "non-v4" });
+	});
+
 	it("classify stops cleanly when the call budget runs out", async () => {
 		const o = octokitWith(async (route) => {
 			if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [dep(1, "a", "high")], headers: {} };
@@ -145,6 +156,15 @@ describe("classifyRepo", () => {
 	it("v4 when a dev branch exists but next carries real work", async () => {
 		expect((await run(make({ workflow: true, next: "n", dev: "d" }))).tier).toBe("v4");
 	});
+	it("classifies a v4 repo whose info lacks a default branch, comparing nothing against it", async () => {
+		const o = octokitWith(async (route, p) => {
+			if (route === "GET /repos/{owner}/{repo}") return { data: {}, headers: {} };
+			if (route.endsWith("/contents/{path}")) return { data: {}, headers: {} };
+			if (p.branch === "next") return { data: { commit: { sha: "n" } }, headers: {} };
+			throw status(404);
+		});
+		expect(await run(o)).toEqual({ tier: "v4", signals: { v4Workflow: true, next: true, dev: false } });
+	});
 	it("copes with a repo whose info can't be read", async () => {
 		const o = octokitWith(async (route) => {
 			if (route === "GET /repos/{owner}/{repo}") throw status(404);
@@ -198,6 +218,7 @@ describe("release-analysis helpers", () => {
 		expect(classifyOpenPr({ ...base, title: "feat: y" }).kind).toBe("feature");
 		expect(classifyOpenPr({ ...base, title: "feat: y", draft: true }).kind).toBe("draft");
 		expect(classifyOpenPr({ ...base, title: "docs: no version" }).version).toBeUndefined();
+		expect(classifyOpenPr({ ...base, title: "feat: y", labels: [{}] }).kind).toBe("feature"); // a label entry with no name
 	});
 
 	const long = "# P v1.2.3 Changelog\n\n## Overview\n\n" + "text ".repeat(100);
@@ -216,6 +237,10 @@ describe("release-analysis helpers", () => {
 
 	const fresh = (status: any, internal = 0): any => ({ status, expectedPrs: 1, missingUserFacing: [], missingInternal: new Array(internal).fill({ number: 1, title: "x" }), headingMatchesVersion: true, readmeMentionsVersion: true });
 	const pr = (kind: any, number = 5, version?: string): any => ({ number, title: "t", url: "u", kind, ...(version ? { version } : {}) });
+	it("decideVerdict words the reason for a changelog it has no freshness for", () => {
+		expect(decideVerdict({ hasChangelog: true, unknownVersion: false, openPrs: [], version: "1.0.0" })).toMatchObject({ verdict: "update", reason: expect.stringContaining("changelog is out of date") });
+	});
+
 	it("decideVerdict walks the decision table", () => {
 		expect(decideVerdict({ hasChangelog: false, unknownVersion: true, openPrs: [], version: null }).verdict).toBe("inspect");
 		expect(decideVerdict({ hasChangelog: true, unknownVersion: false, freshness: fresh("current"), openPrs: [pr("feature")], version: "1.0.0" }).verdict).toBe("done");
@@ -319,6 +344,27 @@ describe("report_release_prs analyze", () => {
 		const empty = octokitWith(async (route, p) => (route === "GET /repos/{owner}/{repo}/contents/{path}" ? { data: {}, headers: {} } : handler()(route, p)));
 		const b = await analyzeRelease(empty, new CallBudget(50), { owner: "CLDMV", repo: "r", pull: 5, head: "next", version: "1.2.3", changelogPath: "x" });
 		expect(b.freshness!.status).toBe("version-drift");
+	});
+
+	it("flags a doc PR for another version, tolerates commits with no message, and stops on a rate limit while reading", async () => {
+		const flight = async (route: string, p: any) => {
+			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [{ number: 21, title: "docs: v9.9.9 changelog", html_url: "u", head: { ref: "docs/x" } }], headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/contents/{path}") throw status(404);
+			return handler()(route, p);
+		};
+		const out = await reportReleasePrs(octokitWith(flight), { owner: "cldmv", analyze: true });
+		expect(out.releasePrs[0]!.analysis).toMatchObject({ verdict: "in-flight", docVersionMismatch: true });
+
+		const bare = handler({ "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits": { data: [{}, { commit: {} }], headers: {} } });
+		const quiet = await reportReleasePrs(octokitWith(bare), { owner: "cldmv", analyze: true });
+		expect(quiet.releasePrs[0]!.analysis).toMatchObject({ verdict: "done" });
+
+		const limited = async (route: string, p: any) => {
+			if (route === "GET /repos/{owner}/{repo}/contents/{path}" && p.path === "README.md") throw status(429);
+			return handler()(route, p);
+		};
+		const cut = await reportReleasePrs(octokitWith(limited), { owner: "cldmv", analyze: true });
+		expect(cut.truncatedReason).toBe("rate-limited");
 	});
 
 	it("propagates a non-404 error from a content read", async () => {

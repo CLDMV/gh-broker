@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-04T16:41:24-07:00 (1791157284)
+ *	@Last modified time: 2026-10-31T23:26:36-07:00 (1793514396)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -135,6 +135,8 @@ export function assessFreshness(version: string, changelog: string, commits: Rel
 	const missing = commits.filter((c) => !mentioned.has(c.number));
 	const missingUserFacing = missing.filter((c) => !INTERNAL_TYPES.has(c.type)).map(({ number, title }) => ({ number, title }));
 	const missingInternal = missing.filter((c) => INTERNAL_TYPES.has(c.type)).map(({ number, title }) => ({ number, title }));
+	// String.prototype.split always returns at least one element, so the "" fallback is unreachable; it only satisfies noUncheckedIndexedAccess.
+	/* v8 ignore next */
 	const firstLine = changelog.split("\n", 1)[0] ?? "";
 	const headingMatchesVersion = new RegExp(`v?${version.replace(/\./g, "\\.")}\\b`).test(firstLine);
 	const readmeMentionsVersion = readme !== undefined && new RegExp(`Latest:\\s*v?${version.replace(/\./g, "\\.")}\\b`).test(readme);

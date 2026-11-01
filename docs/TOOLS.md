@@ -5,7 +5,7 @@ Every tool the broker advertises falls into one of three categories, set per ent
 | Category | Config flag | What happens | Example |
 |---|---|---|---|
 | **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, `issue_labels`, `resolve_review_thread`, `reply_review_thread` |
+| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
 | **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
@@ -328,6 +328,61 @@ A failure before the first write (the read of the issue's labels, or a label loo
 
 ---
 
+## `npm_scaffold`
+
+Create a new npm package and register its GitHub Actions trusted publisher, so the repo's own publish workflow can release it through OIDC from then on. Write, `mode: "write"`, `custom: true`. It needs the optional `npm` integration (set up by the installer, see [deploy/README.md](../deploy/README.md#npm-integration-npm_scaffold)); without it, or while its token is not stored, the broker does not expose the tool at all (it is left out of the tool list, a call is refused like an unlisted tool, and startup logs the reason).
+
+npm only accepts a trusted publisher on a package that already exists, and that first publish needs a human's 2FA. The broker holds an npm granular access token created **without** 2FA bypass, and each call carries a one-time password the user reads from their authenticator. The token alone cannot write anything; the OTP is the human's approval for that one call. Ask the user for each code right before the call that uses it, since codes expire in about 30 seconds.
+
+```json
+{ "owner": "cldmv", "repo": "new-thing", "package": "@cldmv/new-thing", "otp": "123456" }
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | A configured owner. Its **read** PAT does the GitHub reads; the verb never writes to GitHub. |
+| `repo` | string | — (required) | The repo whose `package.json` names the package. |
+| `package` | string | — (required) | Lowercase scoped name, e.g. `@cldmv/new-thing`. Must be under a scope in `config.npm.scopes`. |
+| `otp` | string | — (required) | 6–8 digit one-time password. Never logged or returned. |
+| `workflow` | string | `publish.yml` | The repo's publish workflow file in `.github/workflows`; the trusted publisher names it. |
+
+**Guardrails, checked before any npm write.**
+
+- The scope is allowed by `config.npm.scopes`.
+- The repo exists under exactly the owner and name given (a renamed or transferred repo, which GitHub answers with a redirect, is refused), isn't archived, its `package.json` on the default branch names exactly this package and is not `"private": true`, and `.github/workflows/<workflow>` exists there.
+- The package does not exist on the registry yet. A package that exists is refused unless it is this verb's own placeholder from an earlier call (a single `0.0.0-stage` version marked `scaffoldedBy: "gh-broker"`), which is how an interrupted call resumes; the placeholder's recorded repository must be the one in this call. The lookup uses `?write=true`, so it reads the registry's primary copy rather than a possibly stale cache. The verb can never publish a version of a real package.
+
+**What it writes.**
+
+1. **Placeholder publish** (`PUT /<package>`, the request `npm publish` sends). The broker builds the tarball itself, so the agent supplies no files: a `package.json` (name, `0.0.0-stage`, the repo's `license` or `UNLICENSED`, repository, homepage, the `scaffoldedBy` marker) and a README pointing at the repo. Access is `public` for a public repo and `restricted` for a private one, the rule the CI publish uses too.
+2. **Trusted publisher** (`POST /-/package/<package>/trust`, the request `npm trust github <package> --repo <owner>/<repo> --file <workflow> --allow-publish` sends). Permission `createPackage` is npm's internal name for publish.
+
+**One code per write, so two calls.** npm requires a one-time password for every write, and a code works once. The first call publishes the placeholder and returns `status: "needs_otp"` with `done: ["publish"]` and `remaining: ["trust"]`, without sending the spent code again. Ask the user for the next code (after the authenticator changes) and call again: the publish is skipped, since the placeholder now exists, and the trusted publisher is added. A refused or expired code also returns `needs_otp` with what is left, and when npm answers that the package already has a trusted publisher (HTTP 409), the verb reads the existing configuration: if it is this repo and workflow the call is done, otherwise it fails naming what is configured (and if npm wants another code just to show it, it says so and points at the package's access page).
+
+**Result.**
+
+```json
+{
+	"status": "done",
+	"package": "@cldmv/new-thing",
+	"repository": "CLDMV/new-thing",
+	"workflow": "publish.yml",
+	"access": "public",
+	"done": ["trust"],
+	"skipped": ["publish"],
+	"version": "0.0.0-stage",
+	"url": "https://www.npmjs.com/package/@cldmv/new-thing",
+	"trustId": "…",
+	"message": "@cldmv/new-thing exists with a trusted publisher for CLDMV/new-thing (.github/workflows/publish.yml); its next release can publish through OIDC."
+}
+```
+
+That is the second call's result; `skipped` lists the steps an earlier call already did. Any other registry or GitHub failure fails the call with npm's or GitHub's own message; neither the OTP nor the token ever appears in a result, an error or the audit log.
+
+**Calls.** GitHub: one repo read and two file reads (read PAT). npm: one package lookup, at most one publish and one trust request.
+
+---
+
 ## `resolve_review_thread` / `reply_review_thread`
 
 Resolve/unresolve, or reply inside, a pull-request review thread (e.g. addressing a Copilot review comment) — gaps the hosted MCP has no tool for. Both run on the **write** PAT (`Pull requests: write`), via the `resolveReviewThread`/`unresolveReviewThread`/`addPullRequestReviewThreadReply` GraphQL mutations.
@@ -337,6 +392,142 @@ Resolve/unresolve, or reply inside, a pull-request review thread (e.g. addressin
 ```
 
 `threadId` is the review-thread **node id**, taken verbatim from `pull_request_read`'s `get_review_comments` method (each returned thread carries it as `id`). `resolve_review_thread` defaults to resolving; pass `resolve: false` to unresolve. `reply_review_thread` takes the same `threadId` plus a `body` (Markdown).
+
+---
+
+## `ghcr_push`
+
+Push a container image to `ghcr.io/<owner>/<image>:<tag>` from a `docker save` archive, without the agent ever holding a registry credential. Write, `mode: "write"`, `custom: true`. It runs on the owner's **GHCR credential** from `config.ghcr` (a classic PAT with `write:packages`), not on the owner's GitHub PATs: GHCR does not accept fine-grained PATs. The three `ghcr_*` tools are only exposed when `config.ghcr` is present and at least one of its owners' credentials is stored; otherwise they are left out of the tool list, refused like an unlisted tool, and startup logs why.
+
+```sh
+# as the agent
+docker save your-image:1.4.0 -o /srv/gh-broker/ghcr-drop/your-image-1.4.0.tar
+chmod g+r /srv/gh-broker/ghcr-drop/your-image-1.4.0.tar
+```
+
+```json
+{ "owner": "your-org", "image": "your-image", "tag": "1.4.0", "archive": "your-image-1.4.0.tar" }
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | Must be configured in `config.ghcr.owners` (registry credential + allowlist), with its credential stored. No `config.owners` entry or GitHub PAT is needed. |
+| `image` | string | — (required) | The name under `ghcr.io/<owner>/`, e.g. `your-image`. Lowercase OCI path syntax. Must match one of `config.ghcr.owners.<owner>.images`. |
+| `tag` | string | — (required) | OCI tag grammar: `[A-Za-z0-9_][A-Za-z0-9._-]{0,127}`. |
+| `archive` | string | — (required) | Path to the archive inside `config.ghcr.dropDir`, absolute or relative to it. |
+
+The call validates everything, exchanges the PAT for a registry token, checks a protected tag, and then **returns at once** with a job id; the upload itself runs in the background (images are 1–3 GB). Poll [`ghcr_push_status`](#ghcr_push_status).
+
+```json
+{
+	"owner": "your-org",
+	"image": "ghcr.io/your-org/your-image",
+	"tag": "1.4.0",
+	"archive": "/srv/gh-broker/ghcr-drop/your-image-1.4.0.tar",
+	"archiveBytes": 1288490188,
+	"format": "oci-layout",
+	"job": "4c0f2a8e-61b1-4f3e-9b0e-5d1a7e9b2c11",
+	"state": "queued",
+	"createdAt": "2026-10-31T18:02:11.412Z"
+}
+```
+
+**Archive formats.** Both outputs of `docker save` are read: the OCI image layout written by Docker 25+ (`index.json` + `blobs/sha256/…`, also what `docker buildx build --output type=oci` writes) and the older docker-archive (`manifest.json` + `<id>/layer.tar`). An archive must hold exactly one single-platform image; buildx attestation manifests are ignored. Layers that are already gzip- or zstd-compressed are pushed byte-for-byte, and so is the manifest when nothing had to change. Layers stored uncompressed (what `docker save` writes for the classic image store) are gzipped while they upload, and the manifest is then written as an OCI image manifest.
+
+**Push flow.** The OCI distribution API, driven from Node with no docker socket and no extra binaries: for each blob a `HEAD` (skip it when the registry already has it), otherwise `POST` an upload, `PATCH` the bytes, and `PUT` with the digest; then `PUT` the manifest under the tag. To make the `HEAD` check work for layers it compresses, the broker gzips each such layer once to learn its digest before uploading it, so re-pushing an unchanged image uploads nothing. That costs a second pass of CPU, but nothing is buffered in memory or written to disk. An expired registry token mid-push triggers one fresh token exchange.
+
+**Refusals, all before any upload.**
+
+| Check | Refused when |
+|---|---|
+| Arguments | an unknown key, a missing or mistyped field, an invalid image name or tag |
+| Owner | not in `config.ghcr.owners` |
+| Image | not on the owner's `images` allowlist (`*` matches within one path segment, never across `/`) |
+| Archive path | outside `dropDir` (checked on the path text before anything is opened) |
+| Archive file | a symlink, reached through a symlinked directory that leads outside `dropDir`, a hard link (`nlink > 1`), a FIFO, device or directory, empty, larger than `maxArchiveBytes`, or not readable by the broker |
+| Archive content | not an image archive, several images, an unsupported or foreign layer, a blob that is missing or doesn't match its digest or size |
+| Credential | the token exchange fails (expired PAT, missing `write:packages`) |
+| Release tag | `protectReleaseTags` is on, the tag looks like `1.2.3` / `v1.2.3`, and it already exists. Checked at submit and again right before the manifest `PUT`, so two queued pushes of the same new release tag can't both land |
+
+**Queue.** Jobs run one at a time in submission order. At most 8 can be queued or running; a ninth push is refused until one finishes. Job state is kept in memory only, so a broker restart forgets every job. A push interrupted that way leaves nothing tagged, because the tag only moves with the final manifest `PUT`.
+
+**Audit.** Two audit lines per push, besides the router's usual one: `queued` (job id, tag, archive path, size, format, layer count) and the outcome (job id, tag, manifest digest, size, blobs uploaded and skipped, archive path, or the error).
+
+**What it can't do.** Talk to any registry but `ghcr.io`, push outside `ghcr.io/<owner>/<allowlisted image>`, delete a package or version, change visibility, or read a file outside the drop directory. The broker can't delete the archive afterwards either (the drop directory belongs to the agent), so clean it up yourself.
+
+---
+
+## `ghcr_push_status`
+
+Progress of a `ghcr_push` job, then its result. Read, `mode: "read"`, `custom: true`. No network call.
+
+```json
+{ "owner": "your-org", "job": "4c0f2a8e-61b1-4f3e-9b0e-5d1a7e9b2c11" }
+```
+
+Omit `job` to list this owner's recent jobs (the newest 50 finished jobs are kept, plus everything queued or running). A job id from another owner reads as unknown.
+
+```json
+{
+	"job": "4c0f2a8e-61b1-4f3e-9b0e-5d1a7e9b2c11",
+	"state": "succeeded",
+	"image": "ghcr.io/your-org/your-image",
+	"tag": "1.4.0",
+	"progress": { "phase": "done", "layersTotal": 9, "blobsUploaded": 4, "blobsSkipped": 6, "bytesTotal": 431209876, "bytesSent": 118220311 },
+	"result": { "digest": "sha256:9f2c…", "mediaType": "application/vnd.oci.image.manifest.v1+json", "size": 431209876, "blobsUploaded": 4, "blobsSkipped": 6 }
+}
+```
+
+`state` is `queued`, `running`, `succeeded` or `failed` (then `error` says why). `progress.phase` moves through `preparing` (computing digests of layers that will be compressed), `uploading`, `manifest` and `done`. `bytesTotal` covers every blob the image references; `bytesSent` counts only what was actually uploaded.
+
+---
+
+## `ghcr_tags`
+
+List the tags of an allowlisted image, e.g. to check a push landed. Read, `mode: "read"`, `custom: true`. Runs on the GHCR credential with a pull-only registry token.
+
+```json
+{ "owner": "your-org", "image": "your-image" }
+```
+
+```json
+{ "image": "ghcr.io/your-org/your-image", "exists": true, "tags": ["1.3.2", "1.4.0", "latest"] }
+```
+
+`exists: false` with an empty list means the repository hasn't been pushed yet. The same allowlist as `ghcr_push` applies, so this can't be used to probe other images.
+
+---
+
+## GHCR configuration and threat model
+
+```json
+"ghcr": {
+	"dropDir": "/srv/gh-broker/ghcr-drop",
+	"protectReleaseTags": true,
+	"owners": {
+		"your-org": { "username": "your-login", "credential": "cred:your-org-packages", "images": ["your-image", "your-image-worker-*"] }
+	}
+}
+```
+
+| Key | Default | Notes |
+|---|---|---|
+| `dropDir` | — (required) | Absolute, normalized, at least two levels deep, and not under `/etc`, `/run`, `/home`, `/tmp`, `/root` or other system paths. The unit runs with `ProtectHome=true` and `PrivateTmp=true`, so `/srv` is the natural place. The installer creates it `2750 <agent>:gh-broker`. |
+| `protectReleaseTags` | `true` | Refuse to overwrite an existing tag matching `^v?\d+\.\d+\.\d+$`. |
+| `maxArchiveBytes` | 16 GiB | Largest archive accepted. |
+| `owners.<o>.username` | — (required) | GitHub login the classic PAT belongs to; sent as the Basic-auth user in the token exchange. |
+| `owners.<o>.credential` | — (required) | `cred:<name>` ref to a classic PAT with `write:packages` only. The credential itself is optional: while no owner's credential is stored the `ghcr_*` tools are not exposed, and a call for an owner whose credential is missing is refused. |
+| `owners.<o>.images` | — (required) | Allowlist of image names under `ghcr.io/<o>/`. `*` matches `[a-z0-9._-]*` within one segment. |
+
+Unknown keys anywhere in the block are refused. The block is operator data, not shipped policy: `config.example.json` carries none of it. Set it with `--ghcr-owner <org> --ghcr-username <login> --ghcr-image <glob>` (plus `--ghcr-drop-dir`, `--ghcr-max-archive-bytes`, `--[no-]protect-release-tags`) or with a `ghcr` block in an installer `--config` file, which is the way to configure several owners. The installer keeps the deployed block on upgrade. See [`deploy/README.md`](../deploy/README.md#configuring-the-install).
+
+**Threat model.** The agent is untrusted with credentials but trusted to decide what to push within the allowlist.
+
+- *Credential exfiltration.* The PAT is sent only in the Basic-auth header of `https://ghcr.io/token`. The registry token is sent only to `https://ghcr.io`: every URL the registry returns (upload `Location`, pagination `Link`) is refused unless it is on that origin, and redirects are never followed. The registry host is a constant, not configuration. Every error message passes through a scrubber that replaces both secret values and anything shaped like an auth header or a GitHub token, and registry error bodies are reduced to their `code: message` pairs. Results, audit lines and log lines are built from the same scrubbed strings.
+- *Confused-deputy file reads.* The broker can read files the agent can't, including its own credentials. Pushing such a file as a "layer" would put it in a registry the agent can pull from. So the archive path is checked as text first, then opened once with `O_NOFOLLOW | O_NONBLOCK`, and the open descriptor is checked: a regular file with a single link, whose real path (`/proc/self/fd/<n>`) is inside the real drop directory. Every later read is a positional read on that descriptor. Links inside the tar are resolved against the tar's own members only.
+- *Reach.* Push and list only, only to allowlisted images of configured owners. No delete, no visibility changes. The PAT should carry `write:packages` and nothing else (`write:packages` implies `read:packages`). `delete:packages` must not be granted.
+- *Resource abuse.* Archive size, tar member count, JSON member size, layer count and the job queue are all bounded.
+- *Release integrity.* With `protectReleaseTags`, a published `1.2.3` can't be replaced, so a compromised agent can't swap a released image. Mutable tags such as `latest` can still move; keep the allowlist tight.
 
 ---
 

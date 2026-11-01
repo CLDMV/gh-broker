@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T12:12:12-07:00 (1793473932)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -22,6 +22,8 @@
  * docs/deploy-architecture.md). Keeping the config token-free is what makes it
  * safe to copy between machines.
  */
+
+import type { GhcrConfig } from "./verbs/ghcr/config.ts";
 
 export type Mode = "read" | "write";
 
@@ -73,6 +75,22 @@ export interface SecretsConfig {
 	path?: string;
 }
 
+/**
+ * npm integration for `npm_scaffold`. Optional: without it the verb refuses. The token is a
+ * granular access token created by the installer without 2FA bypass, so every write it makes
+ * still needs a user-supplied one-time password.
+ */
+export interface NpmConfig {
+	/** Credential reference (e.g. "cred:npm-token") for the granular access token. */
+	token: string;
+	/** Scopes the verb may create packages in, e.g. ["@cldmv"]. */
+	scopes: string[];
+	/** Registry base URL. Defaults to https://registry.npmjs.org. */
+	registry?: string;
+	/** Installer only: npm orgs the token is also granted org read-write on when it is created. */
+	tokenOrgs?: string[];
+}
+
 export interface Config {
 	/** e.g. "unix:/run/gh-broker/gh-broker.sock" */
 	listen: string;
@@ -96,9 +114,15 @@ export interface Config {
 	app?: AppConfig;
 	/** Optional secret-store backend selection. Defaults to the systemd-creds provider. */
 	secrets?: SecretsConfig;
+	/** Optional npm integration (`npm_scaffold`). */
+	npm?: NpmConfig;
+	/** Optional GHCR push policy + credentials for the ghcr_* verbs (src/verbs/ghcr/config.ts). */
+	ghcr?: GhcrConfig;
 }
 
 /** Resolves a "cred:<name>" reference to a token, never logging it. */
 export interface SecretStore {
 	resolve(ref: string): string;
+	/** Whether an optional credential is stored (non-empty). Never throws for a missing one. */
+	has(ref: string): boolean;
 }

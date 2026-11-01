@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, indexTools } from "../src/config.ts";
 
@@ -263,6 +263,16 @@ describe("loadConfig — secrets", () => {
 		expect(out.secrets).toEqual({ provider: "file", path: "/etc/gh-broker/secrets.json" });
 	});
 
+	it("carries an empty secrets block, and a provider without a path, through", () => {
+		const c = baseConfig();
+		c.secrets = {};
+		expect(loadConfig(writeConfig(c)).secrets).toEqual({});
+		c.secrets = { provider: "file" };
+		expect(loadConfig(writeConfig(c)).secrets).toEqual({ provider: "file" });
+		c.secrets = { provider: "systemd-creds" };
+		expect(loadConfig(writeConfig(c)).secrets).toEqual({ provider: "systemd-creds" });
+	});
+
 	it("rejects a path without the file provider (omitted → systemd-creds default)", () => {
 		const c = baseConfig();
 		c.secrets = { path: "/etc/gh-broker/secrets.json" };
@@ -310,5 +320,69 @@ describe("indexTools", () => {
 		expect(map.get("get_me")).toEqual({ name: "get_me", mode: "read" });
 		expect(map.get("create_pull_request")).toEqual({ name: "create_pull_request", mode: "write", custom: false });
 		expect(map.get("missing")).toBeUndefined();
+	});
+});
+
+describe("loadConfig — npm", () => {
+	it("is absent unless configured", () => {
+		expect(loadConfig(writeConfig(baseConfig())).npm).toBeUndefined();
+	});
+
+	it("leaves registry out when it is not set", () => {
+		expect(loadConfig(writeConfig({ ...baseConfig(), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } })).npm).toEqual({ token: "cred:npm-token", scopes: ["@cldmv"] });
+	});
+
+	it("accepts a token ref, scopes, an https registry and token orgs", () => {
+		const npm = { token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://registry.npmjs.org", tokenOrgs: ["cldmv"] };
+		expect(loadConfig(writeConfig({ ...baseConfig(), npm })).npm).toEqual(npm);
+	});
+
+	it.each([
+		[[], /config.npm: must be an object/],
+		[{ scopes: ["@cldmv"] }, /config.npm.token/],
+		[{ token: "npm_inline_secret", scopes: ["@cldmv"] }, /config.npm.token/],
+		[{ token: "cred:npm-token" }, /config.npm.scopes: must be a non-empty array/],
+		[{ token: "cred:npm-token", scopes: [] }, /config.npm.scopes: must be a non-empty array/],
+		[{ token: "cred:npm-token", scopes: ["cldmv"] }, /config.npm.scopes\[0\]/],
+		[{ token: "cred:npm-token", scopes: ["@CLDMV"] }, /config.npm.scopes\[0\]/],
+		[{ token: "cred:npm-token", scopes: ["@cldmv"], registry: "http://registry.npmjs.org" }, /config.npm.registry: must be an https URL/],
+		[{ token: "cred:npm-token", scopes: ["@cldmv"], tokenOrgs: "cldmv" }, /config.npm.tokenOrgs/],
+		[{ token: "cred:npm-token", scopes: ["@cldmv"], tokenOrgs: ["@cldmv"] }, /config.npm.tokenOrgs/]
+	] as Array<[unknown, RegExp]>)("rejects an invalid npm block (%#)", (npm, msg) => {
+		expect(() => loadConfig(writeConfig({ ...baseConfig(), npm }))).toThrow(msg);
+	});
+});
+
+describe("loadConfig — ghcr", () => {
+	const ghcr = { dropDir: "/srv/gh-broker/ghcr-drop", owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot"] } } };
+
+	it("parses a ghcr block", () => {
+		const c = loadConfig(writeConfig({ ...baseConfig(), ghcr }));
+		expect(c.ghcr?.owners.cldmv?.credential).toBe("cred:cldmv-packages");
+		expect(c.ghcr?.protectReleaseTags).toBe(true);
+	});
+
+	it("omits ghcr when absent and rejects a malformed block", () => {
+		expect(loadConfig(writeConfig(baseConfig())).ghcr).toBeUndefined();
+		expect(() => loadConfig(writeConfig({ ...baseConfig(), ghcr: { ...ghcr, dropDir: "/etc/x/y" } }))).toThrow(/config.ghcr.dropDir: may not be under \/etc/);
+	});
+
+	it("ships no owner-specific data in config.example.json, and it loads once an owner is added", () => {
+		const raw = JSON.parse(readFileSync(join(process.cwd(), "config.example.json"), "utf8"));
+		expect(Object.keys(raw).sort()).toEqual(["listen", "tools", "upstream"]);
+		const c = loadConfig(writeConfig({ ...raw, owners: { acme: { read: "cred:acme-read", write: "cred:acme-write" } } }));
+		expect(c.tools.filter((t) => t.name.startsWith("ghcr_")).map((t) => [t.name, t.mode, t.custom])).toEqual([
+			["ghcr_push", "write", true],
+			["ghcr_push_status", "read", true],
+			["ghcr_tags", "read", true]
+		]);
+	});
+
+	it("accepts the documentation-only config.sample.json merged onto the example tools", () => {
+		const raw = JSON.parse(readFileSync(join(process.cwd(), "config.example.json"), "utf8"));
+		const sample = JSON.parse(readFileSync(join(process.cwd(), "config.sample.json"), "utf8"));
+		const c = loadConfig(writeConfig({ ...sample, tools: raw.tools }));
+		expect(c.ghcr?.dropDir).toBe("/srv/gh-broker/ghcr-drop");
+		expect(c.defaultOwner).toBe("your-org");
 	});
 });

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T11:23:22-07:00 (1793471002)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -15,6 +15,7 @@
 
 import { readFileSync } from "node:fs";
 import type { Config, Mode, ToolRule } from "./types.ts";
+import { parseGhcrConfig } from "./verbs/ghcr/config.ts";
 
 const MODES: readonly Mode[] = ["read", "write"];
 
@@ -113,6 +114,30 @@ export function loadConfig(path: string): Config {
 		};
 	}
 
+	let npm: Config["npm"];
+	if (c.npm !== undefined) {
+		if (typeof c.npm !== "object" || c.npm === null || Array.isArray(c.npm)) throw new Error("config.npm: must be an object");
+		const n = c.npm as Record<string, unknown>;
+		if (typeof n.token !== "string" || !n.token.startsWith("cred:")) throw new Error('config.npm.token: must be a "cred:<name>" ref');
+		if (!Array.isArray(n.scopes) || n.scopes.length === 0) throw new Error('config.npm.scopes: must be a non-empty array of scopes, e.g. ["@cldmv"]');
+		const scopes = n.scopes.map((s, i) => {
+			if (typeof s !== "string" || !/^@[a-z0-9][a-z0-9._~-]*$/.test(s)) throw new Error(`config.npm.scopes[${i}]: must be a lowercase npm scope like "@cldmv"`);
+			return s;
+		});
+		if (n.registry !== undefined && (typeof n.registry !== "string" || !/^https:\/\//.test(n.registry))) {
+			throw new Error("config.npm.registry: must be an https URL");
+		}
+		if (n.tokenOrgs !== undefined && (!Array.isArray(n.tokenOrgs) || !n.tokenOrgs.every((o) => typeof o === "string" && /^[a-z0-9][a-z0-9._~-]*$/.test(o)))) {
+			throw new Error('config.npm.tokenOrgs: must be an array of lowercase npm org names, e.g. ["cldmv"]');
+		}
+		npm = {
+			token: n.token,
+			scopes,
+			...(typeof n.registry === "string" ? { registry: n.registry } : {}),
+			...(Array.isArray(n.tokenOrgs) ? { tokenOrgs: n.tokenOrgs as string[] } : {})
+		};
+	}
+
 	return {
 		listen: c.listen,
 		upstream: c.upstream,
@@ -120,7 +145,9 @@ export function loadConfig(path: string): Config {
 		owners,
 		...(app ? { app } : {}),
 		...(secrets ? { secrets } : {}),
-		...(defaultOwner ? { defaultOwner } : {})
+		...(defaultOwner ? { defaultOwner } : {}),
+		...(npm ? { npm } : {}),
+		...(c.ghcr !== undefined ? { ghcr: parseGhcrConfig(c.ghcr) } : {})
 	};
 }
 

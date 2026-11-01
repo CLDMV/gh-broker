@@ -11,7 +11,7 @@ describe("buildCatalog", () => {
 	let errSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(() => {
-		secrets = { resolve: vi.fn(() => "tok") };
+		secrets = { resolve: vi.fn(() => "tok"), has: vi.fn(() => true) };
 		upstream = { listToolsFor: vi.fn() };
 		errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 	});
@@ -74,6 +74,26 @@ describe("buildCatalog", () => {
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
 	});
 
+	it("does not expose npm_scaffold without an npm block, or when its token is not stored", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const rules = [{ name: "npm_scaffold", mode: "write", custom: true }];
+		expect(await buildCatalog(makeConfig(rules), secrets as any, upstream as any)).toEqual([]);
+		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"npm_scaffold" is not exposed: the npm integration is not configured/));
+		secrets.has.mockReturnValue(false);
+		const noToken = { ...makeConfig(rules), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
+		expect(await buildCatalog(noToken, secrets as any, upstream as any)).toEqual([]);
+		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"npm_scaffold" is not exposed: its credential "npm-token" is not stored/));
+	});
+
+	it("advertises npm_scaffold with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const catalog = await buildCatalog({ ...makeConfig([{ name: "npm_scaffold", mode: "write", custom: true }]), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } }, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "npm_scaffold" });
+		expect(catalog[0]?.description).toMatch(/one-time password/);
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo", "package", "otp"] });
+	});
+
 	it("advertises issue_labels with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "issue_labels", mode: "write", custom: true }]);
@@ -102,6 +122,12 @@ describe("buildCatalog", () => {
 		expect(without[0]?.description).toMatch(/REPLACES/);
 		expect(without[0]?.description).not.toMatch(/issue_labels/);
 		expect(without[0]?.description).toMatch(/pass the full set/);
+	});
+
+	it("warns on issue_write even when the upstream tool carries no description", async () => {
+		upstream.listToolsFor.mockResolvedValue([{ name: "issue_write", inputSchema: { type: "object" } }]);
+		const catalog = await buildCatalog(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);
+		expect(catalog[0]?.description).toMatch(/^WARNING \(gh-broker\): "labels" REPLACES/);
 	});
 
 	it("still warns on issue_write when the upstream fetch fails (minimal schema)", async () => {
@@ -176,5 +202,33 @@ describe("buildCatalog", () => {
 		const catalog = await buildCatalog(config, secrets as any, upstream as any);
 		expect(catalog.map((t) => t.name)).toEqual(["get_me"]);
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/timed out after 15ms/));
+	});
+
+	it("advertises ghcr_push / ghcr_push_status / ghcr_tags with their local schemas", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const ghcrTools = [
+			{ name: "ghcr_push", mode: "write", custom: true },
+			{ name: "ghcr_push_status", mode: "read", custom: true },
+			{ name: "ghcr_tags", mode: "read", custom: true }
+		];
+		const ghcr = { owners: { cldmv: { credential: "cred:cldmv-packages" }, other: { credential: "cred:other-packages" } } };
+		const config = { ...makeConfig(ghcrTools), ghcr };
+		// Exposed as soon as any one GHCR owner's credential is stored.
+		secrets.has.mockImplementation((ref: string) => ref === "cred:other-packages");
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog.map((t) => t.name)).toEqual(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
+		expect(catalog[0]?.inputSchema).toMatchObject({ required: ["owner", "image", "tag", "archive"], additionalProperties: false });
+		expect(catalog[0]?.description).toMatch(/background job/);
+	});
+
+	it("does not expose the GHCR tools without config.ghcr, or while no GHCR credential is stored", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const rules = [{ name: "ghcr_push", mode: "write", custom: true }];
+		expect(await buildCatalog(makeConfig(rules), secrets as any, upstream as any)).toEqual([]);
+		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"ghcr_push" is not exposed: GHCR pushes are not configured/));
+		secrets.has.mockReturnValue(false);
+		const config = { ...makeConfig(rules), ghcr: { owners: { cldmv: { credential: "cred:cldmv-packages" } } } };
+		expect(await buildCatalog(config, secrets as any, upstream as any)).toEqual([]);
+		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/no GHCR credential is stored \("cldmv-packages"; re-run the installer/));
 	});
 });

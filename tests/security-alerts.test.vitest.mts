@@ -172,6 +172,16 @@ describe("reportSecurityAlerts — org-level reads", () => {
 		expect(out.alerts.find((a) => a.type === "secrets")).toMatchObject({ severity: "open", summary: "" });
 	});
 
+	it("leaves the location off a code scanning alert whose instance has no path", async () => {
+		const bare = { number: 7, html_url: "u", created_at: "t", repository: { full_name: "CLDMV/a" } };
+		const octokit = octokitWith(async (route) => ({
+			data: route === "GET /orgs/{owner}/code-scanning/alerts" ? [{ ...bare, most_recent_instance: { location: {} } }, { ...bare, number: 8 }] : [],
+			headers: {}
+		}));
+		const out = await reportSecurityAlerts(octokit, { owner: "cldmv" });
+		for (const a of out.alerts.filter((x) => x.type === "codeql")) expect(a).not.toHaveProperty("location");
+	});
+
 	it("flags max-alerts when a type fills its alertLimit", async () => {
 		const octokit = octokitWith(async (route) => ({ data: route.includes("dependabot") ? [dependabot(1, { repository: { full_name: "CLDMV/a" } }), dependabot(2, { repository: { full_name: "CLDMV/a" } })] : [], headers: {} }));
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv", alertLimit: 2 });

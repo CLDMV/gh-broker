@@ -241,6 +241,11 @@
 			"custom": true
 		},
 		{
+			"name": "npm_scaffold",
+			"mode": "write",
+			"custom": true
+		},
+		{
 			"name": "resolve_review_thread",
 			"mode": "write",
 			"custom": true
@@ -269,13 +274,21 @@
 			"name": "report_ci_status",
 			"mode": "read",
 			"custom": true
+		},
+		{
+			"name": "ghcr_push",
+			"mode": "write",
+			"custom": true
+		},
+		{
+			"name": "ghcr_push_status",
+			"mode": "read",
+			"custom": true
+		},
+		{
+			"name": "ghcr_tags",
+			"mode": "read",
+			"custom": true
 		}
-	],
-	"owners": {
-		"cldmv": {
-			"read": "cred:cldmv-read",
-			"write": "cred:cldmv-write"
-		}
-	},
-	"defaultOwner": "cldmv"
+	]
 }

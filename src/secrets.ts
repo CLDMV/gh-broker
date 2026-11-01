@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config, SecretStore } from "./types.ts";
 import { resolveSecretsPath } from "./paths.ts";
+import { ghcrCredRefs } from "./verbs/ghcr/config.ts";
 
 const CRED_PREFIX = "cred:";
 
@@ -48,6 +49,22 @@ export function loadSecretStore(config: Config): SecretStore {
 
 const SAFE_CRED_NAME = /^[A-Za-z0-9._-]+$/;
 
+/** A store over a reader that throws for a missing/empty credential. */
+function storeFrom(read: (name: string) => string): SecretStore {
+	return {
+		resolve: (ref) => read(credName(ref)),
+		has: (ref) => {
+			const name = credName(ref);
+			try {
+				read(name);
+				return true;
+			} catch {
+				return false;
+			}
+		}
+	};
+}
+
 /**
  * Credential names become filesystem path components (`join(dir, name)`) and are
  * interpolated into systemd drop-in lines, so constrain them to a safe charset —
@@ -66,7 +83,13 @@ function credName(ref: string): string {
 	return assertSafeName(ref.slice(CRED_PREFIX.length));
 }
 
-/** Eagerly read every referenced credential so a missing token fails at startup, not on first request. */
+/**
+ * Eagerly read every REQUIRED credential (the owners' PATs, the App key) so a missing token
+ * fails at startup, not on first request. Optional credentials (the npm token, the GHCR
+ * credentials) are only
+ * format-checked here: when one isn't stored, the tools that need it are hidden instead
+ * (see availability.ts), and the rest of the broker runs normally.
+ */
 function validateRefs(config: Config, read: (name: string) => string): void {
 	for (const [owner, creds] of Object.entries(config.owners)) {
 		for (const ref of [creds.read, creds.write]) {
@@ -82,6 +105,13 @@ function validateRefs(config: Config, read: (name: string) => string): void {
 		}
 		read(assertSafeName(config.app.privateKey.slice(CRED_PREFIX.length)));
 	}
+	if (config.npm) {
+		if (!config.npm.token.startsWith(CRED_PREFIX)) throw new Error(`secrets: config.npm.token must be a "cred:<name>" ref, got "${config.npm.token}"`);
+		assertSafeName(config.npm.token.slice(CRED_PREFIX.length));
+	}
+	// GHCR credentials are optional too: format-checked here, and the ghcr_* tools are hidden
+	// while none is stored (availability.ts).
+	for (const ref of ghcrCredRefs(config.ghcr)) credName(ref);
 }
 
 /** systemd-creds provider: read decrypted creds from $CREDENTIALS_DIRECTORY. */
@@ -105,7 +135,7 @@ function systemdCredsStore(config: Config): SecretStore {
 		return val;
 	};
 	validateRefs(config, read);
-	return { resolve: (ref) => read(credName(ref)) };
+	return storeFrom(read);
 }
 
 /** file provider: read tokens from a JSON `{ "<name>": "<token>" }` map. */
@@ -133,5 +163,5 @@ function fileStore(config: Config): SecretStore {
 		return token;
 	};
 	validateRefs(config, read);
-	return { resolve: (ref) => read(credName(ref)) };
+	return storeFrom(read);
 }

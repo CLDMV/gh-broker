@@ -107,11 +107,45 @@ describe("loadSecretStore (file provider)", () => {
 		expect(() => loadSecretStore(config(undefined, { secrets: { provider: "vault", path: SECRETS } }))).toThrow(/unknown provider/);
 	});
 
+	it("treats the ghcr credentials as optional: startup does not need them, has() reports them", () => {
+		const ghcr = { dropDir: "/srv/x/y", protectReleaseTags: true, maxArchiveBytes: 1, owners: { cldmv: { username: "u", credential: "cred:cldmv-packages", images: ["hoot"] } } };
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		expect(loadSecretStore(config(undefined, { ghcr })).has("cred:cldmv-packages")).toBe(false);
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w", "cldmv-packages": "p" });
+		const store = loadSecretStore(config(undefined, { ghcr }));
+		expect(store.has("cred:cldmv-packages")).toBe(true);
+		expect(store.resolve("cred:cldmv-packages")).toBe("p");
+		const bad = { ...ghcr, owners: { cldmv: { ...ghcr.owners.cldmv, credential: "cred:../x" } } };
+		expect(() => loadSecretStore(config(undefined, { ghcr: bad }))).toThrow(/unsafe credential name/);
+	});
+
 	it("rejects a non-cred config.app.privateKey (would inline a secret in the config)", () => {
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
 		expect(() => loadSecretStore(config(undefined, { app: { appId: 1, privateKey: "-----BEGIN PRIVATE KEY-----" } }))).toThrow(
 			/config.app.privateKey must be a "cred:<name>" ref/
 		);
+	});
+
+	it("requires a valid config.app.privateKey cred to be stored", () => {
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w", "app-key": "pem" });
+		const store = loadSecretStore(config(undefined, { app: { appId: 1, privateKey: "cred:app-key" } }));
+		expect(store.resolve("cred:app-key")).toBe("pem");
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		expect(() => loadSecretStore(config(undefined, { app: { appId: 1, privateKey: "cred:app-key" } }))).toThrow(/app-key/);
+	});
+
+	it("treats the npm token as optional: has() reports it, startup does not require it", () => {
+		const npm = { token: "cred:npm-token", scopes: ["@cldmv"] };
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w", "npm-token": "npm_x" });
+		const store = loadSecretStore(config(undefined, { npm }));
+		expect(store.has("cred:npm-token")).toBe(true);
+		expect(store.resolve("cred:npm-token")).toBe("npm_x");
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		const without = loadSecretStore(config(undefined, { npm }));
+		expect(without.has("cred:npm-token")).toBe(false);
+		expect(without.has("cred:cldmv-read")).toBe(true);
+		expect(() => loadSecretStore(config(undefined, { npm: { ...npm, token: "npm_inline" } }))).toThrow(/config.npm.token must be a "cred:<name>" ref/);
+		expect(() => loadSecretStore(config(undefined, { npm: { ...npm, token: "cred:../x" } }))).toThrow(/unsafe credential name/);
 	});
 });
 
@@ -151,5 +185,24 @@ describe("loadSecretStore (systemd-creds provider, the default)", () => {
 		const store = loadSecretStore(scConfig());
 		expect(store.resolve("cred:cldmv-read")).toBe("rtok");
 		expect(store.resolve("cred:cldmv-write")).toBe("wtok");
+	});
+
+	it("defaults to systemd-creds when config.secrets is absent", () => {
+		mockRead.mockReturnValue("tok" as any);
+		const cfg = scConfig();
+		delete cfg.secrets;
+		expect(loadSecretStore(cfg).resolve("cred:cldmv-read")).toBe("tok");
+	});
+
+	it("fails startup when a required credential cannot be read", () => {
+		mockRead.mockImplementation(() => {
+			throw new Error("ENOENT");
+		});
+		expect(() => loadSecretStore(scConfig())).toThrow(/credential "cldmv-read" not available: ENOENT/);
+	});
+
+	it("fails startup when a required credential is empty", () => {
+		mockRead.mockReturnValue("\n" as any);
+		expect(() => loadSecretStore(scConfig())).toThrow(/credential "cldmv-read" is empty/);
 	});
 });

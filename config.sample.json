@@ -1,0 +1,45 @@
+{
+	"listen": "unix:/run/gh-broker/gh-broker.sock",
+	"upstream": "https://api.githubcopilot.com/mcp/x/all",
+	"defaultOwner": "your-org",
+	"owners": {
+		"your-org": {
+			"read": "cred:your-org-read",
+			"write": "cred:your-org-write",
+			"installationId": 12345678
+		}
+	},
+	"app": {
+		"appId": 123456,
+		"privateKey": "cred:gh-app-key"
+	},
+	"secrets": {
+		"provider": "file",
+		"path": "/etc/gh-broker/secrets.json"
+	},
+	"npm": {
+		"token": "cred:npm-token",
+		"scopes": [
+			"@your-org"
+		],
+		"registry": "https://registry.npmjs.org",
+		"tokenOrgs": [
+			"your-org"
+		]
+	},
+	"ghcr": {
+		"dropDir": "/srv/gh-broker/ghcr-drop",
+		"protectReleaseTags": true,
+		"maxArchiveBytes": 17179869184,
+		"owners": {
+			"your-org": {
+				"username": "your-login",
+				"credential": "cred:your-org-packages",
+				"images": [
+					"your-image",
+					"your-image-worker-*"
+				]
+			}
+		}
+	}
+}

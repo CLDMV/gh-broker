@@ -7,14 +7,14 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-10-31T23:26:29-07:00 (1793514389)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, chmodSync, chownSync, writeFileSync, cpSync, rmSync, symlinkSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, chmodSync, chownSync, lstatSync, writeFileSync, cpSync, rmSync, symlinkSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 /** spawnSync wrapper: throws on non-zero unless opts.allowFail. Returns the result. */
@@ -171,7 +171,31 @@ export function currentNodeBin() {
 function mkdirp(path, mode, uid, gid) {
 	if (!existsSync(path)) mkdirSync(path, { recursive: true, mode });
 	chmodSync(path, mode);
+	// Every caller passes a resolved uid and gid (requireUid/requireGid throw otherwise), so the skipped-chown branch is unreachable.
+	/* v8 ignore else */
 	if (uid !== undefined && gid !== undefined) chownSync(path, uid, gid);
+}
+
+/**
+ * Create the GHCR drop directory: `2750 <agentUser>:<svcGroup>`. The agent (owner) writes
+ * archives there; the setgid bit gives every new file the service group, so the broker can
+ * read a group-readable archive while other users can't see in. A missing parent is created
+ * `0755 root:root`; an existing parent is never chmod-ed. Refuses a symlink at the path.
+ */
+export function ensureDropDir(path, agentUser, svcGroup) {
+	const parent = dirname(path);
+	if (!existsSync(parent)) mkdirSync(parent, { recursive: true, mode: 0o755 });
+	let st;
+	try {
+		st = lstatSync(path); // lstat: a symlink (even a dangling one) is seen as itself
+	} catch {
+		st = undefined;
+	}
+	if (!st) mkdirSync(path, { mode: 0o750 });
+	else if (st.isSymbolicLink()) throw new Error(`gh-broker install: ${path} is a symlink — refusing to use it as the GHCR drop dir`);
+	else if (!st.isDirectory()) throw new Error(`gh-broker install: ${path} exists and is not a directory`);
+	chownSync(path, requireUid(agentUser), requireGid(svcGroup));
+	chmodSync(path, 0o2750); // after chown: chown clears the setgid bit
 }
 
 /** Create /etc/gh-broker (0750 root:group) and /opt/gh-broker (0755 svcUser:group). */

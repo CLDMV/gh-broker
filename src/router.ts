@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-16T17:17:03-07:00 (1792196223)
+ *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,6 +19,7 @@ import type { AppAuth } from "./appauth.ts";
 import { Octokit } from "@octokit/core";
 import { indexTools } from "./config.ts";
 import { audit } from "./audit.ts";
+import { unavailableReason } from "./availability.ts";
 // DEFERRED: link_issue is App-token-only and not wired in — see docs.
 // import { linkIssue, type LinkIssueInput } from "./verbs/link_issue.ts";
 import {
@@ -32,6 +33,11 @@ import { reportSecurityAlerts, type ReportSecurityAlertsInput } from "./verbs/re
 import { reportReleasePrs, type ReportReleasePrsInput } from "./verbs/report_release_prs.ts";
 import { issueLabels, type IssueLabelsInput } from "./verbs/issue_labels.ts";
 import { reportCiStatus, ciStatusForHeadSha, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
+import { npmScaffold } from "./verbs/npm_scaffold.ts";
+import { NpmRegistry } from "./verbs/npm-registry.ts";
+import { GhcrService } from "./verbs/ghcr_push.ts";
+
+const GHCR_TOOLS = new Set(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
@@ -48,6 +54,8 @@ export class Router {
 	private readonly upstream: Upstream;
 	private readonly appAuth?: AppAuth;
 	private readonly rules: Map<string, ToolRule>;
+	/** GHCR verbs run on config.ghcr's own credential, not the owner's GitHub PAT (created on first use). */
+	private ghcr?: GhcrService;
 
 	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth) {
 		this.config = config;
@@ -59,7 +67,7 @@ export class Router {
 
 	/** Tools advertised to the agent (used to build tools/list). */
 	advertisedTools(): ToolRule[] {
-		return this.config.tools;
+		return this.config.tools.filter((rule) => !unavailableReason(rule, this.config, this.secrets));
 	}
 
 	async call(tool: string, args: Record<string, unknown>): Promise<CallToolResult> {
@@ -68,6 +76,15 @@ export class Router {
 			audit({ tool, decision: "deny", detail: "not in allowlist" });
 			throw new Error(`tool "${tool}" is not allowed`);
 		}
+		// An optional integration that isn't set up hides its tools: refuse them the same way.
+		const unavailable = unavailableReason(rule, this.config, this.secrets);
+		if (unavailable) {
+			audit({ tool, decision: "deny", detail: `unavailable: ${unavailable}` });
+			throw new Error(`tool "${tool}" is not available on this broker: ${unavailable}`);
+		}
+		// The GHCR verbs authenticate with config.ghcr's own credential, never an owner's GitHub
+		// PAT, so they don't need (or touch) a config.owners entry.
+		if (GHCR_TOOLS.has(tool)) return this.callGhcr(tool, args, rule);
 		// Owner-less reads (global advisory DB, get_me, notifications) fall back to
 		// the configured defaultOwner's READ PAT. Writes never fall back — a write
 		// must always name the owner it targets.
@@ -98,6 +115,21 @@ export class Router {
 			return out;
 		} catch (err) {
 			audit({ tool, owner, mode: rule.mode, repo, decision, ok: false, detail: (err as Error).message });
+			throw err;
+		}
+	}
+
+	/** GHCR verbs: config.ghcr checks the owner and image itself; no GitHub PAT is resolved. */
+	private async callGhcr(tool: string, args: Record<string, unknown>, rule: ToolRule): Promise<CallToolResult> {
+		const owner = extractOwner(args) ?? "";
+		const repo = typeof args.image === "string" ? `${owner}/${args.image}` : owner;
+		try {
+			this.ghcr ??= new GhcrService(this.config.ghcr, this.secrets);
+			const out = tool === "ghcr_push" ? await this.ghcr.push(args) : tool === "ghcr_tags" ? await this.ghcr.tags(args) : this.ghcr.status(args);
+			audit({ tool, owner, mode: rule.mode, repo, decision: "custom", ok: true });
+			return { content: [{ type: "text", text: JSON.stringify(out) }] };
+		} catch (err) {
+			audit({ tool, owner, mode: rule.mode, repo, decision: "custom", ok: false, detail: (err as Error).message });
 			throw err;
 		}
 	}
@@ -156,6 +188,15 @@ export class Router {
 				const octokit = new Octokit({ auth: token });
 				const reportArgs = args as unknown as ReportCiStatusInput;
 				const out = await reportCiStatus(octokit, reportArgs, this.makeJobLogsFetcher(owner, reportArgs.repo, token));
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "npm_scaffold": {
+				const npm = this.config.npm!; // availability already required it
+				// The GitHub side only reads (repo metadata, package.json, workflow file), so it
+				// runs on the read PAT even though the verb is a write.
+				const octokit = new Octokit({ auth: this.secrets.resolve(this.config.owners[owner]!.read) });
+				const registry = new NpmRegistry({ token: this.secrets.resolve(npm.token), ...(npm.registry ? { registry: npm.registry } : {}) });
+				const out = await npmScaffold(args, { octokit, registry, scopes: npm.scopes });
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			default:
