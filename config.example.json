@@ -277,6 +277,11 @@
 			"custom": true
 		},
 		{
+			"name": "report_alert_status",
+			"mode": "read",
+			"custom": true
+		},
+		{
 			"name": "report_ci_status",
 			"mode": "read",
 			"custom": true

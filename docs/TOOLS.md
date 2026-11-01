@@ -5,7 +5,7 @@ Every tool the broker advertises falls into one of three categories, set per ent
 | Category | Config flag | What happens | Example |
 |---|---|---|---|
 | **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
+| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
 | **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s and `list_pull_requests`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
@@ -106,6 +106,73 @@ Each alert is normalized to one shape: `repo`, `type`, `number`, `severity`, `su
 **"Open" is the default-branch view.** An alert's state tracks the default branch, so one already fixed on `next` but not yet released still reads as open until the release lands.
 
 **Fan-out safety** works like `report_unlabeled`'s: hitting `maxRepos`, `alertLimit`, `maxApiCalls` or GitHub's rate limit returns what was found so far with `truncated: true` and a `truncatedReason` (`"max-repos"` | `"max-alerts"` | `"max-api-calls"` | `"rate-limited"`). A type that was never reached is left out of `counts` rather than reported as zero. A permission or feature-disabled `403`/`404` from an alert endpoint is never mistaken for a rate limit — only a `403` that carries a `Retry-After`, an exhausted `x-ratelimit-remaining`, or a rate-limit/abuse message is.
+
+---
+
+## `report_alert_status`
+
+For every open Dependabot alert, where its fix stands. `report_security_alerts` says what is open; this answers what has to happen for each one, which otherwise means reading lockfiles and PR lists by hand. Read-only, `mode: "read"`, `custom: true`.
+
+```json
+{
+	"owner": "cldmv",
+	"repos": ["slothlet", "gh-broker"]
+}
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | Selects the read credential. |
+| `repo` | string | — | One repo. |
+| `repos` | string[] | — | Several repos, with or without the owner prefix — for example the `byRepo` names of a `report_security_alerts` run. With neither `repo` nor `repos`, every repo with an open Dependabot alert is covered. |
+| `buckets` | array of bucket names | all | List only alerts in these buckets. `summary` and each repo's `counts` still cover every alert. |
+| `maxRepos` | number | 200 (hard cap 500) | Only used when the org-level alert endpoint is unavailable and the verb sweeps repo by repo. |
+| `alertLimit` | number | 500 (hard cap 5000) | Alerts fetched in org mode, or per repo. |
+| `prLimit` | number | 200 (hard cap 1000) | PRs read per repo, newest first, open and closed. |
+| `maxLockfileBytes` | number | 10 MB (hard cap 50 MB) | Larger lockfiles are not read; the alert's lockfile state is then `unknown` with reason `too-large`. |
+| `maxApiCalls` | number | 400 (hard cap 2000) | Hard ceiling on total REST calls for one invocation. |
+
+Each alert gets one `bucket`. They are checked in this order, so the bucket is the furthest the fix has got:
+
+| `bucket` | Meaning |
+|---|---|
+| `released-still-open` | The default branch's lockfile no longer resolves a vulnerable version (or no longer has the package), yet the alert is open. The fix didn't take: another manifest or directory, or a stale lockfile. |
+| `fixed-on-next` | `next` or `hotfixes` resolves only patched versions and the default branch doesn't. Waiting for a release. |
+| `open-pr` | An open PR bumps the package. A PR against the default branch carries `hotfixRedirect` when the hotfix redirector has opened its `hotfix-redirect/pr-<n>` twin. |
+| `closed-unmerged` | Only closed, unmerged PRs touch the package. Each closed PR carries `supersededBy` when a PR for the same package merged after it was closed. |
+| `no-pr` | Nothing in flight. Merged PRs that did not clear the alert are still listed in `mergedPrs`. |
+
+**Lockfiles.** For npm-ecosystem alerts the verb reads the lockfile nearest the alert's `manifest` on the default branch, `next` and `hotfixes` (when they exist). A manifest that is itself a lockfile is read directly; for a `package.json` it looks for `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml` and `yarn.lock` beside it and then in each parent directory up to the root, so a workspace package resolves to the workspace's lockfile. A version counts as vulnerable when it falls inside the alert's `vulnerableRange`, falling back to "below `patchedVersion`" when the range can't be read. Lockfiles are read at the branch's commit SHA and cached, so each one is fetched once per commit: a `next` that equals the default branch costs nothing extra. Files over 1 MB come through the blob API (one extra call). Alerts in other ecosystems get no `lockfile` block and are bucketed from their PRs alone.
+
+Each lockfile state is `fixed`, `vulnerable` or `unknown`, with the `path` read and the `versions` it resolves. An `unknown` state carries a `reason`: `no-lockfile`, `too-large`, `unparsed`, `no-version-info` (the alert has neither a readable range nor a patched version) or `no-branch`.
+
+**PR matching.** A PR counts as a dependency PR when Dependabot opened it, its branch starts with `dependabot/` or `hotfix-redirect/`, or its title reads as a bump (`bump`, `update`, `upgrade`, `deps`). It touches the package when the title names the package as a word, or the body has it as a Markdown link or code span, which is how Dependabot's single and grouped PRs list their packages.
+
+**Dependabot paused hint.** Each repo row has `dependabot.looksPaused`: true when a fixable alert (one with a patched version) is more than 7 days old and no Dependabot PR has been opened since it arrived. `lastPrAt` is the newest Dependabot PR found. It is a hint, not a diagnosis; `prListTruncated` says the PR list hit `prLimit`, in which case an older Dependabot PR may not have been seen.
+
+```json
+{
+	"scanned": { "repos": 1, "alerts": 2 },
+	"scope": "repo",
+	"summary": { "released-still-open": 0, "fixed-on-next": 1, "open-pr": 1, "closed-unmerged": 0, "no-pr": 0 },
+	"repos": [
+		{
+			"repo": "cldmv/gh-broker",
+			"defaultBranch": "master",
+			"branches": { "next": true, "hotfixes": true },
+			"dependabot": { "lastPrAt": "2026-10-30T08:00:00Z", "looksPaused": false },
+			"prsScanned": 200,
+			"prListTruncated": true,
+			"counts": { "fixed-on-next": 1, "open-pr": 1 },
+			"alerts": [
+				{ "number": 19, "url": "https://github.com/CLDMV/gh-broker/security/dependabot/19", "severity": "medium", "package": "ip-address", "ecosystem": "npm", "manifest": "package-lock.json", "vulnerableRange": "<= 10.7.0", "patchedVersion": "10.7.1", "createdAt": "2026-10-02T20:10:30Z", "bucket": "fixed-on-next", "reason": "next resolves ip-address 10.7.1; waiting for a release", "lockfile": { "default": { "state": "vulnerable", "path": "package-lock.json", "versions": ["10.7.0"] }, "next": { "state": "fixed", "path": "package-lock.json", "versions": ["10.7.1"] }, "hotfixes": { "state": "vulnerable", "path": "package-lock.json", "versions": ["10.7.0"] } }, "openPrs": [] }
+			]
+		}
+	]
+}
+```
+
+**Fan-out safety** works like the other report verbs: hitting `maxRepos`, `alertLimit`, `maxApiCalls` or GitHub's rate limit returns what was finished with `truncated: true` and a `truncatedReason` (`"max-repos"` | `"max-alerts"` | `"max-api-calls"` | `"rate-limited"`, plus `retryAfterSeconds` when GitHub sent one). A repo is only reported once all of its alerts are classified; repos a cap stopped are listed in `pending`. Per-repo reads count repos where Dependabot alerts are off or unreadable in `disabled`. Each repo costs one repo read, three branch reads, one call per 100 PRs and the lockfile reads.
 
 ---
 
