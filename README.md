@@ -1,23 +1,39 @@
 # @cldmv/gh-broker
 
-A local **credential-routing MCP proxy** for GitHub. It lets an autonomous agent read and write GitHub issues/PRs across multiple orgs **without ever possessing a token** — the agent gets to *act*, never to *hold* the credential.
+**@cldmv/gh-broker** is a local **credential-routing MCP proxy** for GitHub. It lets an autonomous agent read and write issues, pull requests and more across several orgs **without ever holding a token**: the agent gets to *act*, never to *possess* the credential.
 
-## Why
+The hosted GitHub MCP authenticates with one token per server, so several orgs means several servers, and the token sits in a config file the agent can read. A classic PAT spans orgs but is coarse; a GitHub App acts as a bot and can't drive the MCP; `gh` and raw PATs are readable by the agent (`gh auth token`). gh-broker covers what none of them do together: the user's own identity, least privilege, several orgs, one server, and a secret the agent cannot exfiltrate.
 
-The hosted GitHub MCP authenticates with one token per server, so multi-org means many servers (tool-list bloat) and the token sits in an agent-readable config file. A classic PAT spans orgs but is coarse; a GitHub App gives bot attribution and can't drive the MCP. `gh` and raw PATs are readable by the agent (`gh auth token`, `cat ~/.claude.json`). None satisfy: **user identity + least-privilege + multi-org + one server + the agent cannot exfiltrate the secret.**
+It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-scoped fine-grained PAT per org in an agent-unreadable secret store (`systemd-creds` or a `0640` file), and picks the right one per call by repo owner and read/write mode. The toolset is config-driven and default-deny: mostly proxied to GitHub's hosted MCP, plus custom verbs for what the hosted MCP has no tool for, and augmented tools that extend a proxied tool's result. The agent reaches it over a permissioned Unix socket that carries MCP frames and never credential material.
 
-## How
+> _The agent gets to act, never to hold the credential._
 
-A small daemon (this package) runs as a dedicated **`gh-broker` system user** and:
+[![npm version]][npm_version_url] [![npm downloads]][npm_downloads_url] [![GitHub downloads]][github_downloads_url] [![Last commit]][last_commit_url] [![npm last update]][npm_last_update_url] [![Coverage]][coverage_url]
 
-- holds per-org **read-scoped** and **write-scoped** fine-grained PATs, read from an agent-unreadable secret store — `systemd-creds` (encrypted at rest, default) or a plaintext file, chosen at install — via `cred:` references in a token-free config, into memory only;
-- routes the right PAT by **repo owner + read/write mode** on each call;
-- exposes a **config-driven, default-deny** toolset — mostly **proxied** to GitHub's hosted MCP (which already does labels, type, issue fields, dedup), plus **custom verbs** for gaps the hosted MCP has no tool for, and **augmented** tools that extend a proxied tool's response in place. See [Key Features](#-key-features) and [docs/TOOLS.md](docs/TOOLS.md) for the full set;
-- talks to the agent over a **Unix socket** (bytes only; no token crosses).
+> [!NOTE]
+> **Status: 0.x, in production.** Running under systemd and brokering live GitHub reads and writes. Linux and systemd only for now ([#9](https://github.com/CLDMV/gh-broker/issues/9)). `link_issue` (App-token only) is implemented but not wired in, see [deploy/README.md](deploy/README.md#enabling-link_issue-github-app--deferred).
 
-The agent (uid 1003, rootless docker, no passwordless sudo — verified) cannot read another user's mode-0400 secrets, so the boundary is real. The **agent-as-separate-user** model — the users, the bridge group, and the permissions that make the boundary real, as a reproducible example setup — is documented in [`docs/agent-user-model.md`](docs/agent-user-model.md).
+[![Contributors]][contributors_url] [![Sponsor shinrai]][sponsor_url]
 
-Full design + threat model: `~/.claude/designs/github-mcp-broker.md`.
+---
+
+## ✨ What's New
+
+### Latest: v0.8.0 (October 2026)
+
+- **`npm_scaffold`: new npm packages without a manual first publish.** The new write verb publishes a broker-built `0.0.0-stage` placeholder and registers the repo's publish workflow as its trusted publisher, so CI publishes the first real release through OIDC. The npm token has no 2FA bypass: each write takes a one-time password from the user, so it's two calls, and the verb refuses any package that already exists.
+- **`ghcr_push`: container image pushes without a registry token.** Push a `docker save` archive from a drop directory to an allowlisted `ghcr.io/<owner>/<image>` as a background job, follow it with `ghcr_push_status` and check it with `ghcr_tags`. Release tags are never overwritten, and the classic PAT stays with the broker.
+- **Optional credentials.** The npm and GHCR tokens can be skipped at install; their tools stay hidden until the token is stored. The installer also takes tokens via `--secret <cred-name>=<token>`.
+- [View full v0.8.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.8.0.md)
+
+### Recent Releases
+
+- **v0.7.0** (October 2026) — `issue_labels` adds, removes or swaps single labels without replacing the set, and `issue_write` warns that its `labels` does ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.7.0.md))
+- **v0.6.1** (October 2026) — MCP SDK 1.32.0 (same-origin redirects only) and a refreshed vitest toolchain; no broker source changes ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.1.md))
+- **v0.6.0** (October 2026) — Compact per-repo roll-up, filters and flow tier for `report_security_alerts`, and release-readiness analysis for `report_release_prs` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.0.md))
+- **v0.5.1** (October 2026) — The installer keeps the existing secrets backend instead of prompting on every upgrade ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.1.md))
+
+📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
 ---
 
@@ -105,29 +121,32 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ---
 
-## ✨ What's New
+## 📦 Installation
 
-### Latest: v0.8.0 (October 2026)
+### Requirements
 
-- **`npm_scaffold`: new npm packages without a manual first publish.** The new write verb publishes a broker-built `0.0.0-stage` placeholder and registers the repo's publish workflow as its trusted publisher, so CI publishes the first real release through OIDC. The npm token has no 2FA bypass: each write takes a one-time password from the user, so it's two calls, and the verb refuses any package that already exists.
-- **`ghcr_push`: container image pushes without a registry token.** Push a `docker save` archive from a drop directory to an allowlisted `ghcr.io/<owner>/<image>` as a background job, follow it with `ghcr_push_status` and check it with `ghcr_tags`. Release tags are never overwritten, and the classic PAT stays with the broker.
-- **Optional credentials.** The npm and GHCR tokens can be skipped at install; their tools stay hidden until the token is stored. The installer also takes tokens via `--secret <cred-name>=<token>`.
-- [View full v0.8.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.8.0.md)
+- **Linux with systemd.** The broker runs as a hardened systemd service and listens on a Unix socket.
+- **Node.js 22.12.0 or later** (`engines.node` is `>=22.12.0`). The installer points `/usr/local/bin/node` at the node it runs under.
+- **The agent runs as its own Linux user**, without passwordless sudo, so it can't read the broker's secrets. The model behind that is in [docs/agent-user-model.md](docs/agent-user-model.md).
+- **Two fine-grained PATs per org** (read and write). The scopes are listed in [deploy/README.md](deploy/README.md).
 
-### Recent Releases
+### Install
 
-- **v0.7.0** (October 2026) — `issue_labels` adds, removes or swaps single labels without replacing the set, and `issue_write` warns that its `labels` does ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.7.0.md))
-- **v0.6.1** (October 2026) — MCP SDK 1.32.0 (same-origin redirects only) and a refreshed vitest toolchain; no broker source changes ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.1.md))
-- **v0.6.0** (October 2026) — Compact per-repo roll-up, filters and flow tier for `report_security_alerts`, and release-readiness analysis for `report_release_prs` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.0.md))
-- **v0.5.1** (October 2026) — The installer keeps the existing secrets backend instead of prompting on every upgrade ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.1.md))
+gh-broker is published on npm as [`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker), but it is a system service, not a library or a global CLI. Install it from a checkout with the installer, which handles both the first install and every upgrade:
 
-📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
+```sh
+git clone https://github.com/CLDMV/gh-broker.git
+cd gh-broker
+sudo node deploy/install.mjs <agent-user>
+```
+
+The installer creates the service user and the socket group, builds as the checkout's owner, merges the shipped defaults with the deployed config, stores the PATs in the backend you pick, installs the unit and runs a smoke test. Prerequisites, PAT scopes, unattended installs and every flag: [deploy/README.md](deploy/README.md).
 
 ---
 
-## Calling a tool
+## 🚀 Quick Start
 
-The agent's MCP client sees an ordinary `tools/call`; the broker resolves the credential, routes it, and (for custom/augmented tools) does the extra work in between:
+Point the agent's MCP client at the socket ([deploy/README.md § 3](deploy/README.md#3-point-claude-at-the-broker)). From then on the client sees an ordinary `tools/call`, and the broker resolves the credential, routes it, and (for custom/augmented tools) does the extra work in between:
 
 ```json
 // tools/call
@@ -143,7 +162,7 @@ No token ever appears in the request, the response, or anywhere the agent can re
 
 ---
 
-## Layout
+## 📁 Layout
 
 ```
 src/
@@ -181,8 +200,11 @@ docs/
   deploy-architecture.md  config merge, secret store, node handling, installer flow
   agent-user-model.md     the agent-as-separate-user isolation model (example setup)
   changelog/              per-version release notes
-config.example.json  shipped defaults (token-free); merged into the deployed config
+config.example.json  shipped generic defaults (socket, upstream, tools allowlist)
+config.sample.json   a full config with placeholder values, for reference only
 ```
+
+---
 
 ## 📚 Documentation
 
@@ -192,20 +214,67 @@ config.example.json  shipped defaults (token-free); merged into the deployed con
 - **[Install Guide](deploy/README.md)** — prerequisites, PAT scopes, install/upgrade command, flags
 - **[Changelog](docs/changelog/)** — per-version release notes
 
-## Status
+[![CodeFactor]][codefactor_url] [![OpenSSF Scorecard]][ossf_scorecard_url] [![npms.io score]][npms_url] [![npm unpacked size]][npm_size_url] [![Repo size]][repo_size_url]
 
-**Deployed and in production** — running under systemd, brokering live GitHub reads and writes across the configured org. The Unix-socket MCP server, the default-deny allowlist, owner/mode→PAT routing, and every custom/augmented tool in [docs/TOOLS.md](docs/TOOLS.md) are exercised in normal use — `report_ci_status` and the `pull_request_read` augmentation have both been verified against real failing CI data, not just mocked tests. `link_issue` (App-token-only) is implemented but deferred — see [`deploy/README.md`](deploy/README.md#enabling-link_issue-github-app--deferred). Install/upgrade with `sudo node deploy/install.mjs` (see [`deploy/README.md`](deploy/README.md)).
+---
 
-## Install / build
+## 🤝 Contributing
 
-```sh
-npm ci
-npm run typecheck
-npm run build
-```
+Bug reports and pull requests are welcome on [GitHub](https://github.com/CLDMV/gh-broker/issues). Pull requests target the `next` branch; releases ship from `next` to `master`. Run `npm run build:ci` and `npm run ci:coverage` before opening one; coverage is held at 100%.
 
-## License
+[![Contributors]][contributors_url] [![Sponsor shinrai]][sponsor_url]
 
-Apache-2.0 © Shinrai / CLDMV
+---
 
-Published on npm as [`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker). It's a systemd daemon, not a typical CLI tool — install it with [`deploy/install.mjs`](deploy/README.md), not `npm install -g`.
+## 🔗 Links
+
+- **npm**: [@cldmv/gh-broker](https://www.npmjs.com/package/@cldmv/gh-broker)
+- **GitHub**: [CLDMV/gh-broker](https://github.com/CLDMV/gh-broker)
+- **Issues**: [GitHub Issues](https://github.com/CLDMV/gh-broker/issues)
+- **Changelog**: [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/)
+- **Releases**: [GitHub Releases](https://github.com/CLDMV/gh-broker/releases)
+
+---
+
+## 📄 License
+
+[![GitHub license]][github_license_url] [![npm license]][npm_license_url]
+
+Apache-2.0 © Shinrai / CLDMV. See [LICENSE](https://github.com/CLDMV/gh-broker/blob/master/LICENSE) for the full text.
+
+<!-- Badge definitions -->
+<!-- [github release]: https://img.shields.io/github/v/release/CLDMV/gh-broker?style=for-the-badge&logo=github&logoColor=white&labelColor=181717 -->
+<!-- [github_release_url]: https://github.com/CLDMV/gh-broker/releases -->
+<!-- [release date]: https://img.shields.io/github/release-date/CLDMV/gh-broker?style=for-the-badge&logo=github&logoColor=white&labelColor=181717 -->
+<!-- [release_date_url]: https://github.com/CLDMV/gh-broker/releases -->
+
+[npm version]: https://img.shields.io/npm/v/%40cldmv%2Fgh-broker.svg?style=for-the-badge&logo=npm&logoColor=white&labelColor=CB3837
+[npm_version_url]: https://www.npmjs.com/package/@cldmv/gh-broker
+[npm downloads]: https://img.shields.io/npm/dm/%40cldmv%2Fgh-broker.svg?style=for-the-badge&logo=npm&logoColor=white&labelColor=CB3837
+[npm_downloads_url]: https://www.npmjs.com/package/@cldmv/gh-broker
+[github downloads]: https://img.shields.io/github/downloads/CLDMV/gh-broker/total?style=for-the-badge&logo=github&logoColor=white&labelColor=181717
+[github_downloads_url]: https://github.com/CLDMV/gh-broker/releases
+[last commit]: https://img.shields.io/github/last-commit/CLDMV/gh-broker?style=for-the-badge&logo=github&logoColor=white&labelColor=181717
+[last_commit_url]: https://github.com/CLDMV/gh-broker/commits
+[npm last update]: https://img.shields.io/npm/last-update/%40cldmv%2Fgh-broker?style=for-the-badge&logo=npm&logoColor=white&labelColor=CB3837
+[npm_last_update_url]: https://www.npmjs.com/package/@cldmv/gh-broker
+[coverage]: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FCLDMV%2Fgh-broker%2Fbadges%2Fcoverage.json&style=for-the-badge&logo=vitest&logoColor=white
+[coverage_url]: https://github.com/CLDMV/gh-broker/blob/badges/coverage.json
+[contributors]: https://img.shields.io/github/contributors/CLDMV/gh-broker.svg?style=for-the-badge&logo=github&logoColor=white&labelColor=181717
+[contributors_url]: https://github.com/CLDMV/gh-broker/graphs/contributors
+[sponsor shinrai]: https://img.shields.io/github/sponsors/shinrai?style=for-the-badge&logo=githubsponsors&logoColor=white&labelColor=EA4AAA&label=Sponsor
+[sponsor_url]: https://github.com/sponsors/shinrai
+[codefactor]: https://img.shields.io/codefactor/grade/github/CLDMV/gh-broker?style=for-the-badge&logo=codefactor&logoColor=white&labelColor=F44A6A
+[codefactor_url]: https://www.codefactor.io/repository/github/cldmv/gh-broker
+[openssf scorecard]: https://img.shields.io/ossf-scorecard/github.com/CLDMV/gh-broker?style=for-the-badge&label=OpenSSF%20Scorecard
+[ossf_scorecard_url]: https://scorecard.dev/viewer/?uri=github.com/CLDMV/gh-broker
+[npms.io score]: https://img.shields.io/npms-io/final-score/%40cldmv%2Fgh-broker?style=for-the-badge&logo=npms&logoColor=white&labelColor=0B5D57
+[npms_url]: https://npms.io/search?q=%40cldmv%2Fgh-broker
+[npm unpacked size]: https://img.shields.io/npm/unpacked-size/%40cldmv%2Fgh-broker.svg?style=for-the-badge&logo=npm&logoColor=white&labelColor=CB3837
+[npm_size_url]: https://www.npmjs.com/package/@cldmv/gh-broker
+[repo size]: https://img.shields.io/github/repo-size/CLDMV/gh-broker?style=for-the-badge&logo=github&logoColor=white&labelColor=181717
+[repo_size_url]: https://github.com/CLDMV/gh-broker
+[npm license]: https://img.shields.io/npm/l/%40cldmv%2Fgh-broker.svg?style=for-the-badge&logo=npm&logoColor=white&labelColor=CB3837
+[npm_license_url]: https://www.npmjs.com/package/@cldmv/gh-broker
+[github license]: https://img.shields.io/github/license/CLDMV/gh-broker.svg?style=for-the-badge&logo=github&logoColor=white&labelColor=181717
+[github_license_url]: https://github.com/CLDMV/gh-broker/blob/master/LICENSE
