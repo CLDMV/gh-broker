@@ -5,7 +5,7 @@ Every tool the broker advertises falls into one of three categories, set per ent
 | Category | Config flag | What happens | Example |
 |---|---|---|---|
 | **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
+| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
 | **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s and `list_pull_requests`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
@@ -175,6 +175,103 @@ The `verdict` is the release-docs decision table:
 | `inspect` | The release PR title has no readable version. |
 
 The release PR's version can change while it is open (more PRs landing on `next` can raise the bump), so a `ready` changelog is only as current as the title it was matched against — re-run the report after `next` changes. Truncation follows the same pattern as the other report verbs; the extra reasons are `"max-results"` (more than one page of release PRs matched — GitHub's search returns 100 per page) and `"incomplete-search"` (GitHub reported the search timed out).
+
+---
+
+## `report_release_changes`
+
+The source material for one release's changelog. `report_release_prs` `analyze` says whether a changelog is needed or stale; this returns what goes in it: the PRs that actually ship, each at the detail level asked for, grouped by changelog section, plus the release's net facts. Read-only, `mode: "read"`, `custom: true`.
+
+```json
+{
+	"owner": "cldmv",
+	"repo": "gh-broker",
+	"pull": 139,
+	"detail": "titles",
+	"skeleton": true
+}
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner`, `repo` | string | — (required) | |
+| `pull` | number | — (required) | The release PR (`next → master` or `hotfixes → master`). |
+| `detail` | `"titles"` \| `"summaries"` \| `"files"` \| `"diff"` | `"summaries"` | Per-PR depth, see below. |
+| `prs` | number[] | — | Only these PRs get `detail`; every other shipping PR comes back at `titles`. Numbers that aren't in the release are listed in `notInRelease`. |
+| `skeleton` | boolean | `false` | Also return `skeleton`, a markdown changelog in the per-version template: headings, one `### <title> ([#N](…))` entry per PR, no prose. |
+| `maxBodyChars` | number | 3000 | Per-PR body cap (`bodyTruncated: true` when cut). |
+| `maxFiles` | number | 50 (hard cap 300) | Per-PR file-list cap (`filesTruncated: true` when the PR has more). |
+| `maxPatchChars` | number | 3000 | Per-file patch cap with `detail: "diff"` (`patchTruncated: true` when cut). |
+| `maxDiffChars` | number | 60000 | Total patch characters across the whole report. Files past it get `patchSkipped: "max-diff-chars"`. |
+| `maxApiCalls` | number | 300 (hard cap 1000) | Hard ceiling on total REST calls for one invocation. |
+
+| `detail` | Each PR carries |
+|---|---|
+| `titles` | `number`, `url`, `title`, `type` (and `scope`), `labels`, `author`, `mergedAt`, `closes`, `additions` / `deletions` / `changedFiles`, `breaking`, `section`, `documented` |
+| `summaries` | adds `body` |
+| `files` | adds `files`: `path`, `status`, `additions`, `deletions` |
+| `diff` | adds each file's `patch`. Lockfiles, `dist/` and `types/` get `patchSkipped: "generated"` instead. |
+
+A good pattern is one call at `titles` to see the whole release, then a second with `prs` set to the few PRs that need a closer look.
+
+**Which PRs ship.** The list starts from the release PR's commits, reading only the first line of each, with the same extraction `report_release_prs` `analyze` uses: squash commits by their trailing `(#N)`, merge commits by `Merge pull request #N`, branch commits without a number ignored, docs PRs and the version bump dropped. It is then scoped by net change rather than by the commit list, because `next` keeps its pre-squash history when it isn't reset after a release, and already-shipped PRs show up again. These are moved to `excluded`, each with a `reason`:
+
+| `reason` | Meaning |
+|---|---|
+| `earlier-release` | The PR is in the commits of an earlier release PR on the base branch. |
+| `earlier-changelog` | The previous version's changelog names it. |
+| `reverted` / `revert` | The PR was merged and then reverted inside the same range, so it nets to zero; `pair` names the other half. A revert of something outside the range stays in the list. |
+
+Earlier releases are found from the `release:` commits on the base branch (newest first, up to 5), walking back through any hotfix releases to the most recent full one. The newest is returned as `previousRelease` (`version`, `tag`, `pull`, `sha`, `kind: "full" | "hotfix"`). `tag` is the conventional `v<version>` name; it isn't looked up.
+
+**Hotfixes.** A hotfix release (its PR came from `hotfixes` or `hotfix/*`) newer than the last full release whose commit is not on the release's head branch is listed in `hotfixes`, so its changes aren't missed. A `hotfixes → master` release PR never lists any.
+
+**Per PR.** `closes` holds the same-repo issues the body closes with a closing keyword (`Closes #12`, `fixes owner/repo#12`); links made only in the PR sidebar are not seen. `documented` is `true` when the current version's changelog (looked up at the release PR's head commit, both `docs/changelog/` and `docs/changelogs/`) already mentions the PR, so one call serves a first draft and an update; `changelog.path` says which file was found, or `null`. `breaking` lists the hints found: `!` in the type, `BREAKING CHANGE` in the body, a `semver: major` label. A PR whose fetch was cut off by the budget keeps `fetched: false` and only what its commit title says.
+
+**Grouping.** `groups` maps each section to PR numbers: `breaking`, `features`, `fixes`, `security`, `ciTooling`, `documentation`, `dependencies`, and `ungrouped`. A breaking hint wins, then security (a `security` type or scope, or any label containing "security"). Otherwise the title's type and the labels must agree on one section:
+
+| Section | Types | Labels |
+|---|---|---|
+| `features` | `feat` | `type: feature`, `type: feature request`, `type: enhancement` |
+| `fixes` | `fix` | `type: bug` |
+| `dependencies` | `deps`, any `(deps)` / `(deps-dev)` scope, a Dependabot author | `type: dependencies`, `dependencies` |
+| `ciTooling` | `ci`, `chore`, `build`, `test`, `style` | `type: ci`, `type: config` |
+| `documentation` | `docs` | `type: documentation`, `documentation` |
+
+When they disagree (a `chore:` labelled `type: enhancement`), or neither says anything (`refactor`, `perf`, a non-conventional title), the PR goes to `ungrouped` for the author to place.
+
+**`net`.** The release as a whole, base branch against the release PR's head commit:
+
+- `packageJson`: which of `version`, `engines`, `exports`, `bin`, `files`, `publishConfig`, `main`, `type` changed (`changed`), with `version` and `engines` before/after and the `exports` subpaths `added` and `removed`.
+- `dependencies`: direct dependencies added, removed or changed per scope (`runtime`, `dev`, `optional`, `peer`), with the ranges and, when `package-lock.json` is readable, the locked versions (`lockedFrom` / `lockedTo`). A dependency whose range is unchanged but whose locked version moved counts as changed. Transitive-only changes are not listed.
+- `files`: the release's `changed` / `additions` / `deletions`, and the same totals `excludingGenerated` (lockfiles, `dist/`, `types/`) over up to 300 listed files; `complete: false` when there were more.
+- `breakingHints`: a removed `exports` entry or a changed `engines` field.
+
+```json
+{
+	"repo": "CLDMV/r",
+	"pull": 100,
+	"version": "1.3.0",
+	"head": "next",
+	"base": "master",
+	"previousRelease": { "version": "1.2.1", "tag": "v1.2.1", "pull": 90, "sha": "…", "kind": "hotfix" },
+	"changelog": { "path": null, "checkedPaths": ["docs/changelog/v1/v1.3.0.md", "docs/changelogs/v1/v1.3.0.md"] },
+	"prs": [
+		{ "number": 10, "url": "https://github.com/CLDMV/r/pull/10", "title": "feat: add x", "type": "feat", "fetched": true, "labels": ["type: feature"], "author": "Shinrai", "mergedAt": "2026-10-30T00:00:00Z", "closes": [3], "additions": 120, "deletions": 4, "changedFiles": 6, "documented": false, "breaking": [], "section": "features" }
+	],
+	"groups": { "breaking": [], "features": [10], "fixes": [], "security": [], "ciTooling": [], "documentation": [], "dependencies": [], "ungrouped": [] },
+	"excluded": [{ "number": 5, "title": "fix: old thing", "reason": "earlier-release" }],
+	"hotfixes": [{ "version": "1.2.1", "pull": 90, "title": "release: v1.2.1 - …", "url": "https://github.com/CLDMV/r/pull/90", "sha": "…" }],
+	"net": {
+		"breakingHints": [],
+		"packageJson": { "changed": ["version"], "version": { "from": "1.2.1", "to": "1.3.0" } },
+		"dependencies": [{ "name": "a", "scope": "runtime", "change": "changed", "from": "^1.0.0", "to": "^1.1.0", "lockedFrom": "1.0.5", "lockedTo": "1.1.2" }],
+		"files": { "changed": 9, "additions": 400, "deletions": 30, "excludingGenerated": { "changed": 7, "additions": 150, "deletions": 20 }, "complete": true }
+	}
+}
+```
+
+**Cost.** About 10 calls of fixed overhead (the release PR, its commits, the base branch's history, each earlier release's PR and commits, the changelog and package files), plus one per shipping PR and one more per PR at `files` or `diff`. Hitting `maxApiCalls` or GitHub's rate limit returns what was gathered so far with `truncated: true` and `truncatedReason` (`"max-api-calls"` | `"rate-limited"`, with `retryAfterSeconds` when GitHub sent one). PRs not yet read stay in the list as `fetched: false`, and `net` is absent if it wasn't reached. Grouping and the skeleton still run over what was read.
 
 ---
 
