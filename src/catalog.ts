@@ -23,6 +23,7 @@ import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
 import { REPORT_SECURITY_ALERTS_SCHEMA } from "./verbs/report_security_alerts.ts";
 import { REPORT_RELEASE_PRS_SCHEMA } from "./verbs/report_release_prs.ts";
 import { REPORT_RELEASE_CHANGES_SCHEMA } from "./verbs/report_release_changes.ts";
+import { REPORT_ALERT_STATUS_SCHEMA } from "./verbs/report_alert_status.ts";
 import { ISSUE_LABELS_SCHEMA } from "./verbs/issue_labels.ts";
 import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 import { NPM_SCAFFOLD_SCHEMA } from "./verbs/npm_scaffold.ts";
@@ -116,6 +117,13 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 					description:
 						"Report every open Dependabot, code-scanning (CodeQL) and secret-scanning alert, for one repo or across every repo an owner has. Reads the org-level endpoints in a handful of calls and falls back to a per-repo sweep for any alert type the token can't read org-wide. Alert state tracks the default branch. Secret values are never returned. Bounded by maxRepos/alertLimit/maxApiCalls; returns truncated:true (with a reason) instead of failing outright if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
 					inputSchema: REPORT_SECURITY_ALERTS_SCHEMA
+				});
+			} else if (rule.name === "report_alert_status") {
+				tools.push({
+					name: "report_alert_status",
+					description:
+						"For every open Dependabot alert in one repo, a list of repos, or every repo an owner has, say where its fix stands. Each alert gets one bucket: released-still-open (the default branch's lockfile is already patched, yet the alert is open), fixed-on-next (next or hotfixes is patched, the default branch isn't; waiting for a release), open-pr (an open PR bumps the package; notes a hotfix-redirect twin), closed-unmerged (only closed PRs, and whether a later merge superseded them), or no-pr. Reads package-lock.json / pnpm-lock.yaml / yarn.lock nearest the alert's manifest at each branch, once per commit, size-capped. Also hints per repo whether Dependabot looks paused. Bounded by maxApiCalls; returns truncated:true with a reason and the unreached repos in pending if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
+					inputSchema: REPORT_ALERT_STATUS_SCHEMA
 				});
 			} else if (rule.name === "report_release_prs") {
 				tools.push({

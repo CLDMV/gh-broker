@@ -30,6 +30,7 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "report_security_alerts", mode: "read", custom: true },
 			{ name: "report_release_prs", mode: "read", custom: true },
 			{ name: "report_release_changes", mode: "read", custom: true },
+			{ name: "report_alert_status", mode: "read", custom: true },
 			{ name: "report_ci_status", mode: "read", custom: true },
 			{ name: "pull_request_read", mode: "read", augment: true },
 			{ name: "list_pull_requests", mode: "read", augment: true }
@@ -301,6 +302,25 @@ describe("Router.call", () => {
 				hotfixes: [],
 				truncated: true,
 				truncatedReason: "rate-limited"
+			});
+		});
+		it("report_alert_status runs on a read-PAT Octokit and returns the JSON report as text", async () => {
+			requestMock.mockResolvedValue({ data: [], headers: {} });
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("report_alert_status", { owner: "cldmv", repo: "r" });
+			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
+			expect(out).toEqual({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							scanned: { repos: 0, alerts: 0 },
+							scope: "repo",
+							summary: { "released-still-open": 0, "fixed-on-next": 0, "open-pr": 0, "closed-unmerged": 0, "no-pr": 0 },
+							repos: []
+						})
+					}
+				]
 			});
 		});
 
