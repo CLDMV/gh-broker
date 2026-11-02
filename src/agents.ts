@@ -25,9 +25,15 @@ import { isAbsolute } from "node:path";
 /** Agent user names: a Linux login name short enough that the group name fits in 32 characters. */
 export const AGENT_USER = /^[a-z_][a-z0-9_-]{0,15}$/;
 
-/** Whether `name` can be an agent user. "__proto__" fits the pattern but is refused: it is a special key in JS objects. */
+/**
+ * Names that fit the pattern but are refused: "__proto__" is a special key in JS objects, and
+ * root and the service user itself are never agents.
+ */
+export const RESERVED_AGENT_USERS: readonly string[] = ["__proto__", "root", "gh-broker"];
+
+/** Whether `name` can be an agent user. */
 export function isAgentUser(name: string): boolean {
-	return AGENT_USER.test(name) && name !== "__proto__";
+	return AGENT_USER.test(name) && !RESERVED_AGENT_USERS.includes(name);
 }
 
 export const AGENT_GROUP_PREFIX = "gh-broker-agent-";

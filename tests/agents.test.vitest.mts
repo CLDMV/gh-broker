@@ -14,8 +14,8 @@ describe("isAgentUser", () => {
 	it("accepts Linux-style names up to 16 characters", () => {
 		for (const n of ["repo", "glmtest", "_svc", "a-b_c9", "abcdefghijklmnop"]) expect(isAgentUser(n)).toBe(true);
 	});
-	it("refuses everything else, including __proto__", () => {
-		for (const n of ["", "Repo", "9lives", "abcdefghijklmnopq", "a.b", "a b", "__proto__"]) expect(isAgentUser(n)).toBe(false);
+	it("refuses everything else, including __proto__, root and the service user", () => {
+		for (const n of ["", "Repo", "9lives", "abcdefghijklmnopq", "a.b", "a b", "__proto__", "root", "gh-broker"]) expect(isAgentUser(n)).toBe(false);
 		expect(AGENT_USER.test("__proto__")).toBe(true); // the pattern alone would allow it
 	});
 });

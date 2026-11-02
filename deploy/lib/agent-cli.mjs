@@ -19,9 +19,9 @@
  * and an entry in the agent user's Claude Code MCP config. Every effect is injected.
  */
 import { agentGroup, agentsDir, assertAgentName, registeredAgents, socketPath, versionWarning } from "./agents.mjs";
-import { applyMcpConfig, mcpEntry, mcpStatus, removeMcpConfig, MCP_BACKUP, MCP_FILE } from "./mcp-config.mjs";
+import { applyMcpConfig, mcpEntry, mcpFileStatus, removeMcpConfig, MCP_BACKUP, MCP_FILE } from "./mcp-config.mjs";
 import { statePathOf } from "./otp-cli.mjs";
-import { withoutUser } from "./otp.mjs";
+import { spendRecentCodes, withoutUser } from "./otp.mjs";
 
 /** Run one `agent` subcommand. Returns the exit code; throws on a failure the dispatcher reports. */
 export async function agentCommand(command, rest, config, d) {
@@ -50,6 +50,11 @@ export function configureMcp(user, config, d, { noMcp = false } = {}) {
 		return "skipped";
 	}
 	const r = applyMcpConfig({ home: info.home, user, dir, owner: { uid: info.uid, gid: info.gid } }, d.mcpIO);
+	if (r.status === "unsafe") {
+		d.error(`${user}: ${r.reason}, so it was left alone (root won't read or replace it). Make it a plain file the user owns and run "sudo gh-broker agent sync ${user}", or add this under "mcpServers" by hand:`);
+		d.log(JSON.stringify({ github: entry }, null, "\t"));
+		return "unsafe";
+	}
 	if (r.status === "unreadable") {
 		d.log(`${user}: ${r.path} is not valid JSON, so it was left alone. Add this under "mcpServers" by hand:`);
 		d.log(JSON.stringify({ github: entry }, null, "\t"));
@@ -88,16 +93,16 @@ function remove(config, user, d) {
 	if (!registry(d).some((a) => a.user === user)) throw new Error(`"${user}" is not a registered agent`);
 	const info = d.userInfo(user);
 	if (info) {
-		const r = removeMcpConfig({ home: info.home, dir: agentsDir(config.listen) }, d.mcpIO);
-		const what = { removed: `removed the broker entry from ${r.path} (backup: ${MCP_BACKUP})`, absent: `no broker entry in ${r.path}`, "no-file": `no ${MCP_FILE} to edit`, unreadable: `${r.path} is not valid JSON, so it was left alone` };
+		const r = removeMcpConfig({ home: info.home, dir: agentsDir(config.listen), uid: info.uid }, d.mcpIO);
+		const what = { removed: `removed the broker entry from ${r.path} (backup: ${MCP_BACKUP})`, absent: `no broker entry in ${r.path}`, "no-file": `no ${MCP_FILE} to edit`, unreadable: `${r.path} is not valid JSON, so it was left alone`, unsafe: `${r.reason}, so it was left alone` };
 		d.log(`${user}: ${what[r.status]}`);
 	}
 	d.removeGroup(user);
 	d.log(`${user}: group ${agentGroup(user)} removed`);
 	const statePath = statePathOf(config);
 	const read = d.readState(statePath);
-	if (read.status === "ok" && user in read.state.users) {
-		d.writeState(statePath, withoutUser(read.state, user));
+	if (read.status === "ok" && Object.hasOwn(read.state.users, user)) {
+		d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user), d.now()));
 		d.log(`${user}: cleared from ${statePath}`);
 	} else if (read.status === "corrupt") {
 		d.error(`${statePath} is corrupt, so ${user}'s entry was not cleared; run "sudo gh-broker otp unlock --all"`);
@@ -114,7 +119,7 @@ function list(config, d) {
 	for (const a of agents) {
 		const sock = socketPath(dir, a.user);
 		const info = d.userInfo(a.user);
-		const mcp = info ? mcpStatus(d.mcpIO.read(`${info.home}/${MCP_FILE}`), a.user, dir) : "no such user";
+		const mcp = info ? mcpFileStatus({ home: info.home, user: a.user, dir, uid: info.uid }, d.mcpIO) : "no such user";
 		d.log(`${a.user}  ${sock}  socket: ${d.socketExists(sock) ? "yes" : "no"}  mcp: ${mcp}${a.complete ? "" : "  (group members incomplete; run agent add)"}`);
 	}
 	const warn = versionWarning(d.versions().pkg, d.versions().deployed);

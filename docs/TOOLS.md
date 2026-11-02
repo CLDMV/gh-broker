@@ -40,7 +40,7 @@ The `otp` argument is the broker's own: it is removed from the arguments of ever
 gh-broker is locked for <user> after repeated bad OTP codes (since <ISO>). Ask the user to run "sudo gh-broker otp unlock <user>" on <host>. Nothing was run.
 ```
 
-Bad-code counts, short lockouts and hard locks are kept per agent user.
+Bad-code counts, short lockouts and hard locks are kept per agent user. A short lockout and a hard lock each get their own audit entry (`otp: "lockout"` with `until`, or `otp: "hard-lock"`), and a call that opens a window logs `otp: "opened"` with the window's `until`. A code sent as a JSON number is read as six digits (so `12345` is `012345`); any other non-string `otp` is refused without counting as a bad code.
 
 **Setup.** The gate needs `config.otp` and its seed credential (base32, generated and shown once by the installer, stored with the PATs). Without either, every gated tool is hidden and refused with the reason, and the rest of the broker runs normally.
 

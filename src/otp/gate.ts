@@ -35,6 +35,7 @@
  */
 
 import { createHmac, randomBytes } from "node:crypto";
+import { audit } from "../audit.ts";
 import { hostname } from "node:os";
 import type { Config, SecretStore } from "../types.ts";
 import { OTP_ARG, isGated, otpSettings, readSeed, type OtpSettings } from "./policy.ts";
@@ -47,6 +48,8 @@ export type OtpOutcome = "window" | "opened" | "refused" | "locked" | "hard-lock
 export interface OtpAudit {
 	otp: OtpOutcome;
 	window?: string;
+	/** When the window closes, on "opened". */
+	until?: string;
 }
 
 /** A call the gate refused. Its message is safe to return to the agent. */
@@ -151,36 +154,39 @@ export class OtpGate {
 			new OtpRefusal(`OTP required for ${tool}: ask the user for a current code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`, { otp: "refused" });
 
 		if (code === undefined || code === null || code === "") throw refusal(); // a missing code is not a failure
+		// A client that sends the code as a JSON number (and so drops a leading zero) gets it back
+		// as six digits. Any other non-string is a malformed call, refused without counting.
+		if (typeof code === "number" && Number.isInteger(code) && code >= 0 && code <= 999999) code = String(code).padStart(6, "0");
+		if (typeof code !== "string") throw refusal();
 
 		this.windows = this.windows.filter((w) => w.expiresAt > now);
-		if (typeof code === "string") {
-			let hit: OpenWindow | undefined;
-			// Only this user's windows: a code another agent opened a window with is no use here.
-			for (const w of this.windows) if (w.user === user && safeEqual(w.code, code)) hit = w; // no early exit
-			if (hit) return { otp: "window", window: hit.id };
+		let hit: OpenWindow | undefined;
+		// Only this user's windows: a code another agent opened a window with is no use here.
+		for (const w of this.windows) if (w.user === user && safeEqual(w.code, code)) hit = w; // no early exit
+		if (hit) return { otp: "window", window: hit.id };
 
-			const step = matchStep((readSeed(this.config, this.secrets) as { key: Buffer }).key, code, now);
-			if (step !== undefined && step > state.lastAcceptedStep) {
-				// Persist the step before anything runs: if it can't be saved, a restart could let
-				// this code open a second window, so refuse instead.
-				try {
-					this.state.write(this.compact({ ...state, lastAcceptedStep: step, users: { ...state.users, [user]: { ...mine, failures: 0 } } }, now));
-				} catch (err) {
-					console.error(`gh-broker: ${(err as Error).message}`);
-					throw new OtpRefusal(`OTP could not be checked: the broker could not save its OTP state. Nothing was run.`, { otp: "refused" });
-				}
-				const id = createHmac("sha256", this.idKey).update(`${user}\0${code}`).digest("hex").slice(0, 16);
-				this.windows.push({ user, code, expiresAt: now + this.settings.windowSeconds * 1000, id });
-				return { otp: "opened", window: id };
+		const step = matchStep((readSeed(this.config, this.secrets) as { key: Buffer }).key, code, now);
+		if (step !== undefined && step > state.lastAcceptedStep) {
+			// Persist the step before anything runs: if it can't be saved, a restart could let
+			// this code open a second window, so refuse instead.
+			try {
+				this.state.write(this.compact({ ...state, lastAcceptedStep: step, users: { ...state.users, [user]: { ...mine, failures: 0 } } }, now));
+			} catch (err) {
+				console.error(`gh-broker: ${(err as Error).message}`);
+				throw new OtpRefusal(`OTP could not be checked: the broker could not save its OTP state. Nothing was run.`, { otp: "refused" });
 			}
+			const id = createHmac("sha256", this.idKey).update(`${user}\0${code}`).digest("hex").slice(0, 16);
+			const expiresAt = now + this.settings.windowSeconds * 1000;
+			this.windows.push({ user, code, expiresAt, id });
+			return { otp: "opened", window: id, until: new Date(expiresAt).toISOString() };
 		}
 
-		this.recordFailure(state, mine, user, now);
+		this.recordFailure(tool, state, mine, user, now);
 		throw refusal();
 	}
 
 	/** Count one bad code for `user`, starting a short lockout (and maybe the hard lock) at the limit. */
-	private recordFailure(state: OtpState, mine: UserState, user: string, now: number): void {
+	private recordFailure(tool: string, state: OtpState, mine: UserState, user: string, now: number): void {
 		const next = { ...mine, lockouts: mine.lockouts.filter((t) => Date.parse(t) > now - DAY_MS) };
 		next.failures += 1;
 		if (next.failures >= this.settings.maxFailures) {
@@ -189,10 +195,10 @@ export class OtpGate {
 			next.lockedUntil = new Date(now + this.settings.lockoutSeconds * 1000).toISOString();
 			next.lockouts.push(at);
 			if (next.lockouts.length >= this.settings.maxLockouts) next.hardLock = { since: at, lockouts: next.lockouts.length };
-			console.error(
+			audit(
 				next.hardLock
-					? `gh-broker: OTP hard lock for ${user} after ${next.lockouts.length} lockouts in 24 h; every tool except otp_status is refused for ${user} until "${unlockCommand(user)}"`
-					: `gh-broker: OTP locked for ${user} until ${next.lockedUntil} after ${this.settings.maxFailures} bad codes`
+					? { tool, user, decision: "deny", otp: "hard-lock", detail: `${next.lockouts.length} lockouts in 24 h; every tool except otp_status is refused until "${unlockCommand(user)}"` }
+					: { tool, user, decision: "deny", otp: "lockout", until: next.lockedUntil, detail: `${this.settings.maxFailures} bad codes` }
 			);
 		}
 		try {

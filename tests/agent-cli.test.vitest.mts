@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { agentCommand, configureMcp, smokeAgent } from "../deploy/lib/agent-cli.mjs";
-import { mcpEntry } from "../deploy/lib/mcp-config.mjs";
+import { mcpEntry, UnsafeFile } from "../deploy/lib/mcp-config.mjs";
 import { emptyState, emptyUser } from "../deploy/lib/otp.mjs";
-import { makeDeps, config } from "./helpers/cli-deps.mjs";
+import { makeDeps, config, NOW } from "./helpers/cli-deps.mjs";
 
 const DIR = "/run/gh-broker/agents";
 const OLD = { type: "stdio", command: "sg", args: ["gh-broker-clients", "-c", "exec socat STDIO UNIX-CONNECT:/run/gh-broker/gh-broker.sock"] };
 const claude = (u: string) => `/home/${u}/.claude.json`;
+/** An MCP config reader that finds every agent's file planted as a symlink. */
+const unsafeIO = { read: (p: string) => { throw new UnsafeFile(`${p} is a symlink`); }, write: () => { throw new Error("must not write"); } };
 
 describe("agent add", () => {
 	it("registers the group, writes the MCP config, restarts and smoke-tests the agent's socket", async () => {
@@ -68,6 +70,14 @@ describe("configureMcp", () => {
 		expect(ghost.out[0]).toContain("(no such user)");
 	});
 
+	it("leaves an unsafe file (a symlink, someone else's file) alone and prints the entry", () => {
+		const { d, err, out, writes } = makeDeps({ mcpIO: unsafeIO });
+		expect(configureMcp("repo", config, d)).toBe("unsafe");
+		expect(writes).toEqual([]);
+		expect(err[0]).toBe('repo: /home/repo/.claude.json is a symlink, so it was left alone (root won\'t read or replace it). Make it a plain file the user owns and run "sudo gh-broker agent sync repo", or add this under "mcpServers" by hand:');
+		expect(out[0]).toContain('"command": "sg"');
+	});
+
 	it("uses the socket directory from the config's listen", () => {
 		const { d, files } = makeDeps();
 		configureMcp("repo", { listen: "agents:/run/other" }, d);
@@ -94,7 +104,7 @@ describe("agent remove", () => {
 		expect(JSON.parse(files[claude("repo")])).toEqual({ mcpServers: { x: { command: "npx" } } });
 		expect(files["/home/repo/.claude.json.gh-broker.bak"]).toBeDefined();
 		expect(d.removeGroup).toHaveBeenCalledWith("repo");
-		expect(d.writeState).toHaveBeenCalledWith("/var/lib/gh-broker/otp-state.json", { version: 1, lastAcceptedStep: 0, users: { glmtest: emptyUser() } });
+		expect(d.writeState).toHaveBeenCalledWith("/var/lib/gh-broker/otp-state.json", { version: 1, lastAcceptedStep: Math.floor(NOW / 30000) + 1, users: { glmtest: emptyUser() } });
 		expect(d.restart).toHaveBeenCalled();
 		expect(out.join("\n")).toContain("removed the broker entry from /home/repo/.claude.json");
 	});
@@ -110,6 +120,9 @@ describe("agent remove", () => {
 		const bad = makeDeps({}, { [claude("repo")]: "{nope" });
 		await agentCommand("remove", ["repo"], config, bad.d);
 		expect(bad.out.join("\n")).toContain("not valid JSON, so it was left alone");
+		const unsafe = makeDeps({ mcpIO: unsafeIO });
+		await agentCommand("remove", ["repo"], config, unsafe.d);
+		expect(unsafe.out.join("\n")).toContain("repo: /home/repo/.claude.json is a symlink, so it was left alone");
 		const gone = makeDeps({ userInfo: () => undefined });
 		await agentCommand("remove", ["repo"], config, gone.d);
 		expect(gone.d.removeGroup).toHaveBeenCalledWith("repo");
@@ -136,6 +149,9 @@ describe("agent list", () => {
 		expect(await agentCommand("list", [], config, d)).toBe(0);
 		expect(out).toContain("repo  /run/gh-broker/agents/repo.sock  socket: yes  mcp: ok");
 		expect(out).toContain("glmtest  /run/gh-broker/agents/glmtest.sock  socket: no  mcp: points elsewhere  (group members incomplete; run agent add)");
+		const unsafe = makeDeps({ mcpIO: unsafeIO });
+		await agentCommand("list", [], config, unsafe.d);
+		expect(unsafe.out).toContain("repo  /run/gh-broker/agents/repo.sock  socket: yes  mcp: unsafe (/home/repo/.claude.json is a symlink)");
 	});
 
 	it("handles no agents, a missing user, a missing config, and version drift", async () => {

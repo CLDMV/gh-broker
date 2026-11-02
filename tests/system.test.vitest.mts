@@ -133,12 +133,6 @@ describe("account creation", () => {
 		expect(calls()).toContain("groupadd --system g");
 	});
 
-	it("addUserToGroup appends the group", () => {
-		route({});
-		sys.addUserToGroup("u", "g");
-		expect(calls()).toContain("usermod --append --groups g u");
-	});
-
 	it("ensureServiceUser creates a missing user", () => {
 		route({ getent: ok(), id: fail(1) });
 		sys.ensureServiceUser("svc", "svcg");
@@ -158,12 +152,12 @@ describe("account creation", () => {
 	it("ensureAgentGroup creates the agent's group with exactly the service user and the agent", () => {
 		route({ getent: fail(2) });
 		sys.ensureAgentGroup("repo");
-		expect(calls()).toEqual(["getent group gh-broker-agent-repo", "groupadd --system gh-broker-agent-repo", "usermod --append --groups gh-broker-agent-repo gh-broker", "usermod --append --groups gh-broker-agent-repo repo"]);
+		expect(calls()).toEqual(["getent group gh-broker-agent-repo", "groupadd --system gh-broker-agent-repo", "gpasswd --members gh-broker,repo gh-broker-agent-repo"]);
 		h.spawnSync.mockReset();
 		route({ getent: ok("x:x:1:") });
 		sys.ensureAgentGroup("repo", "svc");
 		expect(calls()).not.toContain("groupadd --system gh-broker-agent-repo");
-		expect(calls()).toContain("usermod --append --groups gh-broker-agent-repo svc");
+		expect(calls()).toContain("gpasswd --members svc,repo gh-broker-agent-repo");
 	});
 
 	it("removeAgentGroup deletes the group only when it exists", () => {
@@ -284,6 +278,7 @@ describe("node symlinks", () => {
 
 describe("ensureDropDir", () => {
 	const st = (kind: "dir" | "link" | "file") => ({
+		uid: 2002,
 		isSymbolicLink: () => kind === "link",
 		isDirectory: () => kind === "dir"
 	});
@@ -294,18 +289,19 @@ describe("ensureDropDir", () => {
 		f.lstatSync.mockImplementation(() => {
 			throw new Error("ENOENT");
 		});
-		sys.ensureDropDir("/var/lib/drop/in", "agent", "g");
+		expect(sys.ensureDropDir("/var/lib/drop/in", "agent", "g")).toEqual({ created: true });
 		expect(f.mkdirSync).toHaveBeenCalledWith("/var/lib/drop", { recursive: true, mode: 0o755 });
 		expect(f.mkdirSync).toHaveBeenCalledWith("/var/lib/drop/in", { mode: 0o750 });
 		expect(f.chownSync).toHaveBeenCalledWith("/var/lib/drop/in", 1001, 42);
 		expect(f.chmodSync).toHaveBeenCalledWith("/var/lib/drop/in", 0o2750);
 	});
 
-	it("reuses an existing parent and directory", () => {
+	it("reuses an existing parent and directory, keeping the directory's owner", () => {
 		f.existsSync.mockReturnValue(true);
 		f.lstatSync.mockReturnValue(st("dir"));
-		sys.ensureDropDir("/var/lib/drop/in", "agent", "g");
+		expect(sys.ensureDropDir("/var/lib/drop/in", "agent", "g")).toEqual({ created: false });
 		expect(f.mkdirSync).not.toHaveBeenCalled();
+		expect(f.chownSync).toHaveBeenCalledWith("/var/lib/drop/in", 2002, 42);
 		expect(f.chmodSync).toHaveBeenCalledWith("/var/lib/drop/in", 0o2750);
 	});
 

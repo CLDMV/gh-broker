@@ -25,8 +25,7 @@ export function makeDeps(over: Record<string, unknown> = {}, files: Record<strin
 		ensureGroup: vi.fn(),
 		removeGroup: vi.fn(),
 		mcpIO: {
-			read: (p: string) => files[p],
-			stat: () => ({ uid: 1000, gid: 1000, mode: 0o100600 }),
+			read: (p: string) => (files[p] === undefined ? undefined : { text: files[p], stat: { uid: 1000, gid: 1000, mode: 0o100600 } }),
 			write: (p: string, text: string) => {
 				files[p] = text;
 				writes.push([p, text]);
@@ -41,6 +40,8 @@ export function makeDeps(over: Record<string, unknown> = {}, files: Record<strin
 		storeSeed: vi.fn(),
 		restart: vi.fn(),
 		qr: async () => "QR",
+		sudoUser: () => "admin",
+		audit: vi.fn(),
 		...over
 	};
 	return { d, out, err, files, writes };

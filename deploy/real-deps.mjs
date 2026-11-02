@@ -18,12 +18,13 @@
  * MCP config and smoke test. Wiring only: the logic and its tests are in lib/. Kept apart from
  * cli.mjs because cli.mjs awaits the installer, which imports this.
  */
-import { readFileSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseGroups, parsePasswd } from "./lib/agents.mjs";
 import { readState, writeStateAtomic, writeFileAtomic, storeSeed } from "./lib/otp.mjs";
+import { readOwnedFile } from "./lib/mcp-config.mjs";
 import { readSecretsFile, writeSecretsFile } from "./lib/secret-store.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
 import { run, isRoot, requireUid, requireGid, systemdCredsEncrypt, writeCredsDropin, restartService, ensureAgentGroup, removeAgentGroup } from "./lib/system.mjs";
@@ -57,7 +58,7 @@ export function realDeps() {
 		},
 		ensureGroup: (user) => ensureAgentGroup(user, SVC),
 		removeGroup: removeAgentGroup,
-		mcpIO: { read: readText, stat: (p) => statSync(p), write: (p, text, owner) => writeFileAtomic(p, text, owner) },
+		mcpIO: { read: readOwnedFile, write: (p, text, owner) => writeFileAtomic(p, text, owner) },
 		socketExists: existsSync,
 		smoke: smokeTest,
 		versions: () => ({ pkg: JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version, deployed: readText("/opt/gh-broker/version")?.trim() }),
@@ -81,6 +82,9 @@ export function realDeps() {
 				}
 			});
 		},
-		restart: restartService
+		restart: restartService,
+		sudoUser: () => process.env.SUDO_USER,
+		// Same journal identifier as the daemon (SyslogIdentifier=gh-broker), so `journalctl -t gh-broker` shows both.
+		audit: (entry) => run("systemd-cat", ["--identifier=gh-broker", "--priority=notice"], { input: `${JSON.stringify(entry)}\n` })
 	};
 }

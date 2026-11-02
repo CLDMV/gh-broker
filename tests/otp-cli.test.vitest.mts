@@ -1,7 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { otpCommand } from "../deploy/lib/otp-cli.mjs";
 import { emptyState, emptyUser } from "../deploy/lib/otp.mjs";
-import { makeDeps, config } from "./helpers/cli-deps.mjs";
+import { makeDeps, config, NOW } from "./helpers/cli-deps.mjs";
+
+/** What a CLI write sets lastAcceptedStep to at NOW: every code up to one step ahead is spent. */
+const STEP = Math.floor(NOW / 30000) + 1;
 
 const stateWith = (users: Record<string, unknown>, over: Record<string, unknown> = {}) => ({ status: "ok", state: { ...emptyState(), lastAcceptedStep: 9, users, ...over } });
 const hard = { ...emptyUser(), failures: 2, lockouts: ["2026-11-01T12:00:00.000Z"], hardLock: { since: "2026-11-01T12:00:00.000Z", lockouts: 3 } };
@@ -62,12 +65,21 @@ describe("otp unlock", () => {
 		expect(out[0]).toContain("nothing to unlock");
 	});
 
-	it("clears one user's hard lock and leaves the others and lastAcceptedStep alone", async () => {
+	it("clears one user's hard lock, leaves the others, spends recent codes and audits it", async () => {
 		const other = { ...emptyUser(), failures: 1 };
 		const { d, out } = makeDeps({ readState: () => stateWith({ repo: hard, glmtest: other }) });
 		expect(await otpCommand("unlock", ["repo"], config, d)).toBe(0);
-		expect(d.writeState).toHaveBeenCalledWith("/var/lib/gh-broker/otp-state.json", { version: 1, lastAcceptedStep: 9, users: { glmtest: other } });
-		expect(out[0]).toBe("unlocked repo");
+		expect(d.writeState).toHaveBeenCalledWith("/var/lib/gh-broker/otp-state.json", { version: 1, lastAcceptedStep: STEP, users: { glmtest: other } });
+		expect(out[0]).toBe("unlocked repo. Codes from the last minute won't open a window; use the next code.");
+		expect(d.audit).toHaveBeenCalledWith({ ts: new Date(NOW).toISOString(), decision: "otp-unlock", user: "repo", by: "admin" });
+	});
+
+	it("still unlocks when the journal write fails, with a warning; names root without a sudo user", async () => {
+		const { d, err } = makeDeps({ readState: () => stateWith({ repo: hard }), sudoUser: () => undefined, audit: vi.fn(() => { throw new Error("systemd-cat: not found"); }) });
+		expect(await otpCommand("unlock", ["repo"], config, d)).toBe(0);
+		expect(d.writeState).toHaveBeenCalled();
+		expect(d.audit).toHaveBeenCalledWith(expect.objectContaining({ by: "root" }));
+		expect(err[0]).toBe("warning: the unlock could not be written to the journal: systemd-cat: not found");
 	});
 
 	it("clears counters for a user who isn't hard-locked, and skips a user with no entry", async () => {
@@ -83,8 +95,9 @@ describe("otp unlock", () => {
 	it("--all clears every user", async () => {
 		const { d, out } = makeDeps({ readState: () => stateWith({ repo: hard, glmtest: hard }) });
 		await otpCommand("unlock", ["--all"], config, d);
-		expect(d.writeState).toHaveBeenCalledWith(expect.any(String), { version: 1, lastAcceptedStep: 9, users: {} });
+		expect(d.writeState).toHaveBeenCalledWith(expect.any(String), { version: 1, lastAcceptedStep: STEP, users: {} });
 		expect(out[0]).toContain("every user");
+		expect(d.audit).toHaveBeenCalledWith(expect.objectContaining({ user: "*" }));
 	});
 
 	it("refuses a single-user unlock on a corrupt file, but --all rewrites it clean", async () => {
@@ -94,8 +107,37 @@ describe("otp unlock", () => {
 		expect(one.d.writeState).not.toHaveBeenCalled();
 		const all = makeDeps({ readState: corrupt });
 		await otpCommand("unlock", ["--all"], config, all.d);
-		expect(all.d.writeState).toHaveBeenCalledWith(expect.any(String), emptyState());
+		expect(all.d.writeState).toHaveBeenCalledWith(expect.any(String), { ...emptyState(), lastAcceptedStep: STEP });
 		expect(all.out[0]).toContain("rewrote the corrupt state file");
+		expect(all.d.audit).toHaveBeenCalledWith(expect.objectContaining({ user: "*", detail: "rewrote a corrupt state file" }));
+	});
+});
+
+describe("otp list", () => {
+	it("lists hard-locked and short-locked users with the command that clears each", async () => {
+		const short = { ...emptyUser(), lockedUntil: "2026-11-01T12:15:00.000Z" };
+		const { d, out } = makeDeps({ readState: () => stateWith({ repo: hard, glmtest: short, other: emptyUser() }) });
+		expect(await otpCommand("list", [], config, d)).toBe(0);
+		expect(out).toEqual([
+			"glmtest  locked until 2026-11-01T12:15:00.000Z  unlock: sudo gh-broker otp unlock glmtest",
+			`repo  hard-locked since ${hard.hardLock.since} after ${hard.hardLock.lockouts} lockouts  unlock: sudo gh-broker otp unlock repo`
+		]);
+	});
+
+	it("says when nobody is locked out, and reports a corrupt file as everyone locked", async () => {
+		const none = makeDeps({ readState: () => stateWith({}) });
+		await otpCommand("list", [], config, none.d);
+		expect(none.out).toEqual(["nobody is locked out"]);
+		const bad = makeDeps({ readState: () => ({ status: "corrupt", state: emptyState() }) });
+		await otpCommand("list", [], config, bad.d);
+		expect(bad.out[0]).toBe("glmtest  locked: /var/lib/gh-broker/otp-state.json is corrupt  unlock: sudo gh-broker otp unlock --all");
+	});
+
+	it("prints JSON with --json", async () => {
+		const { d, out } = makeDeps({ readState: () => stateWith({ repo: hard }) });
+		await otpCommand("list", ["--json"], config, d);
+		const j = JSON.parse(out[0]);
+		expect(j).toMatchObject({ fileStatus: "ok", locked: [{ user: "repo", corrupt: false, hardLock: hard.hardLock, lockedUntil: null, unlockCommand: "sudo gh-broker otp unlock repo" }] });
 	});
 });
 

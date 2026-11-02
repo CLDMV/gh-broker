@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, symlinkSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 import * as otp from "../deploy/lib/otp.mjs";
 
@@ -107,6 +107,13 @@ describe("state file", () => {
 		return p;
 	};
 
+	it("spendRecentCodes marks every code up to one step ahead as spent, and never lowers the step", () => {
+		const now = Date.parse("2026-11-01T12:05:10.000Z");
+		const step = Math.floor(now / 30000);
+		expect(otp.spendRecentCodes(otp.emptyState(), now).lastAcceptedStep).toBe(step + 1);
+		expect(otp.spendRecentCodes({ ...otp.emptyState(), lastAcceptedStep: step + 5 }, now).lastAcceptedStep).toBe(step + 5);
+	});
+
 	it("starts all-zero", () => {
 		expect(otp.emptyState()).toEqual({ version: 1, lastAcceptedStep: 0, users: {} });
 		expect(otp.emptyUser()).toEqual({ failures: 0, lockedUntil: null, lockouts: [], hardLock: null });
@@ -153,29 +160,53 @@ describe("state file", () => {
 
 	it("writes atomically as 0600, chowned, with no temp file left", () => {
 		const p = join(dir, "written.json");
-		const chown = vi.fn();
-		otp.writeStateAtomic(p, otp.emptyState(), { uid: 11, gid: 22 }, { chown });
+		const fchown = vi.fn();
+		otp.writeStateAtomic(p, otp.emptyState(), { uid: 11, gid: 22 }, { fchown });
 		expect(JSON.parse(readFileSync(p, "utf8"))).toEqual(otp.emptyState());
 		expect(statSync(p).mode & 0o777).toBe(0o600);
-		expect(chown).toHaveBeenCalledWith(expect.stringContaining(".written.json."), 11, 22);
+		expect(fchown).toHaveBeenCalledWith(expect.any(Number), 11, 22);
 		expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
 	});
 
 	it("writeFileAtomic honors the mode, and overwrites an existing file", () => {
 		const p = file("over.json", "garbage");
-		otp.writeFileAtomic(p, "new\n", { uid: 1, gid: 1, mode: 0o640 }, { chown: () => {} });
+		otp.writeFileAtomic(p, "new\n", { uid: 1, gid: 1, mode: 0o640 }, { fchown: () => {} });
 		expect(readFileSync(p, "utf8")).toBe("new\n");
 		expect(statSync(p).mode & 0o777).toBe(0o640);
 	});
 
+	it("replaces a symlink at the path instead of writing through it, and uses a fresh random temp name", () => {
+		const target = file("target.json", "untouched");
+		const p = join(dir, "linked.json");
+		symlinkSync(target, p);
+		const fchown = vi.fn();
+		otp.writeFileAtomic(p, "new\n", { uid: 1, gid: 1 }, { fchown });
+		otp.writeFileAtomic(p, "again\n", { uid: 1, gid: 1 }, { fchown });
+		expect(readFileSync(target, "utf8")).toBe("untouched");
+		expect(lstatSync(p).isSymbolicLink()).toBe(false);
+		expect(readFileSync(p, "utf8")).toBe("again\n");
+	});
+
+	it("never opens an existing temp file: a planted symlink makes the open fail, not write through it", () => {
+		const target = file("victim.json", "keep");
+		const fixed = Buffer.alloc(8, 0xab);
+		const p = join(dir, "planted.json");
+		const planted = join(dir, `.planted.json.${fixed.toString("hex")}.tmp`);
+		symlinkSync(target, planted);
+		expect(() => otp.writeFileAtomic(p, "x", { uid: 1, gid: 1 }, { fchown: () => {}, random: () => fixed })).toThrow(/EEXIST/);
+		expect(readFileSync(target, "utf8")).toBe("keep");
+		expect(existsSync(p)).toBe(false);
+		rmSync(planted);
+	});
+
 	it("removes the temp file and rethrows when the chown fails", () => {
 		const p = join(dir, "failed.json");
-		expect(() => otp.writeFileAtomic(p, "x", { uid: 1, gid: 1 }, { chown: () => { throw new Error("EPERM"); } })).toThrow("EPERM");
+		expect(() => otp.writeFileAtomic(p, "x", { uid: 1, gid: 1 }, { fchown: () => { throw new Error("EPERM"); } })).toThrow("EPERM");
 		expect(existsSync(p)).toBe(false);
 		expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
 	});
 
-	it("uses chownSync by default (a non-root run refuses, and the temp file is cleaned up)", () => {
+	it("uses fchownSync by default (a non-root run refuses, and the temp file is cleaned up)", () => {
 		const p = join(dir, "default.json");
 		try {
 			otp.writeFileAtomic(p, "x", { uid: 0, gid: 0 });

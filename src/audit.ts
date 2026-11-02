@@ -29,7 +29,9 @@ export interface AuditEntry {
 	ok?: boolean;
 	detail?: string;
 	/** OTP gate outcome, on gated and hard-locked calls (src/otp/gate.ts). */
-	otp?: "window" | "opened" | "refused" | "locked" | "hard-locked";
+	otp?: "window" | "opened" | "refused" | "locked" | "hard-locked" | "lockout" | "hard-lock";
+	/** When a window opened by this call closes, or when a short lockout started by it ends. */
+	until?: string;
 	/** Window id (an HMAC of the code under a per-process key), for window/opened. Never the code. */
 	window?: string;
 }

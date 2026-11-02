@@ -29,9 +29,12 @@ export const DEFAULT_LISTEN = `agents:${DEFAULT_AGENTS_DIR}`;
 /** Keeps `gh-broker-agent-<u>` within the 32-character group name limit. */
 export const AGENT_NAME = /^[a-z_][a-z0-9_-]{0,15}$/;
 
-/** Whether `name` may be registered as an agent user. "__proto__" fits the pattern but is refused, as the daemon refuses it (src/agents.ts). */
+/** Names that fit the pattern but are refused, as the daemon refuses them (src/agents.ts): a special JS key, root, and the service user. */
+export const RESERVED_AGENT_NAMES = ["__proto__", "root", SVC_USER];
+
+/** Whether `name` may be registered as an agent user. */
 export function validAgentName(name) {
-	return typeof name === "string" && AGENT_NAME.test(name) && name !== "__proto__";
+	return typeof name === "string" && AGENT_NAME.test(name) && !RESERVED_AGENT_NAMES.includes(name);
 }
 
 /** Throws a clear error for an invalid agent user name. */
@@ -61,8 +64,8 @@ export function parseGroups(text) {
 }
 
 /**
- * Every `gh-broker-agent-<u>` group, with whether it is complete (members include both the
- * service user and `<u>`; the daemon ignores a group that isn't).
+ * Every `gh-broker-agent-<u>` group, with whether it is complete: its members are exactly the
+ * service user and `<u>`, the same test the daemon uses (it ignores a group that isn't).
  * @returns {Array<{ user: string, gid: number, complete: boolean }>} sorted by user
  */
 export function registeredAgents(groups) {
@@ -71,7 +74,8 @@ export function registeredAgents(groups) {
 		if (!g.name.startsWith(AGENT_GROUP_PREFIX)) continue;
 		const user = g.name.slice(AGENT_GROUP_PREFIX.length);
 		if (!validAgentName(user)) continue;
-		out.push({ user, gid: g.gid, complete: g.members.includes(SVC_USER) && g.members.includes(user) });
+		const members = new Set(g.members);
+		out.push({ user, gid: g.gid, complete: members.size === 2 && members.has(SVC_USER) && members.has(user) });
 	}
 	return out.sort((a, b) => a.user.localeCompare(b.user));
 }

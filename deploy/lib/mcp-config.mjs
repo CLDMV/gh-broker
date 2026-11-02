@@ -18,13 +18,55 @@
  * the top-level `mcpServers` of `<home>/.claude.json`; nothing else in that file is touched. The
  * pure functions build the entry, pick its key and edit the JSON text; `applyMcpConfig` and
  * `removeMcpConfig` do the file work (backup, atomic write that keeps the owner and mode, and a
- * read-back check) with every filesystem effect injected.
+ * read-back check) with every filesystem effect injected. Root does that work in a directory the
+ * agent user owns, so `readOwnedFile` refuses anything but the user's own plain file.
  */
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { agentGroup, socketPath } from "./agents.mjs";
 
 export const MCP_FILE = ".claude.json";
 export const MCP_BACKUP = ".claude.json.gh-broker.bak";
 const BROKER_PATH = "/run/gh-broker/";
+
+/** A file root must not read or replace: a symlink, not a regular file, not the user's, or hard-linked. */
+export class UnsafeFile extends Error {}
+
+/**
+ * Read `path` as root on behalf of the user `uid`, without following a symlink: the file must be
+ * a regular file owned by `uid` with a single link. Opened with O_NOFOLLOW (and O_NONBLOCK, so a
+ * FIFO can't hang the read), then checked and read through the same descriptor, so it can't be
+ * swapped between the check and the read.
+ * @returns {{ text: string, stat: { uid: number, gid: number, mode: number } } | undefined} undefined when there is no file
+ */
+export function readOwnedFile(path, uid) {
+	let fd;
+	try {
+		fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+	} catch (err) {
+		if (err.code === "ENOENT") return undefined;
+		if (err.code === "ELOOP") throw new UnsafeFile(`${path} is a symlink`);
+		throw err;
+	}
+	try {
+		const st = fstatSync(fd);
+		if (!st.isFile()) throw new UnsafeFile(`${path} is not a regular file`);
+		if (st.uid !== uid) throw new UnsafeFile(`${path} is owned by uid ${st.uid}, not the agent user (uid ${uid})`);
+		if (st.nlink !== 1) throw new UnsafeFile(`${path} has ${st.nlink} hard links`);
+		return { text: readFileSync(fd, "utf8"), stat: { uid: st.uid, gid: st.gid, mode: st.mode } };
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/** `io.read`, with an unsafe file turned into `{ unsafe: reason }`. */
+function load(io, path, uid) {
+	try {
+		return io.read(path, uid);
+	} catch (err) {
+		if (err instanceof UnsafeFile) return { unsafe: err.message };
+		throw err;
+	}
+}
 
 /** The entry for `user`. `sg` makes the new group effective without a re-login. */
 export function mcpEntry(user, dir) {
@@ -114,41 +156,48 @@ export function dropEntries(text, dir) {
  * @param {string} o.home  the agent user's home directory
  * @param {string} o.user
  * @param {string} o.dir   the agents' socket directory
- * @param {{ uid: number, gid: number }} o.owner  owner for a file that has to be created
- * @param {object} io      { read(path) -> string | undefined, stat(path) -> { uid, gid, mode }, write(path, text, { uid, gid, mode }), join }
- * @returns {{ status: "created" | "written" | "unchanged" | "unreadable", key?: string, entry: object, path: string }}
+ * @param {{ uid: number, gid: number }} o.owner  the agent user; owner for a file that has to be created
+ * @param {object} io      { read(path, uid) -> { text, stat: { uid, gid, mode } } | undefined (see readOwnedFile), write(path, text, { uid, gid, mode }) }
+ * @returns {{ status: "created" | "written" | "unchanged" | "unreadable" | "unsafe", key?: string, reason?: string, entry: object, path: string }}
  */
 export function applyMcpConfig({ home, user, dir, owner }, io) {
 	const path = `${home}/${MCP_FILE}`;
 	const entry = mcpEntry(user, dir);
-	const before = io.read(path);
-	const merged = mergeEntry(before, user, dir);
+	const before = load(io, path, owner.uid);
+	if (before?.unsafe) return { status: "unsafe", reason: before.unsafe, entry, path };
+	const merged = mergeEntry(before?.text, user, dir);
 	if (merged.status === "unreadable") return { status: "unreadable", entry, path };
 	if (merged.status === "unchanged") return { status: "unchanged", key: merged.key, entry, path };
 	let target = { ...owner, mode: 0o600 };
 	if (before !== undefined) {
-		const st = io.stat(path);
-		target = { uid: st.uid, gid: st.gid, mode: st.mode & 0o777 };
-		io.write(`${home}/${MCP_BACKUP}`, before, target);
+		target = { uid: before.stat.uid, gid: before.stat.gid, mode: before.stat.mode & 0o777 };
+		io.write(`${home}/${MCP_BACKUP}`, before.text, target);
 	}
 	io.write(path, merged.text, target);
-	if (mcpStatus(io.read(path), user, dir) !== "ok") throw new Error(`${path}: the broker entry is not there after writing; restore ${MCP_BACKUP} if the file looks wrong`);
+	const after = load(io, path, owner.uid);
+	if (after?.unsafe || mcpStatus(after?.text, user, dir) !== "ok") throw new Error(`${path}: the broker entry is not there after writing; restore ${MCP_BACKUP} if the file looks wrong`);
 	return { status: before === undefined ? "created" : "written", key: merged.key, entry, path };
 }
 
 /**
  * Remove the broker entry from `user`'s `.claude.json`, backing the file up first.
- * @returns {{ status: "removed" | "absent" | "no-file" | "unreadable", keys?: string[], path: string }}
+ * @returns {{ status: "removed" | "absent" | "no-file" | "unreadable" | "unsafe", keys?: string[], reason?: string, path: string }}
  */
-export function removeMcpConfig({ home, dir }, io) {
+export function removeMcpConfig({ home, dir, uid }, io) {
 	const path = `${home}/${MCP_FILE}`;
-	const before = io.read(path);
+	const before = load(io, path, uid);
 	if (before === undefined) return { status: "no-file", path };
-	const dropped = dropEntries(before, dir);
+	if (before.unsafe) return { status: "unsafe", reason: before.unsafe, path };
+	const dropped = dropEntries(before.text, dir);
 	if (dropped.status !== "removed") return { status: dropped.status, path };
-	const st = io.stat(path);
-	const target = { uid: st.uid, gid: st.gid, mode: st.mode & 0o777 };
-	io.write(`${home}/${MCP_BACKUP}`, before, target);
+	const target = { uid: before.stat.uid, gid: before.stat.gid, mode: before.stat.mode & 0o777 };
+	io.write(`${home}/${MCP_BACKUP}`, before.text, target);
 	io.write(path, dropped.text, target);
 	return { status: "removed", keys: dropped.keys, path };
+}
+
+/** The MCP status of `user`'s file for `agent list`: mcpStatus, or "unsafe (<reason>)". */
+export function mcpFileStatus({ home, user, dir, uid }, io) {
+	const got = load(io, `${home}/${MCP_FILE}`, uid);
+	return got?.unsafe ? `unsafe (${got.unsafe})` : mcpStatus(got?.text, user, dir);
 }

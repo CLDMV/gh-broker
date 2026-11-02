@@ -61,7 +61,11 @@ const REFUSED = /^OTP required for merge_pull_request: ask the user for a curren
 
 beforeEach(() => {
 	vi.spyOn(console, "error").mockImplementation(() => {});
+	vi.spyOn(console, "log").mockImplementation(() => {});
 });
+
+/** The audit lines (console.log JSON) written so far. */
+const auditLines = (): Array<Record<string, unknown>> => vi.mocked(console.log).mock.calls.map(([line]) => JSON.parse(String(line)));
 afterEach(() => {
 	vi.restoreAllMocks();
 });
@@ -116,7 +120,7 @@ describe("OtpGate windows", () => {
 		const h = harness();
 		const c = h.code();
 		const opened = h.auth(c);
-		expect(opened).toEqual({ otp: "opened", window: expect.stringMatching(/^[0-9a-f]{16}$/) });
+		expect(opened).toEqual({ otp: "opened", window: expect.stringMatching(/^[0-9a-f]{16}$/), until: new Date(T0 + 5 * MIN).toISOString() });
 		expect(opened.window).not.toContain(c);
 		expect(h.readState()).toEqual({ version: 1, lastAcceptedStep: stepAt(T0), users: {} });
 
@@ -222,6 +226,26 @@ describe("OtpGate windows", () => {
 	});
 });
 
+describe("OtpGate code types", () => {
+	it("reads a JSON number as six digits, restoring a dropped leading zero", () => {
+		const h = harness();
+		let t = T0;
+		// Find a moment whose code starts with 0, so the number form loses a digit.
+		while (h.code(t)[0] !== "0") t += 30_000;
+		h.clock.t = t;
+		const n = Number(h.code(t));
+		expect(String(n).length).toBeLessThan(6);
+		expect(h.auth(n as unknown as string).otp).toBe("opened");
+		expect(h.auth(h.code(t)).otp).toBe("window");
+	});
+
+	it("refuses other non-strings, and out-of-range numbers, without counting a bad code", () => {
+		const h = harness();
+		for (const bad of [true, { code: "123456" }, ["123456"], 1.5, -1, 1_000_000]) expect(refusal(() => h.auth(bad as unknown as string)).message).toMatch(REFUSED);
+		expect(h.gate.status("repo")).toMatchObject({ failures: 0 });
+	});
+});
+
 describe("OtpGate lockouts", () => {
 	const fail = (h: ReturnType<typeof harness>, times: number, user = "repo") => {
 		for (let i = 0; i < times; i++) expect(() => h.auth("000000", user)).toThrow(OtpRefusal);
@@ -231,7 +255,7 @@ describe("OtpGate lockouts", () => {
 		const h = harness();
 		fail(h, 5);
 		expect(h.readState().users.repo).toEqual({ failures: 0, lockedUntil: new Date(T0 + 10 * MIN).toISOString(), lockouts: [new Date(T0).toISOString()], hardLock: null });
-		expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/OTP locked for repo until .* after 5 bad codes/));
+		expect(auditLines()).toEqual([expect.objectContaining({ tool: "merge_pull_request", user: "repo", decision: "deny", otp: "lockout", until: new Date(T0 + 10 * MIN).toISOString(), detail: "5 bad codes" })]);
 
 		const r = refusal(() => h.auth(h.code()));
 		expect(r.message).toBe("OTP is locked for 10 more minute(s) after too many bad codes. Nothing was run.");
@@ -258,7 +282,7 @@ describe("OtpGate lockouts", () => {
 		}
 		const since = new Date(T0 + 4 * MIN).toISOString();
 		expect(h.readState().users.repo.hardLock).toEqual({ since, lockouts: 3 });
-		expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/OTP hard lock for repo after 3 lockouts in 24 h/));
+		expect(auditLines().at(-1)).toMatchObject({ user: "repo", decision: "deny", otp: "hard-lock", detail: '3 lockouts in 24 h; every tool except otp_status is refused until "sudo gh-broker otp unlock repo"' });
 
 		const r = h.gate.hardLockRefusal("repo")!;
 		expect(r.message).toBe(`gh-broker is locked for repo after repeated bad OTP codes (since ${since}). Ask the user to run "sudo gh-broker otp unlock repo" on box. Nothing was run.`);

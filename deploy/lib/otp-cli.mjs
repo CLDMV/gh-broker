@@ -14,11 +14,11 @@
  */
 
 /**
- * `gh-broker otp unlock | status | rotate` (#143, contract v2): the root-side half of the OTP gate.
+ * `gh-broker otp unlock | status | list | rotate` (#143, contract v2): the root-side half of the OTP gate.
  * Lock state is per agent user, in the state file the daemon writes. Every effect is injected (see
  * deploy/cli.mjs for the real wiring), so the commands are testable without root.
  */
-import { DEFAULT_STATE_PATH, DEFAULT_MAX_FAILURES, DEFAULT_MAX_LOCKOUTS, describeUsers, emptyState, formatStatus, generateSeed, seedCredName, showSeed, userOf, withoutUser, withoutUsers } from "./otp.mjs";
+import { DEFAULT_STATE_PATH, DEFAULT_MAX_FAILURES, DEFAULT_MAX_LOCKOUTS, describeUsers, emptyState, formatStatus, generateSeed, seedCredName, showSeed, spendRecentCodes, userOf, withoutUser, withoutUsers } from "./otp.mjs";
 import { assertAgentName, registeredAgents, versionWarning } from "./agents.mjs";
 
 export const statePathOf = (config) => config.otp?.statePath ?? DEFAULT_STATE_PATH;
@@ -28,6 +28,7 @@ export const limitsOf = (config) => ({ maxFailures: config.otp?.maxFailures ?? D
 export async function otpCommand(command, rest, config, d) {
 	if (command === "status") return status(config, rest, d);
 	if (command === "unlock") return unlock(config, rest, d);
+	if (command === "list") return list(config, rest, d);
 	return rotate(config, d);
 }
 
@@ -48,6 +49,37 @@ function status(config, rest, d) {
 	return 0;
 }
 
+/** Who is locked out right now (short lockout or hard lock), with the command that clears each. */
+function list(config, rest, d) {
+	const statePath = statePathOf(config);
+	const read = d.readState(statePath);
+	const known = registeredAgents(d.groups()).map((a) => a.user);
+	const locked = describeUsers(read, known, limitsOf(config), d.now())
+		.filter((u) => u.locked)
+		.map((u) => ({ user: u.user, corrupt: Boolean(u.corrupt), hardLock: u.hardLock, lockedUntil: u.lockedUntil, unlockCommand: u.corrupt ? "sudo gh-broker otp unlock --all" : `sudo gh-broker otp unlock ${u.user}` }));
+	if (rest.includes("--json")) {
+		d.log(JSON.stringify({ statePath, fileStatus: read.status, locked }, null, "\t"));
+		return 0;
+	}
+	if (locked.length === 0) d.log("nobody is locked out");
+	for (const u of locked) {
+		const why = u.corrupt ? `locked: ${statePath} is corrupt` : u.hardLock ? `hard-locked since ${u.hardLock.since} after ${u.hardLock.lockouts} lockouts` : `locked until ${u.lockedUntil}`;
+		d.log(`${u.user}  ${why}  unlock: ${u.unlockCommand}`);
+	}
+	return 0;
+}
+
+/** Record an unlock in the journal next to the daemon's audit log (never fatal). */
+function auditUnlock(d, user, detail) {
+	try {
+		d.audit({ ts: new Date(d.now()).toISOString(), decision: "otp-unlock", user, by: d.sudoUser() ?? "root", ...(detail ? { detail } : {}) });
+	} catch (err) {
+		d.error(`warning: the unlock could not be written to the journal: ${err.message}`);
+	}
+}
+
+const AFTER_UNLOCK = "Codes from the last minute won't open a window; use the next code.";
+
 function unlock(config, rest, d) {
 	const all = rest.includes("--all");
 	const user = rest.find((a) => !a.startsWith("-"));
@@ -59,24 +91,29 @@ function unlock(config, rest, d) {
 		d.log(`nothing to unlock: no state file at ${statePath}`);
 		return 0;
 	}
+	const now = d.now();
 	if (read.status === "corrupt") {
 		if (!all) throw new Error(`${statePath} is corrupt, so every user is locked; run "sudo gh-broker otp unlock --all" to rewrite it clean`);
-		d.writeState(statePath, { ...emptyState(), lastAcceptedStep: read.state.lastAcceptedStep });
-		d.log(`rewrote the corrupt state file at ${statePath}; everyone is unlocked`);
+		// The old lastAcceptedStep can't be read back, so spend everything up to now instead.
+		d.writeState(statePath, spendRecentCodes(emptyState(), now));
+		auditUnlock(d, "*", "rewrote a corrupt state file");
+		d.log(`rewrote the corrupt state file at ${statePath}; everyone is unlocked. ${AFTER_UNLOCK}`);
 		return 0;
 	}
 	if (all) {
-		d.writeState(statePath, withoutUsers(read.state));
-		d.log(`cleared the lock state of every user in ${statePath}`);
+		d.writeState(statePath, spendRecentCodes(withoutUsers(read.state), now));
+		auditUnlock(d, "*");
+		d.log(`cleared the lock state of every user in ${statePath}. ${AFTER_UNLOCK}`);
 		return 0;
 	}
-	if (!(user in read.state.users)) {
+	if (!Object.hasOwn(read.state.users, user)) {
 		d.log(`${user} has no lock state; nothing to clear`);
 		return 0;
 	}
 	const wasLocked = Boolean(userOf(read.state, user).hardLock);
-	d.writeState(statePath, withoutUser(read.state, user));
-	d.log(wasLocked ? `unlocked ${user}` : `cleared ${user}'s counters (not hard-locked)`);
+	d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user), now));
+	auditUnlock(d, user);
+	d.log(`${wasLocked ? `unlocked ${user}` : `cleared ${user}'s counters (not hard-locked)`}. ${AFTER_UNLOCK}`);
 	return 0;
 }
 

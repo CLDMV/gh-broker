@@ -21,7 +21,7 @@
  * file format (version 1, per-user counters under `users`).
  */
 import { randomBytes } from "node:crypto";
-import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, chmodSync, chownSync } from "node:fs";
+import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, fchmodSync, fchownSync, constants } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import QRCode from "qrcode";
 
@@ -179,6 +179,16 @@ export function withoutUser(state, user) {
 	return { ...state, users };
 }
 
+/**
+ * `state` ready to be written by the CLI: every code up to one step ahead of `now` counts as
+ * spent. The CLI rewrites the whole file while the daemon may be accepting a code (it accepts
+ * at most one step ahead), so this keeps a write from handing back a code the daemon just used.
+ * The cost is that a code from the last 30-60 s can't open a window; the next one can.
+ */
+export function spendRecentCodes(state, now) {
+	return { ...state, lastAcceptedStep: Math.max(state.lastAcceptedStep, Math.floor(now / 30000) + 1) };
+}
+
 /** The state with every user cleared. */
 export function withoutUsers(state) {
 	return { ...state, users: {} };
@@ -186,20 +196,24 @@ export function withoutUsers(state) {
 
 /**
  * Write a file atomically: a temp file in the same directory, fsync, rename; the given mode,
- * chowned to uid:gid. `chown` is injectable (it needs root).
+ * chowned to uid:gid. The directory can belong to someone else (an agent user's home), so the
+ * temp file has a random name and is opened with O_EXCL|O_NOFOLLOW (never an existing file or a
+ * planted symlink), and the mode and owner are set on the open descriptor, not the path. The
+ * rename replaces a symlink at `path` rather than following it. `fchown` (it needs root) and
+ * `random` are injectable for tests.
  */
-export function writeFileAtomic(path, text, { uid, gid, mode = 0o600 }, { chown = chownSync } = {}) {
-	const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
-	const fd = openSync(tmp, "w", mode);
+export function writeFileAtomic(path, text, { uid, gid, mode = 0o600 }, { fchown = fchownSync, random = randomBytes } = {}) {
+	const tmp = join(dirname(path), `.${basename(path)}.${random(8).toString("hex")}.tmp`);
+	const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
 	try {
-		writeSync(fd, text);
-		fsyncSync(fd);
-	} finally {
-		closeSync(fd);
-	}
-	try {
-		chmodSync(tmp, mode);
-		chown(tmp, uid, gid);
+		try {
+			fchmodSync(fd, mode);
+			fchown(fd, uid, gid);
+			writeSync(fd, text);
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
 		renameSync(tmp, path);
 	} catch (err) {
 		rmSync(tmp, { force: true });

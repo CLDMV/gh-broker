@@ -41,7 +41,7 @@ Read these as the capability matrix — what each user actually can and cannot d
 
 |  | Read the token store | Read broker env / memory | Open the socket | Ever hold a PAT |
 |---|---|---|---|---|
-| **Agent** (`repo`) | no — not in `gh-broker`; dir is `0750 root:gh-broker`, tokens root-owned | no — separate user, plus the unit's `ProtectHome`/`NoNewPrivileges`/etc. | **yes** — member of `gh-broker-clients` | **never** |
+| **Agent** (`repo`) | no — not in `gh-broker`; dir is `0750 root:gh-broker`, tokens root-owned | no — separate user, plus the unit's `ProtectHome`/`NoNewPrivileges`/etc. | **yes**, its own socket only — member of `gh-broker-agent-<user>` | **never** |
 | **Service** (`gh-broker`) | yes — via systemd-creds (memory-only `$CREDENTIALS_DIRECTORY`) or the file, into memory only | yes (it is the process) | yes — it owns it | yes — in memory only, never on an agent-readable path |
 
 Three independent gates, each verifiable:

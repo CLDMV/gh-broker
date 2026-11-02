@@ -31,10 +31,11 @@ Commands:
   agent sync [<user>]        re-apply the MCP config for one agent or all
   otp status [<user>] [--json]
                              lock state per agent
+  otp list [--json]          who is locked out now, and the command that clears each
   otp unlock <user>|--all    clear an agent's lockout and hard lock (--all: everyone)
   otp rotate                 make a new OTP seed, store it, show it once, restart the service`;
 
-const COMMANDS = { otp: ["unlock", "status", "rotate"], agent: ["add", "remove", "list", "sync"] };
+const COMMANDS = { otp: ["unlock", "status", "list", "rotate"], agent: ["add", "remove", "list", "sync"] };
 
 /**
  * @param {string[]} argv  arguments after the program name, e.g. ["otp", "unlock", "repo"]

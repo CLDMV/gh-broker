@@ -219,7 +219,8 @@ async function main() {
 	const agents = [...new Set([...registered.map((a) => a.user), ...migration.add.filter(userExists), ...(requested ? [requested] : [])])].sort();
 	for (const name of migration.add) log(userExists(name) ? `  migrating ${LEGACY_CLIENTS_GROUP} member "${name}" to a registered agent` : `  skipping ${LEGACY_CLIENTS_GROUP} member "${name}": no such user`);
 	log(`  agents: ${agents.join(", ")}`);
-	// The GHCR drop dir belongs to one agent: the one named now, else the first registered.
+	// The GHCR drop dir belongs to one agent. A new one goes to the agent named now, else the
+	// first registered; an existing one keeps its owner (see ensureDropDir).
 	const dropOwner = requested || agents[0];
 
 	// --- where this copy of the package lives ---
@@ -286,8 +287,8 @@ async function main() {
 		die(err.message);
 	}
 	if (merged.ghcr?.dropDir) {
-		ensureDropDir(merged.ghcr.dropDir, dropOwner, SVC_GROUP);
-		log(`  ghcr drop dir: ${merged.ghcr.dropDir} (2750 ${dropOwner}:${SVC_GROUP})`);
+		const { created } = ensureDropDir(merged.ghcr.dropDir, dropOwner, SVC_GROUP);
+		log(`  ghcr drop dir: ${merged.ghcr.dropDir} (2750 ${created ? dropOwner : "existing owner"}:${SVC_GROUP})`);
 	}
 
 	// --- npm integration (npm_scaffold): opt-in ---
@@ -365,13 +366,20 @@ async function main() {
 	// OTP seed (#143): generated on a first install and whenever none is stored, never over an
 	// existing one (that is `gh-broker otp rotate`). An operator-supplied seed is used as is and
 	// not shown again. The generated one rides in as an explicit value so the normal storage path
-	// (either backend) writes it, and is shown once after it is stored.
+	// (either backend) writes it. It is shown before it is stored: if a later step fails after the
+	// store, the next run finds a seed and won't make (or show) a new one, so showing it last
+	// could leave a seed nobody has.
 	const seedName = seedCredName(merged);
 	let generatedSeed;
 	if (seedName) {
 		const supplied = opts.cliSecrets[seedName] || importTokens?.[seedName] || process.env[envSecretKey(seedName)];
 		const stored = seedExists({ name: seedName, existingFile, credFileExists: (n) => existsSync(join(credsDir, `${n}.cred`)) });
 		if (!supplied && !stored) generatedSeed = generateSeed();
+	}
+	if (generatedSeed) {
+		step("OTP seed");
+		await showSeed({ seed: generatedSeed, host: hostname(), log });
+		log("  If this install fails and the next run shows a different key, use that one instead.");
 	}
 
 	let plan;
@@ -429,12 +437,6 @@ async function main() {
 		die(err.message);
 	}
 	writeConfigFile(paths.config, merged, SVC_GROUP);
-
-	// The one place the seed is printed: this terminal, once, right after it is stored.
-	if (generatedSeed) {
-		step("OTP seed");
-		await showSeed({ seed: generatedSeed, host: hostname(), log });
-	}
 
 	// --- validate with the real loader before deploying ---
 	step("validate config");
