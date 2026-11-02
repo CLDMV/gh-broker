@@ -76,23 +76,33 @@ export function addUserToGroup(user, group) {
 	run("usermod", ["--append", "--groups", group, user]);
 }
 
-/** Create the dedicated service user + its group + the socket bridge group (idempotent). */
-export function ensureServiceUser(svcUser, svcGroup, clientsGroup) {
+/** Create the dedicated service user + its group (idempotent). Agents get their own groups (ensureAgentGroup). */
+export function ensureServiceUser(svcUser, svcGroup) {
 	ensureGroup(svcGroup);
-	ensureGroup(clientsGroup);
 	if (!userExists(svcUser)) {
 		run("useradd", [
 			"--system",
 			"--gid", svcGroup,
-			"--groups", clientsGroup,
 			"--home-dir", "/nonexistent",
 			"--shell", "/usr/sbin/nologin",
 			"--comment", "CLDMV gh-broker service",
 			svcUser
 		]);
-	} else {
-		addUserToGroup(svcUser, clientsGroup);
 	}
+}
+
+/** Register an agent: its `gh-broker-agent-<user>` group with exactly the service user and the agent as members (idempotent). */
+export function ensureAgentGroup(user, svcUser = "gh-broker") {
+	const group = `gh-broker-agent-${user}`;
+	ensureGroup(group);
+	addUserToGroup(svcUser, group);
+	addUserToGroup(user, group);
+}
+
+/** Unregister an agent: delete its group. */
+export function removeAgentGroup(user) {
+	const group = `gh-broker-agent-${user}`;
+	if (groupExists(group)) run("groupdel", [group]);
 }
 
 /** Create a plain unprivileged agent user with a home + login shell, and no sudo. */
@@ -235,18 +245,6 @@ export function deployDist(srcDir, destDir, svcUser, svcGroup) {
 		cpSync(srcDir, dist, { recursive: true });
 	}
 	run("chown", ["-R", `${uid}:${gid}`, destDir]);
-}
-
-/**
- * Write the `gh-broker` launcher on root's PATH: a tiny shell script that runs the deployed,
- * self-contained CLI bundle (dist/cli.mjs) with the maintained node symlink. A script rather
- * than a symlink, so the bundle needs no execute bit or shebang and the node used is always the
- * service's. Written 0755 root:root.
- */
-export function installCliLauncher(appDir, path = "/usr/local/bin/gh-broker", nodePath = "/usr/local/bin/node") {
-	writeFileSync(path, `#!/bin/sh\nexec ${nodePath} ${join(appDir, "dist", "cli.mjs")} "$@"\n`, { mode: 0o755 });
-	chmodSync(path, 0o755);
-	chownSync(path, 0, 0);
 }
 
 /** Write the token-free config, 0640 root:group. */

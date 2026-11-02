@@ -37,6 +37,8 @@
  * The result is validated by the real loader (`--check`) before anything is deployed, and a
  * --config file may hold only `cred:` references, never token values.
  */
+import { DEFAULT_LISTEN } from "./agents.mjs";
+
 export const DEFAULT_GHCR_DROP_DIR = "/srv/gh-broker/ghcr-drop";
 
 const OPERATOR_KEYS = ["listen", "upstream", "defaultOwner", "owners", "app", "secrets", "npm", "ghcr", "otp"];
@@ -53,9 +55,10 @@ export function mergeConfig(example, current) {
 
 	// tools: always authoritative from the example (already copied into out).
 
-	// scalars: current wins when defined.
+	// scalars: current wins when defined. An old `unix:` listen is the shared-socket form the
+	// per-agent sockets replaced, so it is not carried over (buildConfig sets the new default).
 	for (const k of ["listen", "upstream", "defaultOwner"]) {
-		if (current[k] !== undefined) out[k] = current[k];
+		if (current[k] !== undefined && !(k === "listen" && String(current[k]).startsWith("unix:"))) out[k] = current[k];
 	}
 
 	// owners: operator data. Current entries win per owner; any the example ships are kept.
@@ -178,6 +181,10 @@ export async function buildConfig({ example, current, file, opts, nonInteractive
 	if (file) config = layerConfig(config, file);
 	config = layerConfig(config, overlayFromFlags(opts));
 	config.owners ??= {};
+	if (typeof config.listen !== "string" || config.listen.startsWith("unix:")) {
+		config.listen = DEFAULT_LISTEN;
+		notes.push(`listen set to ${DEFAULT_LISTEN} (one socket per agent; the shared unix: socket is gone)`);
+	}
 
 	if (Object.keys(config.owners).length === 0) {
 		if (nonInteractive) {

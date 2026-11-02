@@ -15,60 +15,24 @@
  */
 
 /**
- * The `gh-broker` command on root's PATH: `sudo gh-broker otp unlock | status | rotate`.
- * Bundled to dist/cli.mjs (so it carries its own dependencies) and deployed to
- * /opt/gh-broker/dist/ by the installer, which also writes the /usr/local/bin/gh-broker
- * launcher. This file is only the real wiring; the logic is in lib/otp-cli.mjs and lib/otp.mjs.
+ * The `gh-broker` command (the package `bin`): `gh-broker install`, `gh-broker otp ...` and
+ * `gh-broker agent ...`. `install` hands over to the installer (deploy/install.mjs); the rest is
+ * lib/cli.mjs with the real effects from real-deps.mjs.
  */
-import { readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
-import { hostname } from "node:os";
-import { join, dirname } from "node:path";
-import { pathToFileURL } from "node:url";
-import { runCli } from "./lib/otp-cli.mjs";
-import { readState, writeStateAtomic, storeSeed } from "./lib/otp.mjs";
-import { readSecretsFile, writeSecretsFile } from "./lib/secret-store.mjs";
-import { isRoot, requireUid, requireGid, systemdCredsEncrypt, writeCredsDropin, restartService } from "./lib/system.mjs";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { runCli } from "./lib/cli.mjs";
+import { realDeps } from "./real-deps.mjs";
 
-const SVC = "gh-broker";
-const configDir = () => process.env.GH_BROKER_CONFIG_DIR || "/etc/gh-broker";
-const configPath = () => process.env.GH_BROKER_CONFIG || join(configDir(), "config.json");
-
-/** The real effects for lib/otp-cli.mjs `runCli`. */
-export function realDeps() {
-	return {
-		log: (m) => console.log(m),
-		error: (m) => console.error(m),
-		now: () => Date.now(),
-		isRoot,
-		host: () => hostname(),
-		readConfig: () => JSON.parse(readFileSync(configPath(), "utf8")),
-		readState: (path) => readState(path),
-		writeState: (path, state) => writeStateAtomic(path, state, { uid: requireUid(SVC), gid: requireGid(SVC) }),
-		storeSeed: (cfg, name, seed) => {
-			const secrets = cfg.secrets?.path || process.env.GH_BROKER_SECRETS || join(configDir(), "secrets.json");
-			const gid = requireGid(SVC);
-			return storeSeed({
-				config: cfg,
-				name,
-				seed,
-				paths: { secrets, credsDir: join(dirname(configPath()), "creds") },
-				io: {
-					readSecretsFile,
-					writeSecretsFile: (p, v) => writeSecretsFile(p, v, { gid }),
-					removeFile: (f) => rmSync(f, { force: true }),
-					encrypt: systemdCredsEncrypt,
-					listCreds: (dir) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".cred")).map((f) => f.slice(0, -".cred".length)) : []),
-					writeDropin: writeCredsDropin
-				}
-			});
-		},
-		restart: restartService
-	};
-}
-
-/** Run the CLI with the real effects and set the exit code. */
+/** Run the CLI with the real effects and set the exit code. `install` is the installer. */
 export async function main(argv = process.argv.slice(2)) {
+	if (argv[0] === "install") {
+		process.argv.splice(2, 1); // the installer reads its flags from argv[2..]
+		await import("./install.mjs");
+		return;
+	}
 	process.exitCode = await runCli(argv, realDeps());
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) await main();
+// npm links the bin as a symlink, so compare real paths.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

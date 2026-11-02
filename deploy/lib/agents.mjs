@@ -1,0 +1,123 @@
+/**
+ *
+ *	@Project: @cldmv/gh-broker
+ *	@Filename: /deploy/lib/agents.mjs
+ *	@Date: 2026-11-02T09:12:00-08:00 (1793639520)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-11-02T09:12:00-08:00 (1793639520)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
+ * The agent registry and the small pure helpers around it (#143, contract v2). An agent user `<u>`
+ * is registered when the group `gh-broker-agent-<u>` exists with exactly `gh-broker` and `<u>` as
+ * members; the daemon listens on one socket per registered agent. Everything here works on text
+ * (the contents of /etc/group, a `getent passwd` line), so it is testable without a host.
+ */
+import { join } from "node:path";
+
+export const SVC_USER = "gh-broker";
+export const AGENT_GROUP_PREFIX = "gh-broker-agent-";
+export const LEGACY_CLIENTS_GROUP = "gh-broker-clients";
+export const DEFAULT_AGENTS_DIR = "/run/gh-broker/agents";
+export const DEFAULT_LISTEN = `agents:${DEFAULT_AGENTS_DIR}`;
+/** Keeps `gh-broker-agent-<u>` within the 32-character group name limit. */
+export const AGENT_NAME = /^[a-z_][a-z0-9_-]{0,15}$/;
+
+/** Whether `name` may be registered as an agent user. */
+export function validAgentName(name) {
+	return typeof name === "string" && AGENT_NAME.test(name);
+}
+
+/** Throws a clear error for an invalid agent user name. */
+export function assertAgentName(name) {
+	if (!validAgentName(name)) throw new Error(`"${name}" is not a valid agent user name (lowercase letters, digits, "_" and "-", starting with a letter or "_", at most 16 characters)`);
+	return name;
+}
+
+export const agentGroup = (user) => `${AGENT_GROUP_PREFIX}${user}`;
+
+/** The directory the agents' sockets live in, from `listen` ("agents:<abs dir>"). */
+export function agentsDir(listen) {
+	return typeof listen === "string" && /^agents:\/.+/.test(listen) ? listen.slice("agents:".length) : DEFAULT_AGENTS_DIR;
+}
+
+export const socketPath = (dir, user) => join(dir, `${user}.sock`);
+
+/** Parse the contents of /etc/group (or `getent group` output) into { name, gid, members }. */
+export function parseGroups(text) {
+	const groups = [];
+	for (const line of text.split("\n")) {
+		const parts = line.split(":");
+		if (parts.length < 4 || !parts[0]) continue;
+		groups.push({ name: parts[0], gid: Number(parts[2]), members: parts[3] ? parts[3].split(",").filter(Boolean) : [] });
+	}
+	return groups;
+}
+
+/**
+ * Every `gh-broker-agent-<u>` group, with whether it is complete (members include both the
+ * service user and `<u>`; the daemon ignores a group that isn't).
+ * @returns {Array<{ user: string, gid: number, complete: boolean }>} sorted by user
+ */
+export function registeredAgents(groups) {
+	const out = [];
+	for (const g of groups) {
+		if (!g.name.startsWith(AGENT_GROUP_PREFIX)) continue;
+		const user = g.name.slice(AGENT_GROUP_PREFIX.length);
+		if (!validAgentName(user)) continue;
+		out.push({ user, gid: g.gid, complete: g.members.includes(SVC_USER) && g.members.includes(user) });
+	}
+	return out.sort((a, b) => a.user.localeCompare(b.user));
+}
+
+/**
+ * The agents to register on upgrade: members of the old shared `gh-broker-clients` group (other
+ * than the service user) that are not registered yet. Members with an invalid name are returned
+ * separately, to be reported and skipped.
+ */
+export function migrationPlan(groups, registered) {
+	const clients = groups.find((g) => g.name === LEGACY_CLIENTS_GROUP);
+	const have = new Set(registered.map((a) => a.user));
+	const add = [];
+	const skipped = [];
+	for (const m of clients?.members ?? []) {
+		if (m === SVC_USER || have.has(m)) continue;
+		(validAgentName(m) ? add : skipped).push(m);
+	}
+	return { add, skipped };
+}
+
+/** Parse one `getent passwd` line into { uid, gid, home }, or undefined. */
+export function parsePasswd(line) {
+	const f = line.trim().split(":");
+	if (f.length < 6) return undefined;
+	const uid = Number(f[2]);
+	const gid = Number(f[3]);
+	if (!Number.isInteger(uid) || !Number.isInteger(gid) || !f[5]) return undefined;
+	return { uid, gid, home: f[5] };
+}
+
+/**
+ * Where the installed package stands: a global install under /usr/local survives a Node upgrade,
+ * one under an nvm version folder does not.
+ * @returns {"global" | "nvm" | "checkout"}
+ */
+export function classifyInstall(packageDir) {
+	if (/nvm\/versions\//.test(packageDir)) return "nvm";
+	if (packageDir.startsWith("/usr/local/lib/node_modules/")) return "global";
+	return "checkout";
+}
+
+/** A warning when the npm package and the deployed /opt copy differ, else undefined. */
+export function versionWarning(pkgVersion, deployedVersion) {
+	if (!deployedVersion || !pkgVersion || pkgVersion === deployedVersion) return undefined;
+	return `warning: the installed package is ${pkgVersion} but the deployed service is ${deployedVersion}; run "sudo gh-broker install"`;
+}
+
+export const NPM_INSTALL_COMMAND = "sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker@latest";
