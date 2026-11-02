@@ -81,6 +81,9 @@ interface OpenWindow {
 }
 
 /** The root command that clears `user`'s counters and locks. */
+/** What clears a corrupt state file (a single-user unlock refuses one). */
+export const UNLOCK_ALL_COMMAND = "sudo gh-broker otp unlock --all";
+
 export function unlockCommand(user: string): string {
 	return `${UNLOCK_COMMAND} ${user}`;
 }
@@ -118,18 +121,20 @@ export class OtpGate {
 	 */
 	hardLockRefusal(user: string): OtpRefusal | undefined {
 		if (!this.enabled) return undefined;
-		const since = this.hardLockSince(user);
+		const read = this.state.read();
+		if (!read.ok) {
+			// An unusable state file locks everyone, and only `unlock --all` rewrites it.
+			return new OtpRefusal(
+				`gh-broker is locked for every agent: its OTP state file is unreadable or corrupt (since ${read.since}). Ask the user to run "${UNLOCK_ALL_COMMAND}" on ${this.host}. Nothing was run.`,
+				{ otp: "hard-locked" }
+			);
+		}
+		const since = userState(read.state, user).hardLock?.since;
 		if (since === undefined) return undefined;
 		return new OtpRefusal(
 			`gh-broker is locked for ${user} after repeated bad OTP codes (since ${since}). Ask the user to run "${unlockCommand(user)}" on ${this.host}. Nothing was run.`,
 			{ otp: "hard-locked" }
 		);
-	}
-
-	private hardLockSince(user: string): string | undefined {
-		const read = this.state.read();
-		if (!read.ok) return read.since;
-		return userState(read.state, user).hardLock?.since;
 	}
 
 	/**
@@ -254,6 +259,7 @@ export class OtpGate {
 		let mine = emptyUser();
 		let hardLock: HardLock | null = null;
 		let lockedUsers: Array<{ user: string; since: string; lockouts: number; unlockCommand: string }> = [];
+		let corrupt = false;
 		if (this.enabled) {
 			const read = this.state.read();
 			if (read.ok) {
@@ -265,7 +271,8 @@ export class OtpGate {
 			} else {
 				// An unusable file locks every user; the caller is the one we can name.
 				hardLock = { since: read.since, lockouts: 0 };
-				lockedUsers = [{ user, since: read.since, lockouts: 0, unlockCommand: unlockCommand(user) }];
+				corrupt = true;
+				lockedUsers = [{ user, since: read.since, lockouts: 0, unlockCommand: UNLOCK_ALL_COMMAND }];
 			}
 		}
 		const open = this.windows.filter((w) => w.user === user && w.expiresAt > now);
@@ -284,7 +291,7 @@ export class OtpGate {
 			lockoutsLast24h: mine.lockouts.filter((t) => Date.parse(t) > now - DAY_MS).length,
 			maxLockouts: this.settings.maxLockouts,
 			hardLock,
-			unlockCommand: unlockCommand(user),
+			unlockCommand: corrupt ? UNLOCK_ALL_COMMAND : unlockCommand(user),
 			lockedUsers,
 			host: this.host
 		};

@@ -347,13 +347,14 @@ describe("OtpGate fail-closed state", () => {
 		writeFileSync(h.statePath, "{ tampered");
 		for (const user of ["repo", "glmtest"]) {
 			expect(h.gate.hardLockRefusal(user)!.message).toBe(
-				`gh-broker is locked for ${user} after repeated bad OTP codes (since 2026-11-01T12:00:00.000Z). Ask the user to run "sudo gh-broker otp unlock ${user}" on box. Nothing was run.`
+				`gh-broker is locked for every agent: its OTP state file is unreadable or corrupt (since 2026-11-01T12:00:00.000Z). Ask the user to run "sudo gh-broker otp unlock --all" on box. Nothing was run.`
 			);
 		}
 		expect(refusal(() => h.auth(h.code())).audit.otp).toBe("hard-locked");
 		expect(h.gate.status("repo")).toMatchObject({
 			hardLock: { since: "2026-11-01T12:00:00.000Z", lockouts: 0 },
-			lockedUsers: [{ user: "repo", since: "2026-11-01T12:00:00.000Z", lockouts: 0, unlockCommand: "sudo gh-broker otp unlock repo" }],
+			lockedUsers: [{ user: "repo", since: "2026-11-01T12:00:00.000Z", lockouts: 0, unlockCommand: "sudo gh-broker otp unlock --all" }],
+			unlockCommand: "sudo gh-broker otp unlock --all",
 			failures: 0,
 			lockoutsLast24h: 0
 		});

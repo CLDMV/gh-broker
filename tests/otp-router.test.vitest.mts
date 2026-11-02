@@ -177,7 +177,7 @@ describe("Router + OTP gate", () => {
 	it("a corrupt state file fails closed for every tool but otp_status", async () => {
 		const h = setup();
 		writeFileSync(h.statePath, "garbage");
-		await expect(h.call("get_me", { owner: "cldmv" })).rejects.toThrow(/gh-broker is locked for repo after repeated bad OTP codes/);
+		await expect(h.call("get_me", { owner: "cldmv" })).rejects.toThrow(/gh-broker is locked for every agent: its OTP state file is unreadable or corrupt .*"sudo gh-broker otp unlock --all"/);
 		await expect(h.call("otp_status", {})).resolves.toBeDefined();
 	});
 

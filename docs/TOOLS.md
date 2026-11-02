@@ -69,7 +69,7 @@ Only `seed` is required. A gated tool's advertised schema gains a required `otp`
 }
 ```
 
-A user with no entry has nothing recorded, and the broker drops entries that have gone back to all zero/null when it writes. It writes the file atomically (temp file in the same directory, mode 0600, fsync, rename) and re-reads it whenever its inode, mtime or size changes, so `sudo gh-broker otp unlock <user>` applies on the next call. A missing file is a clean state. A file that can't be read or parsed, or has the wrong shape (including a user key that isn't a valid agent name), fails closed: every user counts as hard-locked, and the broker never overwrites it.
+A user with no entry has nothing recorded, and the broker drops entries that have gone back to all zero/null when it writes. It writes the file atomically (temp file in the same directory, mode 0600, fsync, rename) and re-reads it whenever its inode, mtime or size changes, so `sudo gh-broker otp unlock <user>` applies on the next call. A missing file is a clean state. A file that can't be read or parsed, or has the wrong shape (including a user key that isn't a valid agent name), fails closed: every user counts as hard-locked (the refusal and `otp_status` name `sudo gh-broker otp unlock --all`, the command that rewrites it), and the broker never overwrites it.
 
 **Audit.** Every audit line carries `user`, the agent the call came from. Gated calls log `otp: "window" | "opened" | "refused" | "locked"`, and hard-locked refusals `otp: "hard-locked"`. Window and opened calls add `window`, an HMAC of the code under a key that exists only in the running process, so lines from one run can be correlated and nothing can be derived from it. Codes and the seed are never logged.
 
