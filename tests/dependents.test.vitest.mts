@@ -17,6 +17,27 @@ interface FakeRepo {
 	huge?: string[];
 	/** A workflow file exists, so the repo classifies as v4. */
 	v4?: boolean;
+	/** A `dev` branch: its files (read with ref `dev`), and the root versions the GraphQL listing returns. */
+	dev?: { files?: Record<string, unknown>; same?: boolean; truncated?: boolean; version?: string; defaultVersion?: string; manifestText?: string | null };
+	/** Listed by GraphQL but archived / a fork / without a default branch. */
+	gql?: Record<string, unknown>;
+}
+
+const blob = (version: string | undefined, text?: string | null) => ({ oid: "x", file: text !== undefined ? { object: { text } } : version === undefined ? null : { object: { text: JSON.stringify({ version }) } } });
+
+/** The GraphQL dev-branch listing for `repos`, split into pages of `pageSize`. */
+function devNodes(repos: Record<string, FakeRepo>) {
+	return Object.entries(repos)
+		.filter(([, r]) => r.info !== "gone")
+		.map(([name, r]) => ({
+			name,
+			isArchived: false,
+			isFork: false,
+			isPrivate: false,
+			defaultBranchRef: { name: "master", target: { ...blob(r.dev?.defaultVersion), oid: "m" } },
+			dev: r.dev ? { target: { ...blob(r.dev.version, r.dev.manifestText), oid: r.dev.same ? "m" : "d" } } : null,
+			...r.gql
+		}));
 }
 
 /** A fake GitHub: code search over `hits`, and per-repo info/contents/branches. */
@@ -26,20 +47,36 @@ function fakeGithub(hits: [string, string][], repos: Record<string, FakeRepo>, s
 			const items = hits.map(([repo, path]) => ({ path, repository: { name: repo, owner: { login: "CLDMV" } } }));
 			return { data: { total_count: items.length, incomplete_results: false, items, ...search }, headers: { "x-ratelimit-limit": "10", "x-ratelimit-remaining": "9" } };
 		}
+		if (route === "POST /graphql") {
+			return { data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: devNodes(repos) } } } }, headers: {} };
+		}
 		const r = repos[p.repo];
 		if (!r || r.info === "gone") throw status(404);
+		if (route === "GET /repos/{owner}/{repo}/git/trees/{tree_sha}") {
+			const tree = [...Object.keys(r.dev?.files ?? {}), "node_modules/x/package.json", "src"].map((path) => ({ path, type: path === "src" ? "tree" : "blob" }));
+			return { data: { truncated: r.dev?.truncated ?? false, tree }, headers: {} };
+		}
 		if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "master", private: false, ...r.info }, headers: {} };
 		if (route === "GET /repos/{owner}/{repo}/contents/{path}") {
 			if (p.path === ".github/workflows/next-release.yml") {
 				if (!r.v4) throw status(404);
 				return { data: {}, headers: {} };
 			}
+			if (p.ref === "dev") {
+				if (r.dev?.files && p.path in r.dev.files) return file(r.dev.files[p.path]);
+				throw status(404);
+			}
 			if (r.huge?.includes(p.path)) return { data: { size: 99_000_000 }, headers: {} };
 			if (r.big && p.path in r.big) return p.headers ? { data: r.big[p.path], headers: {} } : { data: { size: 2_000_000, content: "" }, headers: {} };
 			if (r.files && p.path in r.files) return file(r.files[p.path]);
 			throw status(404);
 		}
-		if (route === "GET /repos/{owner}/{repo}/branches/{branch}") return { data: { commit: { sha: p.branch === "next" ? "n" : "m" } }, headers: {} };
+		if (route === "GET /repos/{owner}/{repo}/branches/{branch}") {
+			if (p.branch === "dev" && !r.dev) throw status(404);
+			// A repo with a dev branch is scaffold-only on next (next == master), i.e. dev-trunk.
+			const sha = p.branch === "dev" ? "d" : p.branch === "next" && !r.dev ? "n" : "m";
+			return { data: { commit: { sha } }, headers: {} };
+		}
 		throw new Error(`unexpected route ${route}`);
 	});
 	return { request } as any;
@@ -63,14 +100,16 @@ describe("reportDependents — discovery and verification", () => {
 		);
 		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME });
 		expect(gh.request.mock.calls[0]).toEqual(["GET /search/code", { q: `"${NAME}" org:CLDMV filename:package.json`, per_page: 100, page: 1 }]);
-		expect(out.scanned).toEqual({ candidates: 3, archived: 0, forks: 0, missing: 0, notDeclared: 1 });
-		expect(out.discovery.source).toBe("code-search");
+		expect(out.scanned).toEqual({ candidates: 3, archived: 0, forks: 0, missing: 0, notDeclared: 1, devBranches: 0 });
+		expect(out.discovery).toMatchObject({ source: "code-search", devBranches: true });
 		expect(out.discovery.note).toMatch(/lags/);
+		expect(out.discovery.note).toMatch(/dev-trunk repos are included/);
 		expect(out.dependents).toEqual([
 			{
 				repo: "CLDMV/a",
 				private: false,
 				defaultBranch: "master",
+				branch: "master",
 				tier: "v4",
 				tierSignals: expect.objectContaining({ v4Workflow: true }),
 				declarations: [{ path: "package.json", declared: [{ field: "devDependencies", range: "^1.2.0" }] }]
@@ -79,6 +118,7 @@ describe("reportDependents — discovery and verification", () => {
 				repo: "CLDMV/b",
 				private: false,
 				defaultBranch: "master",
+				branch: "master",
 				tier: "non-v4",
 				tierSignals: { v4Workflow: false, defaultBranch: "master" },
 				declarations: [
@@ -153,6 +193,7 @@ describe("reportDependents — discovery and verification", () => {
 				repo: "CLDMV/a",
 				private: false,
 				defaultBranch: "master",
+				branch: "master",
 				declarations: [],
 				unread: [
 					{ path: "package.json", reason: "missing" },
@@ -410,7 +451,7 @@ describe("reportDependents — search paging and budgets", () => {
 			}
 			throw status(404);
 		});
-		const out = await reportDependents({ request } as any, { owner: "CLDMV", name: NAME, maxRepos: 2 });
+		const out = await reportDependents({ request } as any, { owner: "CLDMV", name: NAME, maxRepos: 2, devBranches: false });
 		expect(request.mock.calls.filter((c) => c[0] === "GET /search/code")).toHaveLength(10);
 		expect(out.scanned.candidates).toBe(1000);
 		expect(out.truncated).toBe(true);
@@ -426,7 +467,7 @@ describe("reportDependents — search paging and budgets", () => {
 			}
 			throw status(404);
 		});
-		const out = await reportDependents({ request } as any, { owner: "CLDMV", name: NAME, maxRepos: 1 });
+		const out = await reportDependents({ request } as any, { owner: "CLDMV", name: NAME, maxRepos: 1, devBranches: false });
 		expect(out.truncatedReason).toBe("max-repos");
 		expect(request.mock.calls.filter((c) => c[0] === "GET /search/code")).toHaveLength(2);
 	});
@@ -470,12 +511,166 @@ describe("reportDependents — search paging and budgets", () => {
 	it("clamps the caps to their hard limits", async () => {
 		const gh = fakeGithub([], {});
 		await reportDependents(gh, { owner: "CLDMV", name: NAME, maxRepos: 99999, maxFileBytes: 1e12, maxApiCalls: 1e9 });
-		expect(gh.request).toHaveBeenCalledTimes(1);
+		expect(gh.request.mock.calls.map((c: unknown[]) => c[0])).toEqual(["GET /search/code", "POST /graphql"]);
+	});
+});
+
+describe("reportDependents — dev branches", () => {
+	const dep = (range: string) => manifest({ devDependencies: { [NAME]: range } });
+
+	it("reads every package.json on a separate dev branch, skipping node_modules, and resolves against dev's lockfile", async () => {
+		const gh = fakeGithub([], {
+			trunk: {
+				v4: true,
+				dev: {
+					version: "0.4.0",
+					defaultVersion: "0.0.0",
+					files: {
+						"package.json": dep("^1.5.0"),
+						"packages/a/package.json": dep("^1.4.0"),
+						"packages/b/package.json": manifest({}),
+						"package-lock.json": { packages: { "node_modules/@cldmv/fix-headers": { version: "1.5.1" } } }
+					}
+				}
+			},
+			plain: { files: {} }
+		});
+		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME });
+		const graphql = gh.request.mock.calls.find((c: unknown[]) => c[0] === "POST /graphql");
+		expect(graphql[1]).toMatchObject({ variables: { owner: "CLDMV", after: null } });
+		expect(graphql[1].query).toMatch(/refs\/heads\/dev/);
+		expect(gh.request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", { owner: "CLDMV", repo: "trunk", tree_sha: "dev", recursive: "1" });
+		expect(out.scanned.devBranches).toBe(1);
+		expect(out.dependents).toEqual([
+			{
+				repo: "CLDMV/trunk",
+				private: false,
+				defaultBranch: "master",
+				branch: "dev",
+				tier: "dev-trunk",
+				tierSignals: expect.objectContaining({ dev: true }),
+				lockfile: "package-lock.json",
+				declarations: [
+					{ path: "package.json", declared: [{ field: "devDependencies", range: "^1.5.0" }], resolved: "1.5.1" },
+					{ path: "packages/a/package.json", member: "packages/a", declared: [{ field: "devDependencies", range: "^1.4.0" }], resolved: "1.5.1" }
+				]
+			}
+		]);
+		expect(out).not.toHaveProperty("abandonedDev");
+	});
+
+	it("reports a repo once per branch when both declare the package, classifying it once", async () => {
+		const gh = fakeGithub([["both", "package.json"]], {
+			both: { v4: true, files: { "package.json": dep("^1.0.0") }, dev: { files: { "package.json": dep("^1.5.0") } } }
+		});
+		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME });
+		expect(out.dependents.map((d) => [d.repo, d.branch])).toEqual([
+			["CLDMV/both", "master"],
+			["CLDMV/both", "dev"]
+		]);
+		expect(out.dependents[1]!.tier).toBe(out.dependents[0]!.tier);
+		expect(gh.request.mock.calls.filter((c: unknown[]) => c[0] === "GET /repos/{owner}/{repo}/contents/{path}" && (c[1] as any).path === ".github/workflows/next-release.yml")).toHaveLength(1);
+	});
+
+	it("sorts default-branch entries before dev ones across repos", async () => {
+		const gh = fakeGithub([["b", "package.json"]], {
+			a: { dev: { files: { "package.json": dep("1") } } },
+			b: { files: { "package.json": dep("1") }, dev: { files: { "package.json": dep("1") } } },
+			c: { dev: { files: { "package.json": manifest({}) } } }
+		});
+		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME, classify: false });
+		expect(out.dependents.map((d) => `${d.repo}@${d.branch}`)).toEqual(["CLDMV/a@dev", "CLDMV/b@master", "CLDMV/b@dev"]);
+	});
+
+	it("treats a dev whose root version is below the default branch's as abandoned and skips it", async () => {
+		const gh = fakeGithub([], {
+			old: { dev: { version: "1.2.0", defaultVersion: "1.10.0", files: { "package.json": dep("1") } } },
+			ahead: { dev: { version: "2.0.0-rc.1", defaultVersion: "1.10.0", files: { "package.json": dep("1") } } },
+			noVersion: { dev: { defaultVersion: "1.0.0", files: { "package.json": dep("1") } } },
+			badJson: { dev: { manifestText: "{nope", defaultVersion: "1.0.0", files: { "package.json": dep("1") } } },
+			numeric: { dev: { manifestText: JSON.stringify({ version: 3 }), defaultVersion: "1.0.0", files: { "package.json": dep("1") } } },
+			emptyText: { dev: { manifestText: null, defaultVersion: "1.0.0", files: { "package.json": dep("1") } } }
+		});
+		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME, classify: false });
+		expect(out.abandonedDev).toEqual([{ repo: "CLDMV/old", devVersion: "1.2.0", defaultVersion: "1.10.0" }]);
+		expect(out.dependents.map((d) => d.repo).sort()).toEqual(["CLDMV/ahead", "CLDMV/badJson", "CLDMV/emptyText", "CLDMV/noVersion", "CLDMV/numeric"]);
+		expect(out.scanned.devBranches).toBe(5);
+	});
+
+	it("skips dev branches that equal the default branch, archived repos, forks and repos with no default branch", async () => {
+		const d = { files: { "package.json": dep("1") } };
+		const gh = fakeGithub([], {
+			same: { dev: { ...d, same: true } },
+			arch: { dev: d, gql: { isArchived: true } },
+			fork: { dev: d, gql: { isFork: true } },
+			empty: { dev: d, gql: { defaultBranchRef: null } },
+			nodev: {}
+		});
+		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME });
+		expect(out.scanned.devBranches).toBe(0);
+		expect(out.dependents).toEqual([]);
+		expect(gh.request.mock.calls.some((c: unknown[]) => String(c[0]).includes("/git/trees/"))).toBe(false);
+	});
+
+	it("flags a truncated dev tree in unread and still reports what it listed", async () => {
+		const gh = fakeGithub([], { big: { dev: { truncated: true, files: { "package.json": dep("1") } } } });
+		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME, classify: false });
+		expect(out.dependents[0]).toMatchObject({ branch: "dev", unread: [{ path: ".", reason: "tree-truncated" }] });
+	});
+
+	it("does not read dev branches with devBranches: false and says so in the note", async () => {
+		const gh = fakeGithub([], { trunk: { dev: { files: { "package.json": dep("1") } } } });
+		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME, devBranches: false });
+		expect(gh.request.mock.calls.map((c: unknown[]) => c[0])).toEqual(["GET /search/code"]);
+		expect(out.discovery).toMatchObject({ devBranches: false });
+		expect(out.discovery.note).toMatch(/not read/);
+		expect(out.scanned).not.toHaveProperty("devBranches");
+	});
+
+	it("pages the GraphQL listing by cursor and flags max-repos when it never ends", async () => {
+		const page = (n: number, hasNextPage: boolean) => ({
+			data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage, endCursor: `c${n}` }, nodes: [] } } } },
+			headers: {}
+		});
+		let n = 0;
+		const request = vi.fn(async (route: string) => {
+			if (route === "GET /search/code") return { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} };
+			n++;
+			return page(n, n < 2);
+		});
+		const out = await reportDependents({ request } as any, { owner: "CLDMV", name: NAME });
+		expect(request.mock.calls[2]![1]).toMatchObject({ variables: { after: "c1" } });
+		expect(out.truncated).toBeUndefined();
+
+		const endless = vi.fn(async (route: string) =>
+			route === "GET /search/code" ? { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} } : page(0, true)
+		);
+		const out2 = await reportDependents({ request: endless } as any, { owner: "CLDMV", name: NAME });
+		expect(endless.mock.calls.filter((c) => c[0] === "POST /graphql")).toHaveLength(20);
+		expect(out2.truncatedReason).toBe("max-repos");
+	});
+
+	it("only reads as many dev branches as maxRepos leaves room for", async () => {
+		const d = { dev: { files: { "package.json": dep("1") } } };
+		const gh = fakeGithub([["s", "package.json"]], { s: { files: { "package.json": dep("1") } }, a: d, b: d });
+		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME, classify: false, maxRepos: 2 });
+		expect(out.dependents.map((x) => `${x.repo}@${x.branch}`)).toEqual(["CLDMV/a@dev", "CLDMV/s@master"]);
+		expect(out.truncatedReason).toBe("max-repos");
+	});
+
+	it("throws when the GraphQL listing returns errors or no owner", async () => {
+		const reply = (body: unknown) =>
+			vi.fn(async (route: string) => (route === "GET /search/code" ? { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} } : { data: body, headers: {} }));
+		await expect(reportDependents({ request: reply({ errors: [{ message: "boom" }, { message: "bang" }] }) } as any, { owner: "CLDMV", name: NAME })).rejects.toThrow(
+			/listing dev branches failed: boom; bang/
+		);
+		await expect(reportDependents({ request: reply({ data: { repositoryOwner: null } }) } as any, { owner: "nobody", name: NAME })).rejects.toThrow(/no owner "nobody"/);
 	});
 });
 
 describe("REPORT_DEPENDENTS_SCHEMA", () => {
 	it("requires owner and name", () => {
 		expect(REPORT_DEPENDENTS_SCHEMA.required).toEqual(["owner", "name"]);
+		expect(REPORT_DEPENDENTS_SCHEMA.properties.devBranches).toMatchObject({ type: "boolean", default: true });
 	});
 });

@@ -275,7 +275,11 @@ describe("Router.call", () => {
 		});
 
 		it("report_release_prs runs on a read-PAT Octokit and returns the JSON report as text", async () => {
-			requestMock.mockResolvedValue({ data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} });
+			requestMock.mockImplementation(async (route: string) =>
+				route === "POST /graphql"
+					? { data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } }, headers: {} }
+					: { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} }
+			);
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
 			const out = await r.call("report_release_prs", { owner: "cldmv" });
 			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
@@ -326,7 +330,11 @@ describe("Router.call", () => {
 		});
 
 		it("report_dependents runs on a read-PAT Octokit and returns the JSON report as text", async () => {
-			requestMock.mockResolvedValue({ data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} });
+			requestMock.mockImplementation(async (route: string) =>
+				route === "POST /graphql"
+					? { data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } }, headers: {} }
+					: { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} }
+			);
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
 			const out = await r.call("report_dependents", { owner: "cldmv", name: "@cldmv/x" });
 			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
@@ -334,7 +342,11 @@ describe("Router.call", () => {
 		});
 
 		it("report_dependents looks up latest on the configured npm registry", async () => {
-			requestMock.mockResolvedValue({ data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} });
+			requestMock.mockImplementation(async (route: string) =>
+				route === "POST /graphql"
+					? { data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } }, headers: {} }
+					: { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} }
+			);
 			const fetchMock = vi.fn(async () => ({ status: 200, headers: { get: () => null }, text: async () => '{"version":"2.0.0"}' }));
 			vi.stubGlobal("fetch", fetchMock);
 			try {

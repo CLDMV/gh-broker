@@ -99,7 +99,7 @@ npm only accepts a trusted publisher on a package that already exists, so every 
 
 ### 📦 **Package Dependents**
 
-`report_dependents` finds every repo an owner has that declares an npm package, with the declared range, the lockfile-resolved version and the repo's flow tier — where a fleet-wide version bump starts.
+`report_dependents` finds every repo an owner has that declares an npm package, with the declared range, the lockfile-resolved version and the repo's flow tier — where a fleet-wide version bump starts. It reads `dev` branches too, so dev-trunk repos are included, and skips a `dev` whose version has fallen behind the default branch.
 
 📦 **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_dependents)**
 

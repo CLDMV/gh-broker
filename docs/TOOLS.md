@@ -194,11 +194,16 @@ Every non-archived, non-fork repo an owner has that declares an npm package, wit
 | `name` | string | — (required) | npm package name, e.g. `@cldmv/fix-headers`. Anything that is not a valid npm name is rejected before any call is made. |
 | `latest` | boolean | `false` | Look up the latest published version on the npm registry and set `behind` on each declaration whose resolved version is older. The lookup is unauthenticated and uses `npm.registry` from the broker config when one is set. A failed lookup is reported as `latestError` and does not fail the verb. |
 | `classify` | boolean | `true` | Add each dependent repo's flow tier (`v4` / `dev-trunk` / `non-v4`) and `tierSignals`, the same classifier `report_security_alerts` uses. About 3 REST calls per dependent repo; pass `false` to skip them. |
-| `maxRepos` | number | 200 (hard cap 500) | Candidate repos verified. |
+| `devBranches` | boolean | `true` | Also read every `package.json` on each repo's `dev` branch when it differs from the default branch, so dev-trunk repos are found. A `dev` whose root `version` is below the default branch's is skipped as abandoned and listed in `abandonedDev`. |
+| `maxRepos` | number | 200 (hard cap 500) | Repos verified, search candidates and dev branches together. |
 | `maxFileBytes` | number | 5000000 (hard cap 20000000) | Largest `package.json` or lockfile that is read. Bigger files are listed in `unread` with reason `too-large`. |
 | `maxApiCalls` | number | 600 (hard cap 3000) | Hard ceiling on total REST calls for one invocation. |
 
-**How it finds repos.** One org-wide code search (`"<name>" org:<owner> filename:package.json`, up to 10 pages of 100) produces the candidate list. Each candidate repo is then read directly: its repo record (archived and fork repos are skipped and counted), then every matching `package.json` at the default branch. A manifest counts only when the package appears as a key in `dependencies`, `devDependencies` or `peerDependencies`; a repo that merely mentions the name in text lands in `scanned.notDeclared`. Code search is not trusted for completeness: it lags recent commits, only indexes default branches and returns at most 1000 hits, so `discovery.note` says so on every result, and `incomplete_results` / a full result window set `truncated`. A dev-trunk repo whose real manifests live on `dev` is only found when its default-branch manifest also mentions the package.
+**How it finds repos.** One org-wide code search (`"<name>" org:<owner> filename:package.json`, up to 10 pages of 100) produces the candidate list. Each candidate repo is then read directly: its repo record (archived and fork repos are skipped and counted), then every matching `package.json` at the default branch. A manifest counts only when the package appears as a key in `dependencies`, `devDependencies` or `peerDependencies`; a repo that merely mentions the name in text lands in `scanned.notDeclared`. Code search is not trusted for completeness: it lags recent commits, only indexes default branches and returns at most 1000 hits, so `discovery.note` says so on every result, and `incomplete_results` / a full result window set `truncated`.
+
+**Dev branches.** Code search never sees a dev-trunk repo, whose real manifests live on `dev`. So a second pass lists every repo with GraphQL (one call per 100 repos), keeps the non-archived, non-fork ones whose `dev` branch exists and points at a different commit than the default branch, and reads each of those branches in full: one recursive tree call, then every `package.json` outside `node_modules`, then the lockfile on `dev`. Each entry carries `branch`, so a repo that declares the package on both branches shows up twice, default branch first. `scanned.devBranches` counts the branches read; a tree too big for GitHub to return whole is flagged with `unread: [{ "path": ".", "reason": "tree-truncated" }]`.
+
+A `dev` that has fallen behind a release is abandoned, not a trunk: when its root `package.json` `version` is lower than the default branch's, it is skipped and listed as `abandonedDev: [{ "repo", "devVersion", "defaultVersion" }]`. If either side has no readable version the branch is read as usual. Pass `devBranches: false` to skip the whole pass.
 
 **Workspace members.** A `package.json` below the repo root that declares the package is reported as a declaration of its repo with `member` set to the directory, so an umbrella repo and its children appear in one place:
 
@@ -206,13 +211,14 @@ Every non-archived, non-fork repo an owner has that declares an npm package, wit
 {
 	"package": "@cldmv/fix-headers",
 	"latest": "1.5.0",
-	"discovery": { "source": "code-search", "note": "…" },
-	"scanned": { "candidates": 14, "archived": 1, "forks": 0, "missing": 0, "notDeclared": 2 },
+	"discovery": { "source": "code-search", "devBranches": true, "note": "…" },
+	"scanned": { "candidates": 14, "archived": 1, "forks": 0, "missing": 0, "notDeclared": 2, "devBranches": 9 },
 	"dependents": [
 		{
 			"repo": "CLDMV/electron",
 			"private": false,
 			"defaultBranch": "master",
+			"branch": "master",
 			"tier": "v4",
 			"tierSignals": { "v4Workflow": true, "defaultBranch": "master", "next": true, "dev": false },
 			"lockfile": "pnpm-lock.yaml",
@@ -227,7 +233,7 @@ Every non-archived, non-fork repo an owner has that declares an npm package, wit
 
 **Lockfile resolution.** The root `package-lock.json` is tried first, then `pnpm-lock.yaml` (other lockfiles are not read). For npm, a member resolves against its own `node_modules` entry and then the hoisted root one; for pnpm, against that member's `importers:` entry (peer suffixes such as `1.2.3(typescript@5)` are stripped, `link:` entries yield no version). `resolved` is simply absent when there is no lockfile, it does not contain the package, or it was too large or unparseable (`unread` says which). Lockfiles over 1 MB are fetched with the raw media type, since the contents API leaves their body out.
 
-`unread` also lists manifests that could not be read: `missing` (the search is stale), `too-large` or `invalid-json`.
+`unread` also lists manifests that could not be read: `missing` (the search is stale), `too-large` or `invalid-json`, plus `tree-truncated` for a dev tree GitHub cut short.
 
 **Fan-out safety** works like the other report verbs: hitting `maxRepos`, `maxApiCalls`, the search window or GitHub's rate limit returns what was verified so far with `truncated: true` and a `truncatedReason` (`"max-results"` | `"incomplete-search"` | `"max-repos"` | `"max-api-calls"` | `"rate-limited"`). Code search has its own small quota (10 requests a minute), so the proactive rate-limit floor is not applied to it; a real 403/429 still stops the run with `rate-limited`.
 
