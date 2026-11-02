@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
+ *	@Last modified time: 2026-11-01T14:02:26-08:00 (1793570546)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -22,6 +22,7 @@ import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verb
 import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
 import { REPORT_SECURITY_ALERTS_SCHEMA } from "./verbs/report_security_alerts.ts";
 import { REPORT_RELEASE_PRS_SCHEMA } from "./verbs/report_release_prs.ts";
+import { REPORT_RELEASE_CHANGES_SCHEMA } from "./verbs/report_release_changes.ts";
 import { ISSUE_LABELS_SCHEMA } from "./verbs/issue_labels.ts";
 import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 import { NPM_SCAFFOLD_SCHEMA } from "./verbs/npm_scaffold.ts";
@@ -122,6 +123,13 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 					description:
 						"Report every open release PR (label `release`: next→master and hotfixes→master) for one repo or across every repo an owner has, and whether each one's per-version changelog file (docs/changelog[s]/v<major>/vX.Y.Z.md) is already on the release branch. Status per PR: ready, needs-changelog, or unknown-version (title has no `release: vX.Y.Z`). Use during mass updates to find which repos need a changelog. One search call plus two calls per release PR found; returns truncated:true with a reason if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
 					inputSchema: REPORT_RELEASE_PRS_SCHEMA
+				});
+			} else if (rule.name === "report_release_changes") {
+				tools.push({
+					name: "report_release_changes",
+					description:
+						"Source material for one release's changelog. For a release PR (owner, repo, pull) it returns the version, head/base, the previous release, every PR that actually ships (from the release PR's commits, first line only; docs PRs, the version bump, PRs an earlier release or the previous changelog already carried, and PRs reverted inside the range are left out and listed under excluded), each with title, type, labels, author, merge date, closed issues and, by `detail`, its body, file list or patches (capped, with truncation flags). PRs are grouped by changelog section (breaking, features, fixes, security, CI & tooling, documentation, dependencies, or ungrouped when unclear), with breaking-change hints, `documented` when the version's changelog already mentions a PR, interim hotfix releases not on the head branch, a net block (package.json deltas, direct-dependency changes with locked versions, file totals) and an optional markdown skeleton. Returns truncated:true with a reason if the call budget or GitHub's rate limit is hit. Runs on the read PAT.",
+					inputSchema: REPORT_RELEASE_CHANGES_SCHEMA
 				});
 			} else if (rule.name === "report_ci_status") {
 				tools.push({

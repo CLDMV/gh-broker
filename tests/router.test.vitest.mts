@@ -29,6 +29,7 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "report_unlabeled", mode: "read", custom: true },
 			{ name: "report_security_alerts", mode: "read", custom: true },
 			{ name: "report_release_prs", mode: "read", custom: true },
+			{ name: "report_release_changes", mode: "read", custom: true },
 			{ name: "report_ci_status", mode: "read", custom: true },
 			{ name: "pull_request_read", mode: "read", augment: true },
 			{ name: "list_pull_requests", mode: "read", augment: true }
@@ -283,6 +284,23 @@ describe("Router.call", () => {
 						text: JSON.stringify({ scanned: { releasePrs: 0 }, summary: { ready: 0, needsChangelog: 0, unknownVersion: 0 }, releasePrs: [] })
 					}
 				]
+			});
+		});
+
+		it("report_release_changes runs on a read-PAT Octokit and returns the JSON report as text", async () => {
+			requestMock.mockRejectedValueOnce(Object.assign(new Error("Too Many Requests"), { status: 429 }));
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("report_release_changes", { owner: "cldmv", repo: "gh-broker", pull: 5 });
+			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
+			expect(JSON.parse((out.content[0] as { text: string }).text)).toEqual({
+				repo: "cldmv/gh-broker",
+				pull: 5,
+				prs: [],
+				groups: { breaking: [], features: [], fixes: [], security: [], ciTooling: [], documentation: [], dependencies: [], ungrouped: [] },
+				excluded: [],
+				hotfixes: [],
+				truncated: true,
+				truncatedReason: "rate-limited"
 			});
 		});
 

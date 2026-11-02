@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
+ *	@Last modified time: 2026-11-01T14:02:26-08:00 (1793570546)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -31,6 +31,7 @@ import {
 import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlabeled.ts";
 import { reportSecurityAlerts, type ReportSecurityAlertsInput } from "./verbs/report_security_alerts.ts";
 import { reportReleasePrs, type ReportReleasePrsInput } from "./verbs/report_release_prs.ts";
+import { reportReleaseChanges, type ReportReleaseChangesInput } from "./verbs/report_release_changes.ts";
 import { issueLabels, type IssueLabelsInput } from "./verbs/issue_labels.ts";
 import { reportCiStatus, ciStatusForHeadSha, ciStatusForHeads, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
 import { npmScaffold } from "./verbs/npm_scaffold.ts";
@@ -182,6 +183,11 @@ export class Router {
 			case "report_release_prs": {
 				const octokit = new Octokit({ auth: token });
 				const out = await reportReleasePrs(octokit, args as unknown as ReportReleasePrsInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "report_release_changes": {
+				const octokit = new Octokit({ auth: token });
+				const out = await reportReleaseChanges(octokit, args as unknown as ReportReleaseChangesInput);
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			case "report_ci_status": {
