@@ -149,6 +149,20 @@ describe("state file", () => {
 		expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
 	});
 
+	it("validates like the daemon: no negative counts and no user key that isn't an agent name", () => {
+		const ok = { version: 1, lastAcceptedStep: 1, users: { repo: otp.emptyUser() } };
+		expect(otp.validState(ok)).toBe(true);
+		expect(otp.validState({ ...ok, lastAcceptedStep: -1 })).toBe(false);
+		expect(otp.validState({ ...ok, users: { repo: { ...otp.emptyUser(), failures: -2 } } })).toBe(false);
+		expect(otp.validState({ ...ok, users: { repo: { ...otp.emptyUser(), hardLock: { since: "2026-11-01T00:00:00Z", lockouts: -1 } } } })).toBe(false);
+		expect(otp.validState({ ...ok, users: { "Not A Name": otp.emptyUser() } })).toBe(false);
+		expect(otp.validState({ ...ok, users: { root: otp.emptyUser() } })).toBe(false);
+	});
+
+	it("userOf ignores inherited keys", () => {
+		expect(otp.userOf(otp.emptyState(), "constructor")).toEqual(otp.emptyUser());
+	});
+
 	it("starts all-zero", () => {
 		expect(otp.emptyState()).toEqual({ version: 1, lastAcceptedStep: 0, users: {} });
 		expect(otp.emptyUser()).toEqual({ failures: 0, lockedUntil: null, lockouts: [], hardLock: null });

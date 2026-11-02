@@ -114,13 +114,19 @@ function remove(config, user, d) {
 			d.error(`${user}: could not remove the broker entry from ${info.home}/${MCP_FILE}: ${err.message}. The agent is unregistered anyway; remove the entry by hand.`);
 		}
 	}
-	const statePath = statePathOf(config);
-	const read = d.readState(statePath);
-	if (read.status === "ok" && Object.hasOwn(read.state.users, user)) {
-		d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user), d.now()));
-		d.log(`${user}: cleared from ${statePath}`);
-	} else if (read.status === "corrupt") {
-		d.error(`${statePath} is corrupt, so ${user}'s entry was not cleared; run "sudo gh-broker otp unlock --all"`);
+	try {
+		const statePath = statePathOf(config);
+		const read = d.readState(statePath);
+		if (read.status === "ok" && Object.hasOwn(read.state.users, user)) {
+			d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user), d.now()));
+			d.log(`${user}: cleared from ${statePath}`);
+		} else if (read.status === "corrupt") {
+			d.error(`${statePath} is corrupt, so ${user}'s entry was not cleared; run "sudo gh-broker otp unlock --all"`);
+		}
+	} catch (err) {
+		// The agent is already unregistered; a leftover entry is harmless, and the restart below
+		// still has to run to close its socket.
+		d.error(`${user}: lock state not cleared: ${err.message}. "sudo gh-broker otp unlock ${user}" clears it later.`);
 	}
 	d.restart();
 	d.log("service restarted");

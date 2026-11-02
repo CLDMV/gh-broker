@@ -75,7 +75,7 @@ A user with no entry has nothing recorded, and the broker drops entries that hav
 
 ### `otp_status`
 
-The gate's state for the calling agent user, plus every hard-locked user. Read, `mode: "read"`, `custom: true`, no arguments, no owner or PAT. It is never gated and never blocked by a lock, so a locked-out agent can still tell the user what happened.
+The gate's state for the calling agent user, plus every hard-locked user. Read, `mode: "read"`, `custom: true`, no arguments, no owner or PAT. It is never gated (`"otp": true` on it is a config error) and never blocked by a lock, so a locked-out agent can still tell the user what happened.
 
 ```json
 {

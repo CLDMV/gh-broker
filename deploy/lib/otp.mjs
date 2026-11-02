@@ -24,6 +24,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, fchmodSync, fchownSync, statSync, constants } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import QRCode from "qrcode";
+import { validAgentName } from "./agents.mjs";
 
 export const DEFAULT_SEED_CRED = "otp-seed";
 export const DEFAULT_STATE_PATH = "/var/lib/gh-broker/otp-state.json";
@@ -118,6 +119,7 @@ export function storeSeed({ config, name, seed, paths, io }) {
 
 const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 const isIso = (v) => typeof v === "string" && !Number.isNaN(Date.parse(v));
+const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
 
 /** One user's counters, all zero (what a user with no entry has). */
 export function emptyUser() {
@@ -133,22 +135,22 @@ export function emptyState() {
 export function validUser(v) {
 	return (
 		isObject(v) &&
-		Number.isInteger(v.failures) &&
+		isCount(v.failures) &&
 		(v.lockedUntil === null || isIso(v.lockedUntil)) &&
 		Array.isArray(v.lockouts) &&
 		v.lockouts.every(isIso) &&
-		(v.hardLock === null || (isObject(v.hardLock) && isIso(v.hardLock.since) && Number.isInteger(v.hardLock.lockouts)))
+		(v.hardLock === null || (isObject(v.hardLock) && isIso(v.hardLock.since) && isCount(v.hardLock.lockouts)))
 	);
 }
 
-/** Whether `v` is a well-formed version 1 state object. */
+/** Whether `v` is a well-formed version 1 state object, by the same rules as the daemon's parseState (src/otp/state.ts). */
 export function validState(v) {
-	return isObject(v) && v.version === 1 && Number.isInteger(v.lastAcceptedStep) && isObject(v.users) && Object.values(v.users).every(validUser);
+	return isObject(v) && v.version === 1 && isCount(v.lastAcceptedStep) && isObject(v.users) && Object.entries(v.users).every(([name, u]) => validAgentName(name) && validUser(u));
 }
 
 /** A user's entry, or all-zero when it has none. */
 export function userOf(state, user) {
-	return state.users[user] ?? emptyUser();
+	return Object.hasOwn(state.users, user) ? state.users[user] : emptyUser();
 }
 
 /**

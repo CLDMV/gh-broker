@@ -166,9 +166,16 @@ describe("otp rotate", () => {
 		expect(d.restart).not.toHaveBeenCalled();
 	});
 
-	it("does not show the new seed when storing it fails", async () => {
+	it("shows the seed before storing it, and says it isn't in use when storing fails", async () => {
 		const { d, out } = makeDeps({ storeSeed: () => { throw new Error("disk full"); } });
-		await expect(otpCommand("rotate", [], config, d)).rejects.toThrow("disk full");
-		expect(out.join("\n")).not.toContain("NEWSEED");
+		await expect(otpCommand("rotate", [], config, d)).rejects.toThrow('storing the new seed failed (disk full); the key above is not in use. Nothing was restarted; run "sudo gh-broker otp rotate" again');
+		expect(out.join("\n")).toContain("key: NEWSEED");
+		expect(d.restart).not.toHaveBeenCalled();
+	});
+
+	it("stores nothing when showing the seed fails", async () => {
+		const { d } = makeDeps({ qr: async () => { throw new Error("tty gone"); } });
+		await expect(otpCommand("rotate", [], config, d)).rejects.toThrow("tty gone");
+		expect(d.storeSeed).not.toHaveBeenCalled();
 	});
 });

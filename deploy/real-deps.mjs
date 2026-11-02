@@ -42,6 +42,15 @@ const readText = (p) => {
 	}
 };
 
+/** The version `install` recorded in /opt/gh-broker (root's own plain file; anything else there is ignored, never followed). */
+const deployedVersion = () => {
+	try {
+		return readOwnedFile("/opt/gh-broker/version", 0)?.text.trim();
+	} catch {
+		return undefined;
+	}
+};
+
 /** The real effects for lib/cli.mjs `runCli` (also used by the installer for the MCP config and smoke test). */
 export function realDeps() {
 	let store;
@@ -63,7 +72,7 @@ export function realDeps() {
 		mcpIO: { read: readOwnedFile, write: (p, text, owner) => writeFileAtomic(p, text, owner) },
 		socketExists: existsSync,
 		smoke: smokeTest,
-		versions: () => ({ pkg: JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version, deployed: readText("/opt/gh-broker/version")?.trim() }),
+		versions: () => ({ pkg: JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version, deployed: deployedVersion() }),
 		readState: (path) => states().read(path),
 		writeState: (path, state) => states().write(path, state),
 		storeSeed: (cfg, name, seed) => {

@@ -122,8 +122,14 @@ async function rotate(config, d) {
 	const name = seedCredName(config);
 	if (!name) throw new Error("OTP is not configured (no otp.seed in the config); re-run the installer first");
 	const seed = d.newSeed ? d.newSeed() : generateSeed();
-	d.storeSeed(config, name, seed);
+	// Shown before it is stored: storing replaces the old seed, so a failure after the store
+	// would otherwise leave a seed nobody has.
 	await showSeed({ seed, host: d.host(), log: d.log, ...(d.qr ? { qr: d.qr } : {}) });
+	try {
+		d.storeSeed(config, name, seed);
+	} catch (err) {
+		throw new Error(`storing the new seed failed (${err.message}); the key above is not in use. Nothing was restarted; run "sudo gh-broker otp rotate" again`);
+	}
 	d.restart();
 	d.log("service restarted. The old authenticator entry no longer works; remove it from your app.");
 	return 0;

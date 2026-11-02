@@ -144,6 +144,14 @@ describe("agent remove", () => {
 		expect(gone.d.removeGroup).toHaveBeenCalledWith("repo");
 	});
 
+	it("still restarts when clearing the lock state fails (the broker wrote the file meanwhile)", async () => {
+		const state = { status: "ok", state: { ...emptyState(), users: { repo: emptyUser() } } };
+		const { d, err } = makeDeps({ readState: () => state, writeState: () => { throw new Error("changed while this command ran"); } });
+		expect(await agentCommand("remove", ["repo"], config, d)).toBe(0);
+		expect(err[0]).toBe('repo: lock state not cleared: changed while this command ran. "sudo gh-broker otp unlock repo" clears it later.');
+		expect(d.restart).toHaveBeenCalled();
+	});
+
 	it("warns when the state file is corrupt instead of editing it", async () => {
 		const { d, err } = makeDeps({ readState: () => ({ status: "corrupt", state: emptyState() }) });
 		await agentCommand("remove", ["repo"], config, d);

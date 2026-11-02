@@ -31,7 +31,7 @@
  * --non-interactive for a single unattended command. See --help and
  * docs/deploy-architecture.md.
  */
-import { readFileSync, readdirSync, existsSync, statSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
@@ -45,7 +45,7 @@ import { promptLine, promptHidden, confirm, choose } from "./lib/prompt.mjs";
 import { buildConfig, readOperatorConfig, secretsBlock } from "./lib/config-merge.mjs";
 import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "./lib/secret-store.mjs";
 import { parseArgs, NPM_SCOPE, envSecretKey } from "./lib/install-args.mjs";
-import { generateSeed, seedCredName, seedExists, showSeed } from "./lib/otp.mjs";
+import { generateSeed, seedCredName, seedExists, showSeed, writeFileAtomic } from "./lib/otp.mjs";
 import { credentialPlan } from "./lib/credentials.mjs";
 import { createNpmToken } from "./lib/npm-setup.mjs";
 import { hostname } from "node:os";
@@ -450,7 +450,9 @@ async function main() {
 	installUnit(join(REPO, "deploy", "gh-broker.service"));
 	enableService();
 	deployDist(DIST, APP_DIR, SVC_USER, SVC_GROUP);
-	writeFileSync(join(APP_DIR, "version"), `${readJson(join(REPO, "package.json"))?.version ?? ""}\n`); // `gh-broker otp status` / `agent list` compare it with the package
+	// `gh-broker otp status` / `agent list` compare it with the package. /opt/gh-broker belongs to
+	// the service user, so root writes it without following anything planted there.
+	writeFileAtomic(join(APP_DIR, "version"), `${readJson(join(REPO, "package.json"))?.version ?? ""}\n`, { uid: 0, gid: 0, mode: 0o644 });
 	restartService();
 	log(`  service: ${serviceActive()}`);
 
