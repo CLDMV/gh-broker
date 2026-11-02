@@ -163,7 +163,7 @@ describe("Router.call", () => {
 
 		it("npm_scaffold is unavailable without an npm block, before any credential is read", async () => {
 			const r = new Router(makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }] }), secrets as any, upstream as any);
-			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" })).rejects.toThrow(
 				/tool "npm_scaffold" is not available on this broker: the npm integration is not configured/
 			);
 			expect(secrets.resolve).not.toHaveBeenCalled();
@@ -173,7 +173,7 @@ describe("Router.call", () => {
 			secrets.has.mockImplementation((ref: string) => ref !== "cred:npm-token");
 			const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } });
 			const r = new Router(cfg, secrets as any, upstream as any);
-			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(/its credential "npm-token" is not stored/);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" })).rejects.toThrow(/its credential "npm-token" is not stored/);
 			expect(secrets.resolve).not.toHaveBeenCalled();
 		});
 
@@ -181,7 +181,7 @@ describe("Router.call", () => {
 			requestMock.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
 			const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } });
 			const r = new Router(cfg, secrets as any, upstream as any);
-			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(/repository cldmv\/x not found/);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" })).rejects.toThrow(/repository cldmv\/x not found/);
 			expect(Octokit).toHaveBeenLastCalledWith({ auth: "token:cred:cldmv-read" });
 			expect(secrets.resolve).toHaveBeenCalledWith("cred:npm-token");
 		});
@@ -202,7 +202,7 @@ describe("Router.call", () => {
 			try {
 				const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://npm.example.test" } });
 				const r = new Router(cfg, secrets as any, upstream as any);
-				const out = await r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" });
+				const out = await r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" });
 				expect(JSON.parse((out.content[0] as any).text)).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"] });
 				expect(urls).toEqual(["GET https://npm.example.test/@cldmv%2fx?write=true", "PUT https://npm.example.test/@cldmv%2fx"]);
 				expect(fetchMock.mock.calls[1]![1].headers.authorization).toBe("Bearer token:cred:npm-token");

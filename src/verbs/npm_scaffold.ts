@@ -46,7 +46,7 @@ import { buildTarball, tarballDigests } from "./npm-tarball.ts";
 export const PLACEHOLDER_VERSION = "0.0.0-stage";
 export const SCAFFOLD_MARKER = "gh-broker";
 const DEFAULT_WORKFLOW = "publish.yml";
-const INPUT_KEYS = new Set(["owner", "repo", "package", "otp", "workflow"]);
+const INPUT_KEYS = new Set(["owner", "repo", "package", "npm_otp", "workflow"]);
 const PACKAGE_NAME = /^@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*$/;
 
 export interface NpmScaffoldInput {
@@ -54,8 +54,11 @@ export interface NpmScaffoldInput {
 	repo: string;
 	/** Scoped package name, e.g. "@cldmv/new-thing". */
 	package: string;
-	/** One-time password from the user's authenticator. */
-	otp: string;
+	/**
+	 * npm one-time password from the user's authenticator. Named npm_otp because `otp` is the
+	 * broker's own gate code (src/otp/), which the router strips before the verb sees it.
+	 */
+	npm_otp: string;
 	/** The repo's publish workflow file name. Defaults to publish.yml. */
 	workflow?: string;
 }
@@ -66,10 +69,10 @@ export const NPM_SCAFFOLD_SCHEMA = {
 		owner: { type: "string", description: "Repository owner (a configured owner)." },
 		repo: { type: "string", description: "Repository whose package.json names the package." },
 		package: { type: "string", description: 'Scoped package name, e.g. "@cldmv/new-thing". Must be under a scope in config.npm.scopes.' },
-		otp: { type: "string", description: "One-time password the user read from their authenticator. Ask the user for it right before calling; codes expire in about 30 seconds." },
+		npm_otp: { type: "string", description: "npm one-time password the user read from their authenticator. Ask the user for it right before calling; codes expire in about 30 seconds." },
 		workflow: { type: "string", description: 'The repo\'s publish workflow file in .github/workflows. Default "publish.yml".' }
 	},
-	required: ["owner", "repo", "package", "otp"],
+	required: ["owner", "repo", "package", "npm_otp"],
 	additionalProperties: false
 };
 
@@ -113,7 +116,7 @@ function validate(input: unknown): Required<NpmScaffoldInput> {
 	if (typeof a.repo !== "string" || !/^[A-Za-z0-9._-]+$/.test(a.repo)) fail('"repo" must be a repository name');
 	if (typeof a.package !== "string" || a.package.length > 214 || !PACKAGE_NAME.test(a.package)) fail('"package" must be a lowercase scoped npm package name, e.g. "@cldmv/new-thing"');
 	// Never echo the value: it is a live credential.
-	if (typeof a.otp !== "string" || !/^[0-9]{6,8}$/.test(a.otp)) fail('"otp" must be the 6-8 digit code from the authenticator');
+	if (typeof a.npm_otp !== "string" || !/^[0-9]{6,8}$/.test(a.npm_otp)) fail('"npm_otp" must be the 6-8 digit npm code from the authenticator');
 	if (a.workflow !== undefined && (typeof a.workflow !== "string" || !/^[A-Za-z0-9._-]+\.ya?ml$/.test(a.workflow))) {
 		fail('"workflow" must be a workflow file name in .github/workflows, e.g. "publish.yml"');
 	}
@@ -121,7 +124,7 @@ function validate(input: unknown): Required<NpmScaffoldInput> {
 		owner: a.owner as string,
 		repo: a.repo as string,
 		package: a.package as string,
-		otp: a.otp as string,
+		npm_otp: a.npm_otp as string,
 		workflow: (a.workflow as string | undefined) ?? DEFAULT_WORKFLOW
 	};
 }
@@ -242,7 +245,7 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 	const existing = await deps.registry.packument(args.package);
 	if (!existing) {
 		try {
-			await deps.registry.publish(placeholderDocument(args.package, facts, access, deps.registry.registry), args.package, args.otp);
+			await deps.registry.publish(placeholderDocument(args.package, facts, access, deps.registry.registry), args.package, args.npm_otp);
 		} catch (err) {
 			if (err instanceof NpmOtpRequired) {
 				return { ...base, status: "needs_otp", done: [], remaining: ["publish", "trust"], message: "npm refused the one-time password before publishing; nothing was written. Call again with a fresh code." };
@@ -273,7 +276,7 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 
 	let out: Awaited<ReturnType<NpmRegistry["addGithubTrust"]>>;
 	try {
-		out = await deps.registry.addGithubTrust(args.package, { repository: facts.repository, file: args.workflow }, args.otp);
+		out = await deps.registry.addGithubTrust(args.package, { repository: facts.repository, file: args.workflow }, args.npm_otp);
 	} catch (err) {
 		if (err instanceof NpmOtpRequired) {
 			return {

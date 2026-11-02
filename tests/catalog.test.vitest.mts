@@ -117,7 +117,7 @@ describe("buildCatalog", () => {
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "npm_scaffold" });
 		expect(catalog[0]?.description).toMatch(/one-time password/);
-		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo", "package", "otp"] });
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo", "package", "npm_otp"] });
 	});
 
 	it("advertises issue_labels with its local schema", async () => {
