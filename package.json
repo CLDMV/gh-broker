@@ -5,7 +5,7 @@
 	"type": "module",
 	"license": "Apache-2.0",
 	"bin": {
-		"gh-broker": "./deploy/install.mjs"
+		"gh-broker": "./deploy/cli.mjs"
 	},
 	"main": "./dist/index.mjs",
 	"files": [
@@ -19,7 +19,7 @@
 	},
 	"scripts": {
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"build": "npm run typecheck && rm -rf dist && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.mjs --sourcemap && esbuild deploy/cli.mjs --bundle --platform=node --format=esm --target=node20 --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=dist/cli.mjs",
+		"build": "npm run typecheck && rm -rf dist && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.mjs --sourcemap",
 		"start": "node dist/index.mjs",
 		"dev": "node --experimental-strip-types --watch src/index.ts",
 		"build:ci": "npm run build",

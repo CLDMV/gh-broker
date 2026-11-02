@@ -99,7 +99,8 @@ describe("seed credential", () => {
 });
 
 describe("state file", () => {
-	const good = { version: 1, lastAcceptedStep: 7, failures: 2, lockedUntil: "2026-11-01T12:10:00.000Z", lockouts: ["2026-11-01T12:00:00.000Z"], hardLock: null };
+	const user = { failures: 2, lockedUntil: "2026-11-01T12:10:00.000Z", lockouts: ["2026-11-01T12:00:00.000Z"], hardLock: null };
+	const good = { version: 1, lastAcceptedStep: 7, users: { repo: user, glmtest: otp.emptyUser() } };
 	const file = (name: string, body?: string) => {
 		const p = join(dir, name);
 		if (body !== undefined) writeFileSync(p, body);
@@ -107,23 +108,28 @@ describe("state file", () => {
 	};
 
 	it("starts all-zero", () => {
-		expect(otp.emptyState()).toEqual({ version: 1, lastAcceptedStep: 0, failures: 0, lockedUntil: null, lockouts: [], hardLock: null });
+		expect(otp.emptyState()).toEqual({ version: 1, lastAcceptedStep: 0, users: {} });
+		expect(otp.emptyUser()).toEqual({ failures: 0, lockedUntil: null, lockouts: [], hardLock: null });
+		expect(otp.userOf(good, "nobody")).toEqual(otp.emptyUser());
+		expect(otp.userOf(good, "repo")).toEqual(user);
 	});
 
 	it("validates the shape", () => {
 		expect(otp.validState(good)).toBe(true);
-		expect(otp.validState({ ...good, hardLock: { since: "2026-11-01T12:00:00Z", lockouts: 3 } })).toBe(true);
+		expect(otp.validState({ ...good, users: { repo: { ...user, hardLock: { since: "2026-11-01T12:00:00Z", lockouts: 3 } } } })).toBe(true);
 		for (const bad of [
 			null,
 			[],
 			{ ...good, version: 2 },
 			{ ...good, lastAcceptedStep: "7" },
-			{ ...good, failures: 1.5 },
-			{ ...good, lockedUntil: "nope" },
-			{ ...good, lockouts: "x" },
-			{ ...good, lockouts: ["nope"] },
-			{ ...good, hardLock: {} },
-			{ ...good, hardLock: { since: "2026-11-01T12:00:00Z", lockouts: "3" } }
+			{ ...good, users: [] },
+			{ ...good, users: { repo: null } },
+			{ ...good, users: { repo: { ...user, failures: 1.5 } } },
+			{ ...good, users: { repo: { ...user, lockedUntil: "nope" } } },
+			{ ...good, users: { repo: { ...user, lockouts: "x" } } },
+			{ ...good, users: { repo: { ...user, lockouts: ["nope"] } } },
+			{ ...good, users: { repo: { ...user, hardLock: {} } } },
+			{ ...good, users: { repo: { ...user, hardLock: { since: "2026-11-01T12:00:00Z", lockouts: "3" } } } }
 		]) {
 			expect(otp.validState(bad)).toBe(false);
 		}
@@ -134,11 +140,15 @@ describe("state file", () => {
 		expect(otp.readState(join(dir, "nope.json"))).toEqual({ status: "missing", state: otp.emptyState() });
 		expect(otp.readState(file("bad.json", "{not json")).status).toBe("corrupt");
 		expect(otp.readState(file("shape.json", '{"version":1}')).status).toBe("corrupt");
+		expect(otp.readState(file("old.json", JSON.stringify({ version: 1, lastAcceptedStep: 0, failures: 0, lockedUntil: null, lockouts: [], hardLock: null }))).status).toBe("corrupt");
 		expect(() => otp.readState(dir)).toThrow(/EISDIR/);
 	});
 
-	it("unlock keeps only lastAcceptedStep", () => {
-		expect(otp.unlockedState(good)).toEqual({ ...otp.emptyState(), lastAcceptedStep: 7 });
+	it("clears one user or every user, keeping lastAcceptedStep", () => {
+		expect(otp.withoutUser(good, "repo")).toEqual({ version: 1, lastAcceptedStep: 7, users: { glmtest: otp.emptyUser() } });
+		expect(otp.withoutUser(good, "nobody")).toEqual(good);
+		expect(otp.withoutUsers(good)).toEqual({ version: 1, lastAcceptedStep: 7, users: {} });
+		expect(good.users.repo).toEqual(user);
 	});
 
 	it("writes atomically as 0600, chowned, with no temp file left", () => {
@@ -151,65 +161,77 @@ describe("state file", () => {
 		expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
 	});
 
-	it("overwrites an existing file", () => {
+	it("writeFileAtomic honors the mode, and overwrites an existing file", () => {
 		const p = file("over.json", "garbage");
-		otp.writeStateAtomic(p, good, { uid: 1, gid: 1 }, { chown: () => {} });
-		expect(JSON.parse(readFileSync(p, "utf8"))).toEqual(good);
+		otp.writeFileAtomic(p, "new\n", { uid: 1, gid: 1, mode: 0o640 }, { chown: () => {} });
+		expect(readFileSync(p, "utf8")).toBe("new\n");
+		expect(statSync(p).mode & 0o777).toBe(0o640);
 	});
 
 	it("removes the temp file and rethrows when the chown fails", () => {
 		const p = join(dir, "failed.json");
-		expect(() =>
-			otp.writeStateAtomic(p, good, { uid: 1, gid: 1 }, { chown: () => { throw new Error("EPERM"); } })
-		).toThrow("EPERM");
+		expect(() => otp.writeFileAtomic(p, "x", { uid: 1, gid: 1 }, { chown: () => { throw new Error("EPERM"); } })).toThrow("EPERM");
 		expect(existsSync(p)).toBe(false);
 		expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
 	});
 
-	it("uses chownSync by default (fails for a non-root test run, which is the point)", () => {
+	it("uses chownSync by default (a non-root run refuses, and the temp file is cleaned up)", () => {
 		const p = join(dir, "default.json");
 		try {
-			otp.writeStateAtomic(p, good, { uid: 0, gid: 0 });
+			otp.writeFileAtomic(p, "x", { uid: 0, gid: 0 });
 		} catch {
-			// not root: the default chown refused, and the temp file was cleaned up
+			// not root: the default chown refused
 		}
 		expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
 	});
 });
 
-describe("describeState / formatStatus", () => {
+describe("describeUsers / formatStatus", () => {
 	const now = Date.parse("2026-11-01T12:05:00.000Z");
-	const base = otp.emptyState();
+	const zero = otp.emptyUser();
+	const state = (users: Record<string, unknown>) => ({ status: "ok", state: { version: 1, lastAcceptedStep: 0, users } });
 
-	it("reports an unlocked, missing state", () => {
-		const d = otp.describeState({ status: "missing", state: base }, {}, now);
-		expect(d).toMatchObject({ fileStatus: "missing", locked: false, failures: 0, maxFailures: 5, maxLockouts: 3, lockoutsLast24h: 0, lockedUntil: null });
-		const lines = otp.formatStatus(d, { statePath: "/p", configured: true });
-		expect(lines).toEqual(["OTP configured: yes", "state file: /p (missing)", "bad codes so far: 0 of 5", "short lockouts in the last 24 h: 0 of 3", "not locked"]);
+	it("reports unlocked users, including registered ones with no entry", () => {
+		const d = otp.describeUsers({ status: "missing", state: otp.emptyState() }, ["repo"], {}, now);
+		expect(d).toEqual([expect.objectContaining({ user: "repo", locked: false, failures: 0, maxFailures: 5, maxLockouts: 3, lockoutsLast24h: 0, lockedUntil: null })]);
+		const lines = otp.formatStatus(d, { statePath: "/p", fileStatus: "missing", configured: true });
+		expect(lines).toEqual(["OTP configured: yes", "state file: /p (missing)", "repo:", "  bad codes so far: 0 of 5", "  short lockouts in the last 24 h: 0 of 3", "  not locked"]);
+	});
+
+	it("lists registered agents together with users only the file mentions, sorted", () => {
+		const d = otp.describeUsers(state({ zed: zero, repo: zero }), ["repo", "amy"], {}, now);
+		expect(d.map((u) => u.user)).toEqual(["amy", "repo", "zed"]);
+		expect(otp.formatStatus([], { statePath: "/p", fileStatus: "ok", configured: false })).toContain("no agents registered");
 	});
 
 	it("reports a short lockout, and ignores an expired one and old lockouts", () => {
-		const active = otp.describeState({ status: "ok", state: { ...base, failures: 1, lockedUntil: "2026-11-01T12:10:00.000Z", lockouts: ["2026-11-01T12:00:00.000Z", "2026-10-30T12:00:00.000Z"] } }, { maxFailures: 9, maxLockouts: 4 }, now);
-		expect(active).toMatchObject({ locked: true, lockedUntil: "2026-11-01T12:10:00.000Z", lockoutsLast24h: 1, maxFailures: 9, maxLockouts: 4 });
-		expect(otp.formatStatus(active, { statePath: "/p", configured: false }).join("\n")).toContain("short lockout until 2026-11-01T12:10:00.000Z");
-		expect(otp.formatStatus(active, { statePath: "/p", configured: false })[0]).toContain("no (re-run the installer");
-		const expired = otp.describeState({ status: "ok", state: { ...base, lockedUntil: "2026-11-01T12:00:00.000Z" } }, {}, now);
-		expect(expired).toMatchObject({ locked: false, lockedUntil: null });
+		const active = otp.describeUsers(state({ repo: { ...zero, failures: 1, lockedUntil: "2026-11-01T12:10:00.000Z", lockouts: ["2026-11-01T12:00:00.000Z", "2026-10-30T12:00:00.000Z"] } }), [], { maxFailures: 9, maxLockouts: 4 }, now);
+		expect(active[0]).toMatchObject({ locked: true, lockedUntil: "2026-11-01T12:10:00.000Z", lockoutsLast24h: 1, maxFailures: 9, maxLockouts: 4 });
+		const text = otp.formatStatus(active, { statePath: "/p", fileStatus: "ok", configured: false }).join("\n");
+		expect(text).toContain("short lockout until 2026-11-01T12:10:00.000Z");
+		expect(text).toContain("no (re-run the installer");
+		const expired = otp.describeUsers(state({ repo: { ...zero, lockedUntil: "2026-11-01T12:00:00.000Z" } }), [], {}, now);
+		expect(expired[0]).toMatchObject({ locked: false, lockedUntil: null });
 	});
 
-	it("reports a hard lock", () => {
-		const d = otp.describeState({ status: "ok", state: { ...base, hardLock: { since: "2026-11-01T11:00:00.000Z", lockouts: 3 } } }, {}, now);
-		expect(d.locked).toBe(true);
-		expect(otp.formatStatus(d, { statePath: "/p", configured: true }).join("\n")).toContain("HARD LOCK since 2026-11-01T11:00:00.000Z after 3 lockouts. Clear it with: sudo gh-broker otp unlock");
+	it("reports a hard lock with the per-user unlock command", () => {
+		const d = otp.describeUsers(state({ repo: { ...zero, hardLock: { since: "2026-11-01T11:00:00.000Z", lockouts: 3 } } }), [], {}, now);
+		expect(d[0].locked).toBe(true);
+		expect(otp.formatStatus(d, { statePath: "/p", fileStatus: "ok", configured: true }).join("\n")).toContain("HARD LOCK since 2026-11-01T11:00:00.000Z after 3 lockouts. Clear it with: sudo gh-broker otp unlock repo");
 	});
 
-	it("reports a corrupt file as locked", () => {
-		const d = otp.describeState({ status: "corrupt", state: base }, {}, now);
-		expect(d).toMatchObject({ fileStatus: "corrupt", locked: true, failures: null });
-		expect(otp.formatStatus(d, { statePath: "/p", configured: true }).join("\n")).toContain("LOCKED: the state file is unreadable");
+	it("reports a corrupt file as locking every user", () => {
+		const d = otp.describeUsers({ status: "corrupt", state: otp.emptyState() }, ["repo"], { maxFailures: 2, maxLockouts: 1 }, now);
+		expect(d[0]).toMatchObject({ user: "repo", corrupt: true, locked: true, failures: null, maxFailures: 2, maxLockouts: 1 });
+		const text = otp.formatStatus(d, { statePath: "/p", fileStatus: "corrupt", configured: true }).join("\n");
+		expect(text).toContain("LOCKED: the state file is unreadable");
+		expect(text).toContain("unlock --all");
+		expect(text).toContain("locked (state file unreadable)");
+		expect(otp.describeUsers({ status: "corrupt", state: otp.emptyState() }, ["repo"], {}, now)[0]).toMatchObject({ maxFailures: 5, maxLockouts: 3 });
 	});
 
 	it("uses Date.now when no clock is given", () => {
-		expect(otp.describeState({ status: "missing", state: base }).locked).toBe(false);
+		expect(otp.describeUsers({ status: "missing", state: otp.emptyState() }, ["a"])[0].locked).toBe(false);
+		expect(otp.describeUser(zero).locked).toBe(false);
 	});
 });

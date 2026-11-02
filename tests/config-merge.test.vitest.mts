@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mergeConfig, layerConfig, overlayFromFlags, readOperatorConfig, buildConfig, secretsBlock, DEFAULT_GHCR_DROP_DIR } from "../deploy/lib/config-merge.mjs";
 
 const example = {
-	listen: "unix:/run/gh-broker/gh-broker.sock",
+	listen: "agents:/run/gh-broker/agents",
 	upstream: "https://api.githubcopilot.com/mcp/x/all",
 	tools: [
 		{ name: "get_me", mode: "read" },
@@ -39,9 +39,9 @@ describe("mergeConfig", () => {
 	});
 
 	it("lets current win for listen/upstream/defaultOwner/app/secrets", () => {
-		const current = { ...example, listen: "unix:/tmp/custom.sock", app: { appId: 1, privateKey: "cred:k" } };
+		const current = { ...example, listen: "agents:/tmp/custom.sock", app: { appId: 1, privateKey: "cred:k" } };
 		const merged = mergeConfig(example, current);
-		expect(merged.listen).toBe("unix:/tmp/custom.sock");
+		expect(merged.listen).toBe("agents:/tmp/custom.sock");
 		expect(merged.app).toEqual({ appId: 1, privateKey: "cred:k" });
 	});
 
@@ -52,14 +52,14 @@ describe("mergeConfig", () => {
 	});
 
 	it("keeps the example's scalars when current omits them, and tolerates configs with no owners", () => {
-		const merged = mergeConfig({ tools: [], listen: "unix:/a" }, { tools: [] });
-		expect(merged.listen).toBe("unix:/a");
+		const merged = mergeConfig({ tools: [], listen: "agents:/a" }, { tools: [] });
+		expect(merged.listen).toBe("agents:/a");
 		expect(merged.owners).toEqual({});
 	});
 
 	it("does not mutate its inputs", () => {
 		const ex = structuredClone(example);
-		mergeConfig(ex, { ...example, listen: "unix:/z" });
+		mergeConfig(ex, { ...example, listen: "agents:/z" });
 		expect(ex).toEqual(example);
 	});
 
@@ -85,7 +85,7 @@ describe("mergeConfig", () => {
 });
 
 const shipped = {
-	listen: "unix:/run/gh-broker/gh-broker.sock",
+	listen: "agents:/run/gh-broker/agents",
 	upstream: "https://api.githubcopilot.com/mcp/x/all",
 	tools: [{ name: "get_me", mode: "read" }]
 };
@@ -96,9 +96,9 @@ const ask = async () => {
 
 describe("layerConfig", () => {
 	it("replaces scalars and merges owners per owner and per field", () => {
-		const base = { listen: "unix:/a", upstream: "https://a", owners: { acme: { read: "cred:acme-read", write: "cred:acme-write", installationId: 7 } } };
-		const out = layerConfig(base, { listen: "unix:/b", defaultOwner: "acme", owners: { acme: { write: "cred:w2" }, beta: { read: "cred:r", write: "cred:w" } } });
-		expect(out.listen).toBe("unix:/b");
+		const base = { listen: "agents:/a", upstream: "https://a", owners: { acme: { read: "cred:acme-read", write: "cred:acme-write", installationId: 7 } } };
+		const out = layerConfig(base, { listen: "agents:/b", defaultOwner: "acme", owners: { acme: { write: "cred:w2" }, beta: { read: "cred:r", write: "cred:w" } } });
+		expect(out.listen).toBe("agents:/b");
 		expect(out.upstream).toBe("https://a");
 		expect(out.defaultOwner).toBe("acme");
 		expect(out.owners.acme).toEqual({ read: "cred:acme-read", write: "cred:w2", installationId: 7 });
@@ -124,7 +124,7 @@ describe("layerConfig", () => {
 	});
 
 	it("leaves a base without overlay data alone", () => {
-		expect(layerConfig({ listen: "unix:/a" }, {})).toEqual({ listen: "unix:/a" });
+		expect(layerConfig({ listen: "agents:/a" }, {})).toEqual({ listen: "agents:/a" });
 	});
 });
 
@@ -135,7 +135,7 @@ describe("overlayFromFlags", () => {
 
 	it("maps every flag to its config field", () => {
 		const o = overlayFromFlags({
-			listen: "unix:/x.sock",
+			listen: "agents:/x.sock",
 			upstream: "https://u",
 			defaultOwner: "acme",
 			owners: ["acme", "beta"],
@@ -151,7 +151,7 @@ describe("overlayFromFlags", () => {
 			protectReleaseTags: false
 		});
 		expect(o).toEqual({
-			listen: "unix:/x.sock",
+			listen: "agents:/x.sock",
 			upstream: "https://u",
 			defaultOwner: "acme",
 			owners: {
@@ -180,7 +180,7 @@ describe("readOperatorConfig", () => {
 	const read = (text: string) => () => text;
 
 	it("returns a valid operator config", () => {
-		const cfg = { listen: "unix:/a", owners: { acme: { read: "cred:acme-read", write: "cred:acme-write" } } };
+		const cfg = { listen: "agents:/a", owners: { acme: { read: "cred:acme-read", write: "cred:acme-write" } } };
 		expect(readOperatorConfig("/c.json", read(JSON.stringify(cfg)))).toEqual(cfg);
 	});
 
@@ -236,14 +236,14 @@ describe("buildConfig", () => {
 	});
 
 	it("layers example < deployed < --config < flags", async () => {
-		const current = { ...shipped, listen: "unix:/deployed", upstream: "https://deployed", owners: { acme }, defaultOwner: "acme" };
-		const file = { listen: "unix:/file", upstream: "https://file" };
-		const flags = { listen: "unix:/flag" };
+		const current = { ...shipped, listen: "agents:/deployed", upstream: "https://deployed", owners: { acme }, defaultOwner: "acme" };
+		const file = { listen: "agents:/file", upstream: "https://file" };
+		const flags = { listen: "agents:/flag" };
 		const { config } = await build({ current, file, opts: flags });
-		expect(config.listen).toBe("unix:/flag"); // flag beats file
+		expect(config.listen).toBe("agents:/flag"); // flag beats file
 		expect(config.upstream).toBe("https://file"); // file beats deployed
 		const deployedOnly = await build({ current });
-		expect(deployedOnly.config.listen).toBe("unix:/deployed"); // deployed beats example
+		expect(deployedOnly.config.listen).toBe("agents:/deployed"); // deployed beats example
 		expect(deployedOnly.config.upstream).toBe("https://deployed");
 		expect((await build({ current: { tools: [], owners: { acme } } })).config.listen).toBe(shipped.listen); // example fills gaps
 	});
@@ -358,5 +358,28 @@ describe("otp block (#143)", () => {
 		expect(first.config.otp).toEqual({ seed: "cred:otp-seed" });
 		const up = await buildConfig({ example: exampleOtp, current: { ...example, otp: { seed: "cred:otp-seed", maxFailures: 3 } }, file: undefined, opts: flags, nonInteractive: true, ask: async () => "" });
 		expect(up.config.otp).toEqual({ seed: "cred:otp-seed", maxFailures: 3 });
+	});
+});
+
+describe("per-agent listen (#143)", () => {
+	const flags = { owners: [], installationIds: {}, ghcrImages: [] };
+	const build = (current: unknown, ex: unknown = example, file?: unknown) => buildConfig({ example: ex as any, current: current as any, file: file as any, opts: flags as any, nonInteractive: true, ask: async () => "" });
+
+	it("does not carry a deployed unix: listen over; the new default replaces it", async () => {
+		expect(mergeConfig(example, { ...example, listen: "unix:/run/gh-broker/gh-broker.sock" }).listen).toBe(example.listen);
+		const r = await build({ ...example, listen: "unix:/run/gh-broker/gh-broker.sock" }, { ...example, listen: "unix:/run/gh-broker/gh-broker.sock" });
+		expect(r.config.listen).toBe("agents:/run/gh-broker/agents");
+		expect(r.notes.join("\n")).toContain("one socket per agent");
+	});
+
+	it("replaces a unix: listen from the example on a first install, and a missing one", async () => {
+		expect((await build(null, { ...example, listen: "unix:/run/x.sock" })).config.listen).toBe("agents:/run/gh-broker/agents");
+		const { listen: _l, ...noListen } = example;
+		expect((await build(null, noListen)).config.listen).toBe("agents:/run/gh-broker/agents");
+	});
+
+	it("keeps a deployed agents: listen and lets a --config file change it", async () => {
+		expect((await build({ ...example, listen: "agents:/run/custom" })).config.listen).toBe("agents:/run/custom");
+		expect((await build({ ...example }, example, { listen: "agents:/run/filed" })).config.listen).toBe("agents:/run/filed");
 	});
 });

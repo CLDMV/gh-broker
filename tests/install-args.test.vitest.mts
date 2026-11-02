@@ -3,7 +3,7 @@ import { parseArgs, envSecretKey } from "../deploy/lib/install-args.mjs";
 
 describe("parseArgs", () => {
 	it("defaults", () => {
-		expect(parseArgs([])).toEqual({ positional: [], nonInteractive: false, createAgentUser: false, npm: false, npmScopes: [], npmOrgs: [], cliSecrets: {} });
+		expect(parseArgs([])).toEqual({ positional: [], nonInteractive: false, createAgentUser: false, noMcpConfig: false, npm: false, npmScopes: [], npmOrgs: [], cliSecrets: {} });
 	});
 
 	it("reads every flag", () => {
@@ -12,6 +12,7 @@ describe("parseArgs", () => {
 			"-h",
 			"-y",
 			"--create-agent-user",
+			"--no-mcp-config",
 			"--agent-user",
 			"agent",
 			"--secrets-provider",
@@ -33,6 +34,7 @@ describe("parseArgs", () => {
 			help: true,
 			nonInteractive: true,
 			createAgentUser: true,
+			noMcpConfig: true,
 			agentUser: "agent",
 			provider: "file",
 			secretsFile: "/x/s.json",
@@ -51,7 +53,7 @@ describe("parseArgs", () => {
 			"--owner", "acme", "--owner", "beta",
 			"--installation-id", "acme=42",
 			"--default-owner", "acme",
-			"--listen", "unix:/run/x.sock",
+			"--listen", "agents:/run/x",
 			"--upstream", "https://example.test/mcp",
 			"--app-id", "77",
 			"--app-private-key", "cred:my-key",
@@ -68,7 +70,7 @@ describe("parseArgs", () => {
 			owners: ["acme", "beta"],
 			installationIds: { acme: 42 },
 			defaultOwner: "acme",
-			listen: "unix:/run/x.sock",
+			listen: "agents:/run/x",
 			upstream: "https://example.test/mcp",
 			appId: 77,
 			appPrivateKey: "my-key",
@@ -116,7 +118,7 @@ describe("parseArgs", () => {
 		[["--installation-id", "acme=0"], /--installation-id takes/],
 		[["--installation-id", "=5"], /--installation-id takes/],
 		[["--default-owner", "A_B"], /--default-owner must be a lowercase GitHub owner name/],
-		[["--listen", "/run/x.sock"], /--listen must be a "unix:<absolute path>"/],
+		[["--listen", "/run/x.sock"], /--listen must be an "agents:<absolute directory>"/],
 		[["--upstream", "ftp://x"], /--upstream must be an http\(s\) URL/],
 		[["--app-id", "abc"], /--app-id must be the numeric GitHub App id/],
 		[["--app-private-key", "k"], /--app-private-key needs --app-id/],

@@ -141,17 +141,39 @@ describe("account creation", () => {
 
 	it("ensureServiceUser creates a missing user", () => {
 		route({ getent: ok(), id: fail(1) });
-		sys.ensureServiceUser("svc", "svcg", "clients");
+		sys.ensureServiceUser("svc", "svcg");
 		const useradd = calls().find((c) => c.startsWith("useradd"))!;
-		expect(useradd).toContain("--system --gid svcg --groups clients");
+		expect(useradd).toContain("--system --gid svcg --home-dir");
+		expect(useradd).not.toContain("--groups");
 		expect(useradd.endsWith(" svc")).toBe(true);
 	});
 
-	it("ensureServiceUser only adds an existing user to the clients group", () => {
+	it("ensureServiceUser leaves an existing user alone", () => {
 		route({ getent: ok(), id: ok() });
-		sys.ensureServiceUser("svc", "svcg", "clients");
+		sys.ensureServiceUser("svc", "svcg");
 		expect(calls().some((c) => c.startsWith("useradd"))).toBe(false);
-		expect(calls()).toContain("usermod --append --groups clients svc");
+		expect(calls().some((c) => c.startsWith("usermod"))).toBe(false);
+	});
+
+	it("ensureAgentGroup creates the agent's group with exactly the service user and the agent", () => {
+		route({ getent: fail(2) });
+		sys.ensureAgentGroup("repo");
+		expect(calls()).toEqual(["getent group gh-broker-agent-repo", "groupadd --system gh-broker-agent-repo", "usermod --append --groups gh-broker-agent-repo gh-broker", "usermod --append --groups gh-broker-agent-repo repo"]);
+		h.spawnSync.mockReset();
+		route({ getent: ok("x:x:1:") });
+		sys.ensureAgentGroup("repo", "svc");
+		expect(calls()).not.toContain("groupadd --system gh-broker-agent-repo");
+		expect(calls()).toContain("usermod --append --groups gh-broker-agent-repo svc");
+	});
+
+	it("removeAgentGroup deletes the group only when it exists", () => {
+		route({ getent: ok("x:x:1:") });
+		sys.removeAgentGroup("repo");
+		expect(calls()).toContain("groupdel gh-broker-agent-repo");
+		h.spawnSync.mockReset();
+		route({ getent: fail(2) });
+		sys.removeAgentGroup("repo");
+		expect(calls().some((c) => c.startsWith("groupdel"))).toBe(false);
 	});
 
 	it("createAgentUser creates a plain user", () => {
@@ -353,17 +375,3 @@ describe("directories, unit and service", () => {
 });
 
 afterEach(() => vi.clearAllMocks());
-
-describe("installCliLauncher (#143)", () => {
-	it("writes a 0755 root launcher that runs the deployed CLI bundle with the node symlink", () => {
-		sys.installCliLauncher("/opt/gh-broker");
-		expect(f.writeFileSync).toHaveBeenCalledWith("/usr/local/bin/gh-broker", '#!/bin/sh\nexec /usr/local/bin/node /opt/gh-broker/dist/cli.mjs "$@"\n', { mode: 0o755 });
-		expect(f.chmodSync).toHaveBeenCalledWith("/usr/local/bin/gh-broker", 0o755);
-		expect(f.chownSync).toHaveBeenCalledWith("/usr/local/bin/gh-broker", 0, 0);
-	});
-
-	it("takes the launcher and node paths as arguments", () => {
-		sys.installCliLauncher("/app", "/x/gh-broker", "/n/node");
-		expect(f.writeFileSync).toHaveBeenCalledWith("/x/gh-broker", '#!/bin/sh\nexec /n/node /app/dist/cli.mjs "$@"\n', { mode: 0o755 });
-	});
-});
