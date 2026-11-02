@@ -19,19 +19,19 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.8.0 (October 2026)
+### Latest: v0.9.0 (November 2026)
 
-- **`npm_scaffold`: new npm packages without a manual first publish.** The new write verb publishes a broker-built `0.0.0-stage` placeholder and registers the repo's publish workflow as its trusted publisher, so CI publishes the first real release through OIDC. The npm token has no 2FA bypass: each write takes a one-time password from the user, so it's two calls, and the verb refuses any package that already exists.
-- **`ghcr_push`: container image pushes without a registry token.** Push a `docker save` archive from a drop directory to an allowlisted `ghcr.io/<owner>/<image>` as a background job, follow it with `ghcr_push_status` and check it with `ghcr_tags`. Release tags are never overwritten, and the classic PAT stays with the broker.
-- **Optional credentials.** The npm and GHCR tokens can be skipped at install; their tools stay hidden until the token is stored. The installer also takes tokens via `--secret <cred-name>=<token>`.
-- [View full v0.8.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.8.0.md)
+- **Three report verbs for the release and fleet skills.** `report_alert_status` buckets each open Dependabot alert by where its fix stands (released but still open, fixed on `next`, open PR, closed PR, nothing). `report_release_changes` returns the PRs a release actually ships, grouped by changelog section, with the net `package.json` and dependency deltas. `report_dependents` finds every repo that declares an npm package, including dev-trunk repos on `dev`, and skips a `dev` that has fallen behind the default branch.
+- **`ciVerbosity` on `list_pull_requests`.** The same opt-in CI detail as `pull_request_read`, across a whole PR list with one shared call budget.
+- **Install from npm.** `sudo npx @cldmv/gh-broker <agent-user>` runs the installer from the prebuilt package. The tarball now ships only runtime files.
+- [View full v0.9.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.9.0.md)
 
 ### Recent Releases
 
+- **v0.8.0** (November 2026) — `npm_scaffold` creates an npm package and its trusted publisher, `ghcr_push` pushes images without an agent-held token, and optional credentials hide their tools ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.8.0.md))
 - **v0.7.0** (October 2026) — `issue_labels` adds, removes or swaps single labels without replacing the set, and `issue_write` warns that its `labels` does ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.7.0.md))
 - **v0.6.1** (October 2026) — MCP SDK 1.32.0 (same-origin redirects only) and a refreshed vitest toolchain; no broker source changes ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.1.md))
 - **v0.6.0** (October 2026) — Compact per-repo roll-up, filters and flow tier for `report_security_alerts`, and release-readiness analysis for `report_release_prs` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.0.md))
-- **v0.5.1** (October 2026) — The installer keeps the existing secrets backend instead of prompting on every upgrade ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.5.1.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
@@ -51,7 +51,7 @@ A tool not listed in `config.tools` is neither advertised nor executable. Adding
 
 ### 📊 **CI Visibility Without Per-Call Log Fetches**
 
-`report_ci_status` answers "does this PR have failing checks" at whatever detail level you ask for — counts only by default, escalating to which job failed, which step failed, and a tail of the failing job's actual log — paying for that detail only on runs that are genuinely failing. The same status can ride inline on a normal `pull_request_read` via an opt-in `ciVerbosity` parameter.
+`report_ci_status` answers "does this PR have failing checks" at whatever detail level you ask for — counts only by default, escalating to which job failed, which step failed, and a tail of the failing job's actual log — paying for that detail only on runs that are genuinely failing. The same status can ride inline on a normal `pull_request_read` or `list_pull_requests` via an opt-in `ciVerbosity` parameter.
 
 ```json
 { "owner": "cldmv", "repo": "droidsock", "pull": 35, "verbosity": 2 }
@@ -91,11 +91,23 @@ npm only accepts a trusted publisher on a package that already exists, so every 
 
 🛡️ **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_security_alerts)**
 
+### 🩹 **Where Each Alert's Fix Stands**
+
+`report_alert_status` puts every open Dependabot alert in one bucket — `released-still-open`, `fixed-on-next`, `open-pr`, `closed-unmerged` or `no-pr` — by reading the lockfile nearest the alert's manifest on the default branch, `next` and `hotfixes`, and the repo's PR history. An alert that reads open because its fix is waiting on `next` stops looking like work to do.
+
+🩹 **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_alert_status)**
+
 ### 🚢 **Release PR Discovery**
 
 `report_release_prs` finds every open release PR across an owner's repos and says which ones still lack their per-version changelog file — the list an agent needs during a mass update.
 
 🚢 **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_release_prs)**
+
+### 📝 **Changelog Source Material**
+
+`report_release_changes` returns the PRs one release actually ships — already-released and reverted PRs dropped — grouped by changelog section at the detail level you ask for, with the release's `package.json` and dependency deltas and an optional skeleton in the per-version template.
+
+📝 **Full parameter reference: [docs/TOOLS.md](docs/TOOLS.md#report_release_changes)**
 
 ### 📦 **Package Dependents**
 
@@ -194,6 +206,9 @@ src/
     report_security_alerts.ts  open Dependabot/CodeQL/secret alerts, one repo or org-wide
     report_release_prs.ts  open release PRs + whether each has its changelog file
     report_dependents.ts  repos that declare an npm package, with range, resolved version and flow tier
+    report_alert_status.ts  where each open Dependabot alert's fix stands (lockfiles + PRs)
+    report_release_changes.ts  the PRs a release ships, grouped, with net package/dependency deltas
+    lockfile.ts          npm / pnpm / yarn lockfile readers shared by the report verbs
     report_ci_status.ts  tiered CI status for a PR or every open PR in a repo
     rest-client.ts       shared rate-limit-floor + call-budget REST helpers
     issue_labels.ts      add/remove/swap/set labels on an issue or PR (write PAT)
@@ -223,7 +238,7 @@ config.sample.json   a full config with placeholder values, for reference only
 
 ## 📚 Documentation
 
-- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_dependents`, `report_ci_status`, the `pull_request_read` `ciVerbosity` extension, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, and how to add a new one
+- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_release_changes`, `report_dependents`, `report_ci_status`, the `pull_request_read` and `list_pull_requests` `ciVerbosity` extensions, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, and how to add a new one
 - **[Agent-as-Separate-User Model](docs/agent-user-model.md)** — the isolation model behind "use ≠ possession": users, groups, filesystem permissions, verified against a real host
 - **[Deploy Architecture](docs/deploy-architecture.md)** — config merge, secret store backends, node handling, the installer's full flow
 - **[Install Guide](deploy/README.md)** — prerequisites, PAT scopes, install/upgrade command, flags
