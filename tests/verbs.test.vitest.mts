@@ -7,7 +7,7 @@ import {
 	REPLY_REVIEW_THREAD_SCHEMA
 } from "../src/verbs/review_thread.ts";
 import { reportUnlabeled, REPORT_UNLABELED_SCHEMA } from "../src/verbs/report_unlabeled.ts";
-import { reportCiStatus, REPORT_CI_STATUS_SCHEMA } from "../src/verbs/report_ci_status.ts";
+import { reportCiStatus, ciStatusForHeads, REPORT_CI_STATUS_SCHEMA } from "../src/verbs/report_ci_status.ts";
 
 describe("linkIssue", () => {
 	let graphql: ReturnType<typeof vi.fn>;
@@ -620,5 +620,91 @@ describe("reportCiStatus", () => {
 	it("advertises a valid schema", () => {
 		expect(REPORT_CI_STATUS_SCHEMA.required).toEqual(["owner", "repo"]);
 		expect(REPORT_CI_STATUS_SCHEMA.additionalProperties).toBe(false);
+	});
+});
+
+describe("ciStatusForHeads", () => {
+	const runsRoute = "GET /repos/{owner}/{repo}/actions/runs";
+	const jobsRoute = "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs";
+	const failingRun = { id: 9, name: "CI", status: "completed", conclusion: "failure", html_url: "https://gh/run/9" };
+	const failingJob = { id: 55, name: "test", status: "completed", conclusion: "failure", html_url: "https://gh/job/55", steps: [] };
+	const octokitWith = (handler: (route: string, params: any) => Promise<any>): any => ({ request: vi.fn(handler) });
+	const heads = [
+		{ number: 1, sha: "a" },
+		{ number: 2, sha: "b" },
+		{ number: 3, sha: "c" }
+	];
+
+	it("defaults to tier 0 for every PR with one runs call each", async () => {
+		const octokit = octokitWith(async () => ({ data: { workflow_runs: [failingRun] }, headers: {} }));
+		const out = await ciStatusForHeads(octokit, "cldmv", "r", heads);
+		expect(octokit.request).toHaveBeenCalledTimes(3);
+		expect(out).toEqual(heads.map((h) => ({ pull: h.number, summary: { passed: 0, failed: 1, pending: 0 } })));
+	});
+
+	it("gives tier 1 detail to the first maxDetail PRs and flags the rest max-detail", async () => {
+		const octokit = octokitWith(async (route, params) => {
+			if (route === runsRoute) return { data: { workflow_runs: [failingRun] }, headers: {} };
+			if (route === jobsRoute) return { data: { jobs: [failingJob] }, headers: {} };
+			throw new Error(`unexpected route ${route} ${JSON.stringify(params)}`);
+		});
+		const out = await ciStatusForHeads(octokit, "cldmv", "r", heads, { verbosity: 1, maxDetail: 1 });
+		expect(out[0]!.failures).toHaveLength(1);
+		expect(out[0]!.truncated).toBeUndefined();
+		for (const r of out.slice(1)) {
+			expect(r).toEqual({ pull: r.pull, summary: { passed: 0, failed: 1, pending: 0 }, truncated: true, truncatedReason: "max-detail" });
+		}
+		// 2 calls for PR 1 (runs + jobs), 1 runs call each for the others.
+		expect(octokit.request).toHaveBeenCalledTimes(4);
+	});
+
+	it("does not flag max-detail at tier 0, and clamps maxDetail to the hard cap", async () => {
+		const octokit = octokitWith(async () => ({ data: { workflow_runs: [] }, headers: {} }));
+		const out = await ciStatusForHeads(octokit, "cldmv", "r", heads, { verbosity: 0, maxDetail: 0 });
+		expect(out.every((r) => r.truncated === undefined)).toBe(true);
+		const many = Array.from({ length: 52 }, (_, i) => ({ number: i + 1, sha: `s${i}` }));
+		const out2 = await ciStatusForHeads(octokit, "cldmv", "r", many, { verbosity: 1, maxDetail: 9999 });
+		expect(out2.filter((r) => r.truncatedReason === "max-detail").map((r) => r.pull)).toEqual([51, 52]);
+	});
+
+	it("passes logLines and the log fetcher through at tier 3", async () => {
+		const octokit = octokitWith(async (route) => {
+			if (route === runsRoute) return { data: { workflow_runs: [failingRun] }, headers: {} };
+			return { data: { jobs: [failingJob] }, headers: {} };
+		});
+		const fetcher = vi.fn(async () => new Map([[55, "boom"]]));
+		const out = await ciStatusForHeads(octokit, "cldmv", "r", [heads[0]!], { verbosity: 3, logLines: 7, fetchFailedJobLogs: fetcher });
+		expect(fetcher).toHaveBeenCalledWith(9, 7);
+		expect(out[0]!.failures?.[0]?.logTail).toBe("boom");
+	});
+
+	it("stops at the call budget and marks every remaining PR truncated", async () => {
+		const octokit = octokitWith(async () => ({ data: { workflow_runs: [] }, headers: {} }));
+		const out = await ciStatusForHeads(octokit, "cldmv", "r", heads, { maxApiCalls: 1 });
+		expect(out[0]).toEqual({ pull: 1, summary: { passed: 0, failed: 0, pending: 0 } });
+		expect(out[1]).toMatchObject({ pull: 2, truncated: true, truncatedReason: "max-api-calls" });
+		expect(out[2]).toMatchObject({ pull: 3, truncated: true, truncatedReason: "max-api-calls" });
+		expect(octokit.request).toHaveBeenCalledTimes(1);
+	});
+
+	it("stops at the rate-limit floor and carries retryAfterSeconds forward", async () => {
+		let n = 0;
+		const octokit = octokitWith(async () => {
+			n++;
+			if (n === 1) return { data: { workflow_runs: [] }, headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "4000" } };
+			throw Object.assign(new Error("rate limited"), { status: 429, response: { headers: { "retry-after": "30" } } });
+		});
+		const out = await ciStatusForHeads(octokit, "cldmv", "r", heads);
+		expect(out[0]!.truncated).toBeUndefined();
+		expect(out[1]).toMatchObject({ pull: 2, truncated: true, truncatedReason: "rate-limited", retryAfterSeconds: 30 });
+		expect(out[2]).toMatchObject({ pull: 3, truncated: true, truncatedReason: "rate-limited", retryAfterSeconds: 30 });
+		expect(octokit.request).toHaveBeenCalledTimes(2);
+	});
+
+	it("stops when the remaining-requests header falls under the floor", async () => {
+		const octokit = octokitWith(async () => ({ data: { workflow_runs: [] }, headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "50" } }));
+		const out = await ciStatusForHeads(octokit, "cldmv", "r", heads);
+		expect(out.map((r) => r.truncatedReason)).toEqual(["rate-limited", "rate-limited", "rate-limited"]);
+		expect(octokit.request).toHaveBeenCalledTimes(1);
 	});
 });

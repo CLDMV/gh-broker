@@ -5,8 +5,8 @@ Every tool the broker advertises falls into one of three categories, set per ent
 | Category | Config flag | What happens | Example |
 |---|---|---|---|
 | **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
-| **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s `ciVerbosity` extension |
+| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_dependents`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
+| **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s and `list_pull_requests`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
 
@@ -109,6 +109,136 @@ Each alert is normalized to one shape: `repo`, `type`, `number`, `severity`, `su
 
 ---
 
+## `report_alert_status`
+
+For every open Dependabot alert, where its fix stands. `report_security_alerts` says what is open; this answers what has to happen for each one, which otherwise means reading lockfiles and PR lists by hand. Read-only, `mode: "read"`, `custom: true`.
+
+```json
+{
+	"owner": "cldmv",
+	"repos": ["slothlet", "gh-broker"]
+}
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | Selects the read credential. |
+| `repo` | string | — | One repo. |
+| `repos` | string[] | — | Several repos, with or without the owner prefix — for example the `byRepo` names of a `report_security_alerts` run. With neither `repo` nor `repos`, every repo with an open Dependabot alert is covered. |
+| `buckets` | array of bucket names | all | List only alerts in these buckets. `summary` and each repo's `counts` still cover every alert. |
+| `maxRepos` | number | 200 (hard cap 500) | Only used when the org-level alert endpoint is unavailable and the verb sweeps repo by repo. |
+| `alertLimit` | number | 500 (hard cap 5000) | Alerts fetched in org mode, or per repo. |
+| `prLimit` | number | 200 (hard cap 1000) | PRs read per repo, newest first, open and closed. |
+| `maxLockfileBytes` | number | 10 MB (hard cap 50 MB) | Larger lockfiles are not read; the alert's lockfile state is then `unknown` with reason `too-large`. |
+| `maxApiCalls` | number | 400 (hard cap 2000) | Hard ceiling on total REST calls for one invocation. |
+
+Each alert gets one `bucket`. They are checked in this order, so the bucket is the furthest the fix has got:
+
+| `bucket` | Meaning |
+|---|---|
+| `released-still-open` | The default branch's lockfile no longer resolves a vulnerable version (or no longer has the package), yet the alert is open. The fix didn't take: another manifest or directory, or a stale lockfile. |
+| `fixed-on-next` | `next` or `hotfixes` resolves only patched versions and the default branch doesn't. Waiting for a release. |
+| `open-pr` | An open PR bumps the package. A PR against the default branch carries `hotfixRedirect` when the hotfix redirector has opened its `hotfix-redirect/pr-<n>` twin. |
+| `closed-unmerged` | Only closed, unmerged PRs touch the package. Each closed PR carries `supersededBy` when a PR for the same package merged after it was closed. |
+| `no-pr` | Nothing in flight. Merged PRs that did not clear the alert are still listed in `mergedPrs`. |
+
+**Lockfiles.** For npm-ecosystem alerts the verb reads the lockfile nearest the alert's `manifest` on the default branch, `next` and `hotfixes` (when they exist). A manifest that is itself a lockfile is read directly; for a `package.json` it looks for `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml` and `yarn.lock` beside it and then in each parent directory up to the root, so a workspace package resolves to the workspace's lockfile. A version counts as vulnerable when it falls inside the alert's `vulnerableRange`, falling back to "below `patchedVersion`" when the range can't be read. Lockfiles are read at the branch's commit SHA and cached, so each one is fetched once per commit: a `next` that equals the default branch costs nothing extra. Files over 1 MB come through the blob API (one extra call). Alerts in other ecosystems get no `lockfile` block and are bucketed from their PRs alone.
+
+Each lockfile state is `fixed`, `vulnerable` or `unknown`, with the `path` read and the `versions` it resolves. An `unknown` state carries a `reason`: `no-lockfile`, `too-large`, `unparsed`, `no-version-info` (the alert has neither a readable range nor a patched version) or `no-branch`.
+
+**PR matching.** A PR counts as a dependency PR when Dependabot opened it, its branch starts with `dependabot/` or `hotfix-redirect/`, or its title reads as a bump (`bump`, `update`, `upgrade`, `deps`). It touches the package when the title names the package as a word, or the body has it as a Markdown link or code span, which is how Dependabot's single and grouped PRs list their packages.
+
+**Dependabot paused hint.** Each repo row has `dependabot.looksPaused`: true when a fixable alert (one with a patched version) is more than 7 days old and no Dependabot PR has been opened since it arrived. `lastPrAt` is the newest Dependabot PR found. It is a hint, not a diagnosis; `prListTruncated` says the PR list hit `prLimit`, in which case an older Dependabot PR may not have been seen.
+
+```json
+{
+	"scanned": { "repos": 1, "alerts": 2 },
+	"scope": "repo",
+	"summary": { "released-still-open": 0, "fixed-on-next": 1, "open-pr": 1, "closed-unmerged": 0, "no-pr": 0 },
+	"repos": [
+		{
+			"repo": "cldmv/gh-broker",
+			"defaultBranch": "master",
+			"branches": { "next": true, "hotfixes": true },
+			"dependabot": { "lastPrAt": "2026-10-30T08:00:00Z", "looksPaused": false },
+			"prsScanned": 200,
+			"prListTruncated": true,
+			"counts": { "fixed-on-next": 1, "open-pr": 1 },
+			"alerts": [
+				{ "number": 19, "url": "https://github.com/CLDMV/gh-broker/security/dependabot/19", "severity": "medium", "package": "ip-address", "ecosystem": "npm", "manifest": "package-lock.json", "vulnerableRange": "<= 10.7.0", "patchedVersion": "10.7.1", "createdAt": "2026-10-02T20:10:30Z", "bucket": "fixed-on-next", "reason": "next resolves ip-address 10.7.1; waiting for a release", "lockfile": { "default": { "state": "vulnerable", "path": "package-lock.json", "versions": ["10.7.0"] }, "next": { "state": "fixed", "path": "package-lock.json", "versions": ["10.7.1"] }, "hotfixes": { "state": "vulnerable", "path": "package-lock.json", "versions": ["10.7.0"] } }, "openPrs": [] }
+			]
+		}
+	]
+}
+```
+
+**Fan-out safety** works like the other report verbs: hitting `maxRepos`, `alertLimit`, `maxApiCalls` or GitHub's rate limit returns what was finished with `truncated: true` and a `truncatedReason` (`"max-repos"` | `"max-alerts"` | `"max-api-calls"` | `"rate-limited"`, plus `retryAfterSeconds` when GitHub sent one). A repo is only reported once all of its alerts are classified; repos a cap stopped are listed in `pending`. Per-repo reads count repos where Dependabot alerts are off or unreadable in `disabled`. Each repo costs one repo read, three branch reads, one call per 100 PRs and the lockfile reads.
+
+---
+
+## `report_dependents`
+
+Every non-archived, non-fork repo an owner has that declares an npm package, with the declared range, the version the lockfile resolved and the repo's flow tier. Built for the fleet-update skills (bump a shared package everywhere), which all start by finding its consumers. Read-only, `mode: "read"`, `custom: true`.
+
+```json
+{
+	"owner": "cldmv",
+	"name": "@cldmv/fix-headers",
+	"latest": true
+}
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | Selects the read credential. |
+| `name` | string | — (required) | npm package name, e.g. `@cldmv/fix-headers`. Anything that is not a valid npm name is rejected before any call is made. |
+| `latest` | boolean | `false` | Look up the latest published version on the npm registry and set `behind` on each declaration whose resolved version is older. The lookup is unauthenticated and uses `npm.registry` from the broker config when one is set. A failed lookup is reported as `latestError` and does not fail the verb. |
+| `classify` | boolean | `true` | Add each dependent repo's flow tier (`v4` / `dev-trunk` / `non-v4`) and `tierSignals`, the same classifier `report_security_alerts` uses. About 3 REST calls per dependent repo; pass `false` to skip them. |
+| `devBranches` | boolean | `true` | Also read every `package.json` on each repo's `dev` branch when it differs from the default branch, so dev-trunk repos are found. A `dev` whose root `version` is below the default branch's is skipped as abandoned and listed in `abandonedDev`. |
+| `maxRepos` | number | 200 (hard cap 500) | Repos verified, search candidates and dev branches together. |
+| `maxFileBytes` | number | 5000000 (hard cap 20000000) | Largest `package.json` or lockfile that is read. Bigger files are listed in `unread` with reason `too-large`. |
+| `maxApiCalls` | number | 600 (hard cap 3000) | Hard ceiling on total REST calls for one invocation. |
+
+**How it finds repos.** One org-wide code search (`"<name>" org:<owner> filename:package.json`, up to 10 pages of 100) produces the candidate list. Each candidate repo is then read directly: its repo record (archived and fork repos are skipped and counted), then every matching `package.json` at the default branch. A manifest counts only when the package appears as a key in `dependencies`, `devDependencies` or `peerDependencies`; a repo that merely mentions the name in text lands in `scanned.notDeclared`. Code search is not trusted for completeness: it lags recent commits, only indexes default branches and returns at most 1000 hits, so `discovery.note` says so on every result, and `incomplete_results` / a full result window set `truncated`.
+
+**Dev branches.** Code search never sees a dev-trunk repo, whose real manifests live on `dev`. So a second pass lists every repo with GraphQL (one call per 100 repos), keeps the non-archived, non-fork ones whose `dev` branch exists and points at a different commit than the default branch, and reads each of those branches in full: one recursive tree call, then every `package.json` outside `node_modules`, then the lockfile on `dev`. Each entry carries `branch`, so a repo that declares the package on both branches shows up twice, default branch first. `scanned.devBranches` counts the branches read; a tree too big for GitHub to return whole is flagged with `unread: [{ "path": ".", "reason": "tree-truncated" }]`.
+
+A `dev` that has fallen behind a release is abandoned, not a trunk: when its root `package.json` `version` is lower than the default branch's, it is skipped and listed as `abandonedDev: [{ "repo", "devVersion", "defaultVersion" }]`. If either side has no readable version the branch is read as usual. Pass `devBranches: false` to skip the whole pass.
+
+**Workspace members.** A `package.json` below the repo root that declares the package is reported as a declaration of its repo with `member` set to the directory, so an umbrella repo and its children appear in one place:
+
+```json
+{
+	"package": "@cldmv/fix-headers",
+	"latest": "1.5.0",
+	"discovery": { "source": "code-search", "devBranches": true, "note": "…" },
+	"scanned": { "candidates": 14, "archived": 1, "forks": 0, "missing": 0, "notDeclared": 2, "devBranches": 9 },
+	"dependents": [
+		{
+			"repo": "CLDMV/electron",
+			"private": false,
+			"defaultBranch": "master",
+			"branch": "master",
+			"tier": "v4",
+			"tierSignals": { "v4Workflow": true, "defaultBranch": "master", "next": true, "dev": false },
+			"lockfile": "pnpm-lock.yaml",
+			"declarations": [
+				{ "path": "package.json", "declared": [{ "field": "devDependencies", "range": "^1.4.0" }], "resolved": "1.4.2", "behind": true },
+				{ "path": "tools/rummage/package.json", "member": "tools/rummage", "declared": [{ "field": "devDependencies", "range": "^1.5.0" }], "resolved": "1.5.0", "behind": false }
+			]
+		}
+	]
+}
+```
+
+**Lockfile resolution.** The root `package-lock.json` is tried first, then `pnpm-lock.yaml` (other lockfiles are not read). For npm, a member resolves against its own `node_modules` entry and then the hoisted root one; for pnpm, against that member's `importers:` entry (peer suffixes such as `1.2.3(typescript@5)` are stripped, `link:` entries yield no version). `resolved` is simply absent when there is no lockfile, it does not contain the package, or it was too large or unparseable (`unread` says which). Lockfiles over 1 MB are fetched with the raw media type, since the contents API leaves their body out.
+
+`unread` also lists manifests that could not be read: `missing` (the search is stale), `too-large` or `invalid-json`, plus `tree-truncated` for a dev tree GitHub cut short.
+
+**Fan-out safety** works like the other report verbs: hitting `maxRepos`, `maxApiCalls`, the search window or GitHub's rate limit returns what was verified so far with `truncated: true` and a `truncatedReason` (`"max-results"` | `"incomplete-search"` | `"max-repos"` | `"max-api-calls"` | `"rate-limited"`). Code search has its own small quota (10 requests a minute), so the proactive rate-limit floor is not applied to it; a real 403/429 still stops the run with `rate-limited`.
+
+---
+
 ## `report_release_prs`
 
 Every open release PR for an owner (or one repo), and whether each one's per-version changelog file is already on the release branch. Built for mass updates: it tells an agent which repos have a release waiting and which of those still need a changelog written. Read-only, `mode: "read"`, `custom: true`.
@@ -175,6 +305,103 @@ The `verdict` is the release-docs decision table:
 | `inspect` | The release PR title has no readable version. |
 
 The release PR's version can change while it is open (more PRs landing on `next` can raise the bump), so a `ready` changelog is only as current as the title it was matched against — re-run the report after `next` changes. Truncation follows the same pattern as the other report verbs; the extra reasons are `"max-results"` (more than one page of release PRs matched — GitHub's search returns 100 per page) and `"incomplete-search"` (GitHub reported the search timed out).
+
+---
+
+## `report_release_changes`
+
+The source material for one release's changelog. `report_release_prs` `analyze` says whether a changelog is needed or stale; this returns what goes in it: the PRs that actually ship, each at the detail level asked for, grouped by changelog section, plus the release's net facts. Read-only, `mode: "read"`, `custom: true`.
+
+```json
+{
+	"owner": "cldmv",
+	"repo": "gh-broker",
+	"pull": 139,
+	"detail": "titles",
+	"skeleton": true
+}
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner`, `repo` | string | — (required) | |
+| `pull` | number | — (required) | The release PR (`next → master` or `hotfixes → master`). |
+| `detail` | `"titles"` \| `"summaries"` \| `"files"` \| `"diff"` | `"summaries"` | Per-PR depth, see below. |
+| `prs` | number[] | — | Only these PRs get `detail`; every other shipping PR comes back at `titles`. Numbers that aren't in the release are listed in `notInRelease`. |
+| `skeleton` | boolean | `false` | Also return `skeleton`, a markdown changelog in the per-version template: headings, one `### <title> ([#N](…))` entry per PR, no prose. |
+| `maxBodyChars` | number | 3000 | Per-PR body cap (`bodyTruncated: true` when cut). |
+| `maxFiles` | number | 50 (hard cap 300) | Per-PR file-list cap (`filesTruncated: true` when the PR has more). |
+| `maxPatchChars` | number | 3000 | Per-file patch cap with `detail: "diff"` (`patchTruncated: true` when cut). |
+| `maxDiffChars` | number | 60000 | Total patch characters across the whole report. Files past it get `patchSkipped: "max-diff-chars"`. |
+| `maxApiCalls` | number | 300 (hard cap 1000) | Hard ceiling on total REST calls for one invocation. |
+
+| `detail` | Each PR carries |
+|---|---|
+| `titles` | `number`, `url`, `title`, `type` (and `scope`), `labels`, `author`, `mergedAt`, `closes`, `additions` / `deletions` / `changedFiles`, `breaking`, `section`, `documented` |
+| `summaries` | adds `body` |
+| `files` | adds `files`: `path`, `status`, `additions`, `deletions` |
+| `diff` | adds each file's `patch`. Lockfiles, `dist/` and `types/` get `patchSkipped: "generated"` instead. |
+
+A good pattern is one call at `titles` to see the whole release, then a second with `prs` set to the few PRs that need a closer look.
+
+**Which PRs ship.** The list starts from the release PR's commits, reading only the first line of each, with the same extraction `report_release_prs` `analyze` uses: squash commits by their trailing `(#N)`, merge commits by `Merge pull request #N`, branch commits without a number ignored, docs PRs and the version bump dropped. It is then scoped by net change rather than by the commit list, because `next` keeps its pre-squash history when it isn't reset after a release, and already-shipped PRs show up again. These are moved to `excluded`, each with a `reason`:
+
+| `reason` | Meaning |
+|---|---|
+| `earlier-release` | The PR is in the commits of an earlier release PR on the base branch. |
+| `earlier-changelog` | The previous version's changelog names it. |
+| `reverted` / `revert` | The PR was merged and then reverted inside the same range, so it nets to zero; `pair` names the other half. A revert of something outside the range stays in the list. |
+
+Earlier releases are found from the `release:` commits on the base branch (newest first, up to 5), walking back through any hotfix releases to the most recent full one. The newest is returned as `previousRelease` (`version`, `tag`, `pull`, `sha`, `kind: "full" | "hotfix"`). `tag` is the conventional `v<version>` name; it isn't looked up.
+
+**Hotfixes.** A hotfix release (its PR came from `hotfixes` or `hotfix/*`) newer than the last full release whose commit is not on the release's head branch is listed in `hotfixes`, so its changes aren't missed. A `hotfixes → master` release PR never lists any.
+
+**Per PR.** `closes` holds the same-repo issues the body closes with a closing keyword (`Closes #12`, `fixes owner/repo#12`); links made only in the PR sidebar are not seen. `documented` is `true` when the current version's changelog (looked up at the release PR's head commit, both `docs/changelog/` and `docs/changelogs/`) already mentions the PR, so one call serves a first draft and an update; `changelog.path` says which file was found, or `null`. `breaking` lists the hints found: `!` in the type, `BREAKING CHANGE` in the body, a `semver: major` label. A PR whose fetch was cut off by the budget keeps `fetched: false` and only what its commit title says.
+
+**Grouping.** `groups` maps each section to PR numbers: `breaking`, `features`, `fixes`, `security`, `ciTooling`, `documentation`, `dependencies`, and `ungrouped`. A breaking hint wins, then security (a `security` type or scope, or any label containing "security"). Otherwise the title's type and the labels must agree on one section:
+
+| Section | Types | Labels |
+|---|---|---|
+| `features` | `feat` | `type: feature`, `type: feature request`, `type: enhancement` |
+| `fixes` | `fix` | `type: bug` |
+| `dependencies` | `deps`, any `(deps)` / `(deps-dev)` scope, a Dependabot author | `type: dependencies`, `dependencies` |
+| `ciTooling` | `ci`, `chore`, `build`, `test`, `style` | `type: ci`, `type: config` |
+| `documentation` | `docs` | `type: documentation`, `documentation` |
+
+When they disagree (a `chore:` labelled `type: enhancement`), or neither says anything (`refactor`, `perf`, a non-conventional title), the PR goes to `ungrouped` for the author to place.
+
+**`net`.** The release as a whole, base branch against the release PR's head commit:
+
+- `packageJson`: which of `version`, `engines`, `exports`, `bin`, `files`, `publishConfig`, `main`, `type` changed (`changed`), with `version` and `engines` before/after and the `exports` subpaths `added` and `removed`.
+- `dependencies`: direct dependencies added, removed or changed per scope (`runtime`, `dev`, `optional`, `peer`), with the ranges and, when `package-lock.json` is readable, the locked versions (`lockedFrom` / `lockedTo`). A dependency whose range is unchanged but whose locked version moved counts as changed. Transitive-only changes are not listed.
+- `files`: the release's `changed` / `additions` / `deletions`, and the same totals `excludingGenerated` (lockfiles, `dist/`, `types/`) over up to 300 listed files; `complete: false` when there were more.
+- `breakingHints`: a removed `exports` entry or a changed `engines` field.
+
+```json
+{
+	"repo": "CLDMV/r",
+	"pull": 100,
+	"version": "1.3.0",
+	"head": "next",
+	"base": "master",
+	"previousRelease": { "version": "1.2.1", "tag": "v1.2.1", "pull": 90, "sha": "…", "kind": "hotfix" },
+	"changelog": { "path": null, "checkedPaths": ["docs/changelog/v1/v1.3.0.md", "docs/changelogs/v1/v1.3.0.md"] },
+	"prs": [
+		{ "number": 10, "url": "https://github.com/CLDMV/r/pull/10", "title": "feat: add x", "type": "feat", "fetched": true, "labels": ["type: feature"], "author": "Shinrai", "mergedAt": "2026-10-30T00:00:00Z", "closes": [3], "additions": 120, "deletions": 4, "changedFiles": 6, "documented": false, "breaking": [], "section": "features" }
+	],
+	"groups": { "breaking": [], "features": [10], "fixes": [], "security": [], "ciTooling": [], "documentation": [], "dependencies": [], "ungrouped": [] },
+	"excluded": [{ "number": 5, "title": "fix: old thing", "reason": "earlier-release" }],
+	"hotfixes": [{ "version": "1.2.1", "pull": 90, "title": "release: v1.2.1 - …", "url": "https://github.com/CLDMV/r/pull/90", "sha": "…" }],
+	"net": {
+		"breakingHints": [],
+		"packageJson": { "changed": ["version"], "version": { "from": "1.2.1", "to": "1.3.0" } },
+		"dependencies": [{ "name": "a", "scope": "runtime", "change": "changed", "from": "^1.0.0", "to": "^1.1.0", "lockedFrom": "1.0.5", "lockedTo": "1.1.2" }],
+		"files": { "changed": 9, "additions": 400, "deletions": 30, "excludingGenerated": { "changed": 7, "additions": 150, "deletions": 20 }, "complete": true }
+	}
+}
+```
+
+**Cost.** About 10 calls of fixed overhead (the release PR, its commits, the base branch's history, each earlier release's PR and commits, the changelog and package files), plus one per shipping PR and one more per PR at `files` or `diff`. Hitting `maxApiCalls` or GitHub's rate limit returns what was gathered so far with `truncated: true` and `truncatedReason` (`"max-api-calls"` | `"rate-limited"`, with `retryAfterSeconds` when GitHub sent one). PRs not yet read stay in the list as `fetched: false`, and `net` is absent if it wasn't reached. Grouping and the skeleton still run over what was read.
 
 ---
 
@@ -528,6 +755,29 @@ Unknown keys anywhere in the block are refused. The block is operator data, not 
 - *Reach.* Push and list only, only to allowlisted images of configured owners. No delete, no visibility changes. The PAT should carry `write:packages` and nothing else (`write:packages` implies `read:packages`). `delete:packages` must not be granted.
 - *Resource abuse.* Archive size, tar member count, JSON member size, layer count and the job queue are all bounded.
 - *Release integrity.* With `protectReleaseTags`, a published `1.2.3` can't be replaced, so a compromised agent can't swap a released image. Mutable tags such as `latest` can still move; keep the allowlist tight.
+
+---
+
+## `list_pull_requests` + `ciVerbosity` (augmented)
+
+`list_pull_requests` takes the same opt-in parameters, and adds a `ci` field to every PR in the returned array:
+
+```json
+{
+	"owner": "cldmv",
+	"repo": "droidsock",
+	"state": "open",
+	"ciVerbosity": 1,
+	"maxDetail": 5
+}
+```
+
+- `ciVerbosity` (0-3) uses the same tiers as `report_ci_status`; `logLines` tunes tier 3's tail length. Both are stripped before the call is forwarded.
+- `maxDetail` (default 10, hard cap 50) limits how many PRs, counting from the top of the list, get tier 1-3 detail. Every PR still gets its tier-0 counts, so a long list costs at least one Actions call per PR. A PR past the cap comes back with `"ci": { "pull": 41, "summary": { … }, "truncated": true, "truncatedReason": "max-detail" }`, which means the detail was withheld, not that the PR is healthy.
+- The whole list shares one call budget (250 REST calls, hard cap 1000) and the same rate-limit floor as `report_ci_status`. When either runs out, the PR being evaluated and every PR after it get an empty summary with `truncated: true` and `truncatedReason` of `max-api-calls` or `rate-limited` (plus `retryAfterSeconds` when GitHub sent one).
+- Head shas come from the forwarded list, so there is no extra PR lookup. Items without a `number` or `head.sha` are returned untouched.
+
+**Opt-in only.** Omitting `ciVerbosity` is a byte-identical forward. If the upstream response isn't a JSON array in a text block, it is returned unmodified.
 
 ---
 

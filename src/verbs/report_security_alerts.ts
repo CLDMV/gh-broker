@@ -143,7 +143,7 @@ interface RawRepository {
 	full_name?: string;
 }
 
-interface RawDependabot {
+export interface RawDependabot {
 	number: number;
 	html_url: string;
 	created_at: string;
@@ -174,7 +174,7 @@ interface RawSecret {
 	// `secret` (the value) is intentionally not modelled — see the module doc.
 }
 
-function normalizeDependabot(owner: string, repo: string, a: RawDependabot): SecurityAlert {
+export function normalizeDependabot(owner: string, repo: string, a: RawDependabot): SecurityAlert {
 	const vuln = a.security_vulnerability;
 	const out: SecurityAlert = {
 		repo: a.repository?.full_name ?? `${owner}/${repo}`,

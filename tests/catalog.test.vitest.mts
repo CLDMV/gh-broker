@@ -65,12 +65,38 @@ describe("buildCatalog", () => {
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
 	});
 
+	it("advertises report_dependents with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const config = makeConfig([{ name: "report_dependents", mode: "read", custom: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "report_dependents" });
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "name"] });
+	});
+
 	it("advertises report_release_prs with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "report_release_prs", mode: "read", custom: true }]);
 		const catalog = await buildCatalog(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "report_release_prs" });
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
+	});
+
+	it("advertises report_release_changes with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const config = makeConfig([{ name: "report_release_changes", mode: "read", custom: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "report_release_changes" });
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo", "pull"] });
+	});
+	it("advertises report_alert_status with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const config = makeConfig([{ name: "report_alert_status", mode: "read", custom: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "report_alert_status" });
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
 	});
 
@@ -161,6 +187,32 @@ describe("buildCatalog", () => {
 		expect((tool.inputSchema as any).properties.pullNumber).toEqual({ type: "number" });
 		expect((tool.inputSchema as any).properties.ciVerbosity).toMatchObject({ type: "number", enum: [0, 1, 2, 3] });
 		expect((tool.inputSchema as any).properties.logLines).toMatchObject({ type: "number" });
+	});
+
+	it("layers ciVerbosity/logLines/maxDetail onto list_pull_requests's real upstream schema", async () => {
+		const upstreamTool = {
+			name: "list_pull_requests",
+			description: "List pull requests.",
+			inputSchema: { type: "object", required: ["owner", "repo"], properties: { state: { type: "string" } } }
+		};
+		upstream.listToolsFor.mockResolvedValue([upstreamTool]);
+		const config = makeConfig([{ name: "list_pull_requests", mode: "read", augment: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const tool = catalog[0]!;
+		expect(tool.description).toContain("List pull requests.");
+		expect(tool.description).toContain("maxDetail");
+		expect((tool.inputSchema as any).required).toEqual(["owner", "repo"]);
+		expect((tool.inputSchema as any).properties.state).toEqual({ type: "string" });
+		expect((tool.inputSchema as any).properties.ciVerbosity).toMatchObject({ type: "number", enum: [0, 1, 2, 3] });
+		expect((tool.inputSchema as any).properties.logLines).toMatchObject({ type: "number" });
+		expect((tool.inputSchema as any).properties.maxDetail).toMatchObject({ type: "number" });
+	});
+
+	it("still adds the extension params to list_pull_requests when the upstream fetch fails entirely", async () => {
+		upstream.listToolsFor.mockRejectedValue(new Error("network down"));
+		const config = makeConfig([{ name: "list_pull_requests", mode: "read", augment: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(Object.keys((catalog[0]!.inputSchema as any).properties)).toEqual(["ciVerbosity", "logLines", "maxDetail"]);
 	});
 
 	it("still adds ciVerbosity/logLines to pull_request_read when the upstream fetch fails entirely", async () => {

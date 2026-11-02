@@ -28,7 +28,8 @@
 		},
 		{
 			"name": "list_pull_requests",
-			"mode": "read"
+			"mode": "read",
+			"augment": true
 		},
 		{
 			"name": "pull_request_read",
@@ -266,7 +267,22 @@
 			"custom": true
 		},
 		{
+			"name": "report_dependents",
+			"mode": "read",
+			"custom": true
+		},
+		{
 			"name": "report_release_prs",
+			"mode": "read",
+			"custom": true
+		},
+		{
+			"name": "report_release_changes",
+			"mode": "read",
+			"custom": true
+		},
+		{
+			"name": "report_alert_status",
 			"mode": "read",
 			"custom": true
 		},

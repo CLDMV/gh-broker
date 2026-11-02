@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
+ *	@Last modified time: 2026-11-01T14:02:26-08:00 (1793570546)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -20,8 +20,11 @@ import type { UpstreamPool } from "./upstream.ts";
 // import { LINK_ISSUE_SCHEMA } from "./verbs/link_issue.ts";
 import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verbs/review_thread.ts";
 import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
+import { REPORT_DEPENDENTS_SCHEMA } from "./verbs/report_dependents.ts";
 import { REPORT_SECURITY_ALERTS_SCHEMA } from "./verbs/report_security_alerts.ts";
 import { REPORT_RELEASE_PRS_SCHEMA } from "./verbs/report_release_prs.ts";
+import { REPORT_RELEASE_CHANGES_SCHEMA } from "./verbs/report_release_changes.ts";
+import { REPORT_ALERT_STATUS_SCHEMA } from "./verbs/report_alert_status.ts";
 import { ISSUE_LABELS_SCHEMA } from "./verbs/issue_labels.ts";
 import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 import { NPM_SCAFFOLD_SCHEMA } from "./verbs/npm_scaffold.ts";
@@ -116,12 +119,33 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 						"Report every open Dependabot, code-scanning (CodeQL) and secret-scanning alert, for one repo or across every repo an owner has. Reads the org-level endpoints in a handful of calls and falls back to a per-repo sweep for any alert type the token can't read org-wide. Alert state tracks the default branch. Secret values are never returned. Bounded by maxRepos/alertLimit/maxApiCalls; returns truncated:true (with a reason) instead of failing outright if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
 					inputSchema: REPORT_SECURITY_ALERTS_SCHEMA
 				});
+			} else if (rule.name === "report_alert_status") {
+				tools.push({
+					name: "report_alert_status",
+					description:
+						"For every open Dependabot alert in one repo, a list of repos, or every repo an owner has, say where its fix stands. Each alert gets one bucket: released-still-open (the default branch's lockfile is already patched, yet the alert is open), fixed-on-next (next or hotfixes is patched, the default branch isn't; waiting for a release), open-pr (an open PR bumps the package; notes a hotfix-redirect twin), closed-unmerged (only closed PRs, and whether a later merge superseded them), or no-pr. Reads package-lock.json / pnpm-lock.yaml / yarn.lock nearest the alert's manifest at each branch, once per commit, size-capped. Also hints per repo whether Dependabot looks paused. Bounded by maxApiCalls; returns truncated:true with a reason and the unreached repos in pending if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
+					inputSchema: REPORT_ALERT_STATUS_SCHEMA
+				});
+			} else if (rule.name === "report_dependents") {
+				tools.push({
+					name: "report_dependents",
+					description:
+						"Find every non-archived, non-fork repo an owner has that declares an npm package in dependencies, devDependencies or peerDependencies, with the declared range, the version the lockfile resolved (package-lock.json or pnpm-lock.yaml), the repo's flow tier (v4 / dev-trunk / non-v4), default branch and visibility. Workspace members are reported against their repo with the member path. Optional latest:true marks the resolved versions that are behind the latest published one. Candidates come from one org code search and are each verified against the default-branch package.json; the search lags recent commits and misses dev-trunk repos whose manifests live on dev (see discovery.note). Bounded by maxRepos/maxFileBytes/maxApiCalls; returns truncated:true (with a reason) instead of failing outright if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
+					inputSchema: REPORT_DEPENDENTS_SCHEMA
+				});
 			} else if (rule.name === "report_release_prs") {
 				tools.push({
 					name: "report_release_prs",
 					description:
 						"Report every open release PR (label `release`: next→master and hotfixes→master) for one repo or across every repo an owner has, and whether each one's per-version changelog file (docs/changelog[s]/v<major>/vX.Y.Z.md) is already on the release branch. Status per PR: ready, needs-changelog, or unknown-version (title has no `release: vX.Y.Z`). Use during mass updates to find which repos need a changelog. One search call plus two calls per release PR found; returns truncated:true with a reason if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
 					inputSchema: REPORT_RELEASE_PRS_SCHEMA
+				});
+			} else if (rule.name === "report_release_changes") {
+				tools.push({
+					name: "report_release_changes",
+					description:
+						"Source material for one release's changelog. For a release PR (owner, repo, pull) it returns the version, head/base, the previous release, every PR that actually ships (from the release PR's commits, first line only; docs PRs, the version bump, PRs an earlier release or the previous changelog already carried, and PRs reverted inside the range are left out and listed under excluded), each with title, type, labels, author, merge date, closed issues and, by `detail`, its body, file list or patches (capped, with truncation flags). PRs are grouped by changelog section (breaking, features, fixes, security, CI & tooling, documentation, dependencies, or ungrouped when unclear), with breaking-change hints, `documented` when the version's changelog already mentions a PR, interim hotfix releases not on the head branch, a net block (package.json deltas, direct-dependency changes with locked versions, file totals) and an optional markdown skeleton. Returns truncated:true with a reason if the call budget or GitHub's rate limit is hit. Runs on the read PAT.",
+					inputSchema: REPORT_RELEASE_CHANGES_SCHEMA
 				});
 			} else if (rule.name === "report_ci_status") {
 				tools.push({
@@ -142,12 +166,29 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 			continue;
 		}
 		const base = up ?? { name: rule.name, description: `(${rule.mode}) proxied to the GitHub MCP`, inputSchema: { type: "object" } };
-		if (rule.augment && rule.name === "pull_request_read") {
+		if (rule.augment && (rule.name === "pull_request_read" || rule.name === "list_pull_requests")) {
 			// Layer gh-broker's own extension params onto the real upstream schema — the
 			// forwarded call still needs pull_request_read's actual params (method,
 			// pullNumber, ...); this ADDS to that, it doesn't replace it. See router.ts's
 			// dispatchAugmented for why gh-broker can extend a proxied tool's contract.
 			const baseSchema = base.inputSchema as { properties?: Record<string, unknown>; [k: string]: unknown };
+			if (rule.name === "list_pull_requests") {
+				tools.push({
+					...base,
+					description: `${base.description} gh-broker extension: pass "ciVerbosity" (0-3) to add a "ci" field to each listed PR — 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log. Costs at least one API call per listed PR; detail (1-3) is only fetched for the first "maxDetail" PRs (default 10, max 50), and later PRs carry counts with truncated:true. "logLines" tunes tier 3's tail length.`,
+					inputSchema: {
+						...baseSchema,
+						type: "object",
+						properties: {
+							...(baseSchema.properties ?? {}),
+							ciVerbosity: { type: "number", enum: [0, 1, 2, 3], description: "gh-broker extension: add a ci field to each listed PR at this verbosity" },
+							logLines: { type: "number", description: "gh-broker extension: tier-3 log tail length" },
+							maxDetail: { type: "number", description: "gh-broker extension: how many PRs get tier 1-3 detail (default 10, hard cap 50)" }
+						}
+					}
+				});
+				continue;
+			}
 			tools.push({
 				...base,
 				description: `${base.description} gh-broker extension: with method "get", pass "ciVerbosity" (0-3) to also compute CI status for the PR's current head — 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log; "logLines" tunes tier 3's tail length.`,

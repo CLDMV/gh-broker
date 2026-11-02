@@ -27,10 +27,11 @@ The installer also creates the drop directory from `ghcr.dropDir` (default `/srv
 ## 2. Install (first install AND upgrade — same command)
 
 ```sh
-sudo node deploy/install.mjs [agent-user]
+sudo npx @cldmv/gh-broker [agent-user]      # from npm
+sudo node deploy/install.mjs [agent-user]   # from a checkout
 ```
 
-`agent-user` defaults to `$SUDO_USER` (the account you ran `sudo` from). The installer walks the whole thing and is idempotent:
+Both run the same installer and take the same flags; the npm package ships a prebuilt `dist/`, so step 5 has nothing to build. `agent-user` defaults to `$SUDO_USER` (the account you ran `sudo` from). The installer walks the whole thing and is idempotent:
 
 1. checks prerequisites,
 2. **creates or confirms the agent user** (stops if it can't — no silent half-install),
