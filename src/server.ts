@@ -83,7 +83,15 @@ function listenFor(path: string, agent: Agent, router: Router, catalog: Tool[]):
 				// The socket stays owned by the service's own group, so the agent can't connect: fail closed, and say why.
 				console.error(`gh-broker: cannot give ${path} to group ${agent.group} (${(err as Error).message}); ${agent.user} can't connect`);
 			}
-			chmodSync(path, 0o660);
+			try {
+				chmodSync(path, 0o660);
+			} catch (err) {
+				// Some Node versions (22.12) report an over-long socket path as listening on a truncated
+				// name, so the path itself isn't there. Don't serve a socket we couldn't set up.
+				server.close();
+				reject(err);
+				return;
+			}
 			resolve();
 		});
 	});

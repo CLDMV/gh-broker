@@ -19,6 +19,19 @@ vi.mock("node:net", async (importOriginal) => {
 	};
 });
 
+// Real node:fs, except chmodSync on a socket can be made to fail for one test.
+const fsFail = vi.hoisted(() => ({ chmod: false }));
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		chmodSync: (...args: Parameters<typeof actual.chmodSync>) => {
+			if (fsFail.chmod && String(args[0]).endsWith(".sock")) throw Object.assign(new Error("ENOENT: no such file or directory, chmod"), { code: "ENOENT" });
+			return actual.chmodSync(...args);
+		}
+	};
+});
+
 const root = join(process.cwd(), "tmp", "tests", "server");
 const fakeRouter: any = {
 	call: vi.fn(async (name: string, args: unknown, caller: { user: string }) => ({ content: [{ type: "text", text: `${caller.user}:${name}:${JSON.stringify(args)}` }] }))
@@ -158,6 +171,17 @@ describe("startServer", () => {
 		expect(st.mode & 0o777).toBe(0o660);
 		expect(st.gid).not.toBe(0);
 		expect(err).toHaveBeenCalledWith(expect.stringMatching(/cannot give .*repo\.sock to group gh-broker-agent-repo \(.*\); repo can't connect/));
+	});
+
+	it("rejects, and stops listening, when the socket can't be set to 0660", async () => {
+		const h = setup([agentLine("repo")]);
+		fsFail.chmod = true;
+		try {
+			await expect(startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile })).rejects.toThrow(/ENOENT/);
+		} finally {
+			fsFail.chmod = false;
+		}
+		await expect(client(join(h.dir, "repo.sock"))).rejects.toBeTruthy();
 	});
 
 	it("rejects when a socket cannot be bound", async () => {
