@@ -53,7 +53,11 @@ export function mergeConfig(example, current) {
 
 	const out = structuredClone(example);
 
-	// tools: always authoritative from the example (already copied into out).
+	// tools: the allowlist is authoritative from the example (already copied into out). The one
+	// per-tool setting the operator owns is `otp` (gate a tool or ungate it, #143), so a boolean
+	// `otp` on a deployed tool is carried onto the same tool in the new list. It never adds a tool.
+	const deployedOtp = new Map((Array.isArray(current.tools) ? current.tools : []).filter((t) => isObject(t) && typeof t.otp === "boolean").map((t) => [t.name, t.otp]));
+	for (const t of out.tools ?? []) if (deployedOtp.has(t.name)) t.otp = deployedOtp.get(t.name);
 
 	// scalars: current wins when defined. An old `unix:` listen is the shared-socket form the
 	// per-agent sockets replaced, so it is not carried over (buildConfig sets the new default).

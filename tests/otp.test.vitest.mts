@@ -114,6 +114,41 @@ describe("state file", () => {
 		expect(otp.spendRecentCodes({ ...otp.emptyState(), lastAcceptedStep: step + 5 }, now).lastAcceptedStep).toBe(step + 5);
 	});
 
+	it("secondsUntilFreshCode counts to the start of the step after next (31-60 s)", () => {
+		expect(otp.secondsUntilFreshCode(Date.parse("2026-11-01T12:05:00.000Z"))).toBe(60);
+		expect(otp.secondsUntilFreshCode(Date.parse("2026-11-01T12:05:29.500Z"))).toBe(31);
+	});
+
+	it("fileSignature is 'missing' for no file, changes with the file, and passes on other errors", () => {
+		const p = join(dir, "sig.json");
+		expect(otp.fileSignature(p)).toBe("missing");
+		writeFileSync(p, "a");
+		const one = otp.fileSignature(p);
+		writeFileSync(p, "abc");
+		expect(otp.fileSignature(p)).not.toBe(one);
+		expect(() => otp.fileSignature(p, () => { throw Object.assign(new Error("EACCES"), { code: "EACCES" }); })).toThrow("EACCES");
+	});
+
+	it("stateStore writes when the file is unchanged since its read, including a file that was missing", () => {
+		const p = join(dir, "store.json");
+		const store = otp.stateStore({ uid: 1, gid: 1 }, { fchown: () => {} });
+		expect(store.read(p).status).toBe("missing");
+		store.write(p, { ...otp.emptyState(), lastAcceptedStep: 3 });
+		store.write(p, { ...otp.emptyState(), lastAcceptedStep: 4 }); // its own write doesn't count as a change
+		expect(store.read(p)).toEqual({ status: "ok", state: { ...otp.emptyState(), lastAcceptedStep: 4 } });
+	});
+
+	it("stateStore refuses to write over a change made after its read, and leaves no temp file", () => {
+		const p = file("raced.json", JSON.stringify(good));
+		const store = otp.stateStore({ uid: 1, gid: 1 }, { fchown: () => {} });
+		store.read(p);
+		const daemon = JSON.stringify({ ...good, lastAcceptedStep: 99 });
+		writeFileSync(p, daemon);
+		expect(() => store.write(p, otp.emptyState())).toThrow(/changed while this command ran.*run the command again/);
+		expect(readFileSync(p, "utf8")).toBe(daemon);
+		expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+	});
+
 	it("starts all-zero", () => {
 		expect(otp.emptyState()).toEqual({ version: 1, lastAcceptedStep: 0, users: {} });
 		expect(otp.emptyUser()).toEqual({ failures: 0, lockedUntil: null, lockouts: [], hardLock: null });

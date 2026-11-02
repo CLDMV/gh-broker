@@ -24,6 +24,17 @@ describe("mergeConfig", () => {
 		expect(merged.tools.find((t: { name: string }) => t.name === "removed_tool")).toBeUndefined();
 	});
 
+	it("keeps the operator's per-tool otp override (either way), and nothing else from the deployed tools", () => {
+		const current = { ...example, tools: [{ name: "get_me", mode: "write", otp: true }, { name: "list_issues", mode: "read", otp: false }, { name: "removed_tool", mode: "write", otp: true }, { name: "bad", otp: "yes" }, null] };
+		const merged = mergeConfig(example, current);
+		expect(merged.tools).toEqual([
+			{ name: "get_me", mode: "read", otp: true },
+			{ name: "list_issues", mode: "read", otp: false }
+		]);
+		expect(example.tools[0]).toEqual({ name: "get_me", mode: "read" }); // the example is not mutated
+		expect(mergeConfig({ ...example, tools: undefined }, { ...example, tools: "nope" }).tools).toBeUndefined();
+	});
+
 	it("preserves current owner data and adds example-only owners on upgrade", () => {
 		const current = { ...example, owners: { acme: { read: "cred:acme-read", write: "cred:acme-write", installationId: 123 } } };
 		const example2 = {

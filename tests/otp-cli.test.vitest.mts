@@ -70,7 +70,7 @@ describe("otp unlock", () => {
 		const { d, out } = makeDeps({ readState: () => stateWith({ repo: hard, glmtest: other }) });
 		expect(await otpCommand("unlock", ["repo"], config, d)).toBe(0);
 		expect(d.writeState).toHaveBeenCalledWith("/var/lib/gh-broker/otp-state.json", { version: 1, lastAcceptedStep: STEP, users: { glmtest: other } });
-		expect(out[0]).toBe("unlocked repo. Codes from the last minute won't open a window; use the next code.");
+		expect(out[0]).toBe("unlocked repo. The code the authenticator shows now won't work, nor the one after it: wait 60 s for a fresh code.");
 		expect(d.audit).toHaveBeenCalledWith({ ts: new Date(NOW).toISOString(), decision: "otp-unlock", user: "repo", by: "admin" });
 	});
 

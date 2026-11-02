@@ -18,7 +18,7 @@
  * Lock state is per agent user, in the state file the daemon writes. Every effect is injected (see
  * deploy/cli.mjs for the real wiring), so the commands are testable without root.
  */
-import { DEFAULT_STATE_PATH, DEFAULT_MAX_FAILURES, DEFAULT_MAX_LOCKOUTS, describeUsers, emptyState, formatStatus, generateSeed, seedCredName, showSeed, spendRecentCodes, userOf, withoutUser, withoutUsers } from "./otp.mjs";
+import { DEFAULT_STATE_PATH, DEFAULT_MAX_FAILURES, DEFAULT_MAX_LOCKOUTS, describeUsers, emptyState, formatStatus, generateSeed, secondsUntilFreshCode, seedCredName, showSeed, spendRecentCodes, userOf, withoutUser, withoutUsers } from "./otp.mjs";
 import { assertAgentName, registeredAgents, versionWarning } from "./agents.mjs";
 
 export const statePathOf = (config) => config.otp?.statePath ?? DEFAULT_STATE_PATH;
@@ -78,7 +78,8 @@ function auditUnlock(d, user, detail) {
 	}
 }
 
-const AFTER_UNLOCK = "Codes from the last minute won't open a window; use the next code.";
+/** What to tell the operator after a write that spent the recent codes (a code that is refused counts as a bad one). */
+const afterUnlock = (now) => `The code the authenticator shows now won't work, nor the one after it: wait ${secondsUntilFreshCode(now)} s for a fresh code.`;
 
 function unlock(config, rest, d) {
 	const all = rest.includes("--all");
@@ -97,13 +98,13 @@ function unlock(config, rest, d) {
 		// The old lastAcceptedStep can't be read back, so spend everything up to now instead.
 		d.writeState(statePath, spendRecentCodes(emptyState(), now));
 		auditUnlock(d, "*", "rewrote a corrupt state file");
-		d.log(`rewrote the corrupt state file at ${statePath}; everyone is unlocked. ${AFTER_UNLOCK}`);
+		d.log(`rewrote the corrupt state file at ${statePath}; everyone is unlocked. ${afterUnlock(now)}`);
 		return 0;
 	}
 	if (all) {
 		d.writeState(statePath, spendRecentCodes(withoutUsers(read.state), now));
 		auditUnlock(d, "*");
-		d.log(`cleared the lock state of every user in ${statePath}. ${AFTER_UNLOCK}`);
+		d.log(`cleared the lock state of every user in ${statePath}. ${afterUnlock(now)}`);
 		return 0;
 	}
 	if (!Object.hasOwn(read.state.users, user)) {
@@ -113,7 +114,7 @@ function unlock(config, rest, d) {
 	const wasLocked = Boolean(userOf(read.state, user).hardLock);
 	d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user), now));
 	auditUnlock(d, user);
-	d.log(`${wasLocked ? `unlocked ${user}` : `cleared ${user}'s counters (not hard-locked)`}. ${AFTER_UNLOCK}`);
+	d.log(`${wasLocked ? `unlocked ${user}` : `cleared ${user}'s counters (not hard-locked)`}. ${afterUnlock(now)}`);
 	return 0;
 }
 

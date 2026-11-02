@@ -18,7 +18,7 @@ Any tool can additionally be put behind the broker's OTP gate with `"otp": true`
 
 ## OTP gate and `otp_status`
 
-Some tools should only run after the user has approved them. A tool marked `"otp": true` in `config.tools` (or gated by the built-in default, which is empty for now) needs a code from the user's authenticator app. The agent can't produce one: it asks the user, and passes the code it's given as the `otp` argument. `"otp": false` turns a default-gated tool off again. Every tool that isn't gated behaves exactly as before.
+Some tools should only run after the user has approved them. A tool marked `"otp": true` in `config.tools` (or gated by the built-in default, which is empty for now) needs a code from the user's authenticator app. The agent can't produce one: it asks the user, and passes the code it's given as the `otp` argument. `"otp": false` turns a default-gated tool off again. Set it on the tool's entry in `/etc/gh-broker/config.json`; `gh-broker install` replaces the tool list with the shipped one on every run but keeps each tool's `otp` setting. Every tool that isn't gated behaves exactly as before.
 
 ```json
 { "owner": "cldmv", "repo": "gh-broker", "pullNumber": 12, "otp": "123456" }

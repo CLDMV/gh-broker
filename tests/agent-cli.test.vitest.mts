@@ -78,6 +78,13 @@ describe("configureMcp", () => {
 		expect(out[0]).toContain('"command": "sg"');
 	});
 
+	it("reports a write that fails in the agent's home and carries on", () => {
+		const { d, err, out } = makeDeps({ mcpIO: { read: () => undefined, write: () => { throw new Error("EISDIR: illegal operation on a directory"); } } });
+		expect(configureMcp("repo", config, d)).toBe("failed");
+		expect(err[0]).toBe('repo: could not write the MCP config: EISDIR: illegal operation on a directory. Add this under "mcpServers" in the user\'s ~/.claude.json by hand:');
+		expect(out[0]).toContain('"command": "sg"');
+	});
+
 	it("uses the socket directory from the config's listen", () => {
 		const { d, files } = makeDeps();
 		configureMcp("repo", { listen: "agents:/run/other" }, d);
@@ -123,6 +130,15 @@ describe("agent remove", () => {
 		const unsafe = makeDeps({ mcpIO: unsafeIO });
 		await agentCommand("remove", ["repo"], config, unsafe.d);
 		expect(unsafe.out.join("\n")).toContain("repo: /home/repo/.claude.json is a symlink, so it was left alone");
+		const order: string[] = [];
+		const blocked = makeDeps({
+			removeGroup: () => order.push("group"),
+			restart: () => order.push("restart"),
+			mcpIO: { read: () => { order.push("mcp"); return { text: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } }), stat: { uid: 1000, gid: 1000, mode: 0o100600 } }; }, write: () => { throw new Error("EISDIR"); } }
+		});
+		expect(await agentCommand("remove", ["repo"], config, blocked.d)).toBe(0);
+		expect(order).toEqual(["group", "mcp", "restart"]);
+		expect(blocked.err[0]).toBe("repo: could not remove the broker entry from /home/repo/.claude.json: EISDIR. The agent is unregistered anyway; remove the entry by hand.");
 		const gone = makeDeps({ userInfo: () => undefined });
 		await agentCommand("remove", ["repo"], config, gone.d);
 		expect(gone.d.removeGroup).toHaveBeenCalledWith("repo");
@@ -176,6 +192,11 @@ describe("agent sync", () => {
 		const all = makeDeps();
 		await agentCommand("sync", [], config, all.d);
 		expect(Object.keys(all.files).sort()).toEqual([claude("glmtest"), claude("repo")]);
+	});
+
+	it("exits 1 when any agent's config could not be written", async () => {
+		const { d } = makeDeps({ mcpIO: unsafeIO });
+		expect(await agentCommand("sync", [], config, d)).toBe(1);
 	});
 
 	it("--no-mcp-config only prints, and an unknown agent is refused", async () => {

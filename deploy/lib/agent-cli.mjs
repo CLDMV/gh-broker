@@ -49,7 +49,16 @@ export function configureMcp(user, config, d, { noMcp = false } = {}) {
 		d.log(JSON.stringify({ github: entry }, null, "\t"));
 		return "skipped";
 	}
-	const r = applyMcpConfig({ home: info.home, user, dir, owner: { uid: info.uid, gid: info.gid } }, d.mcpIO);
+	let r;
+	try {
+		r = applyMcpConfig({ home: info.home, user, dir, owner: { uid: info.uid, gid: info.gid } }, d.mcpIO);
+	} catch (err) {
+		// The home directory is the agent's, so a write there can fail on anything it puts in the
+		// way (a directory where the backup goes, say). Report it; it must not stop the caller.
+		d.error(`${user}: could not write the MCP config: ${err.message}. Add this under "mcpServers" in the user's ~/.claude.json by hand:`);
+		d.log(JSON.stringify({ github: entry }, null, "\t"));
+		return "failed";
+	}
 	if (r.status === "unsafe") {
 		d.error(`${user}: ${r.reason}, so it was left alone (root won't read or replace it). Make it a plain file the user owns and run "sudo gh-broker agent sync ${user}", or add this under "mcpServers" by hand:`);
 		d.log(JSON.stringify({ github: entry }, null, "\t"));
@@ -91,14 +100,20 @@ async function add(config, user, noMcp, d) {
 function remove(config, user, d) {
 	assertAgentName(user);
 	if (!registry(d).some((a) => a.user === user)) throw new Error(`"${user}" is not a registered agent`);
-	const info = d.userInfo(user);
-	if (info) {
-		const r = removeMcpConfig({ home: info.home, dir: agentsDir(config.listen), uid: info.uid }, d.mcpIO);
-		const what = { removed: `removed the broker entry from ${r.path} (backup: ${MCP_BACKUP})`, absent: `no broker entry in ${r.path}`, "no-file": `no ${MCP_FILE} to edit`, unreadable: `${r.path} is not valid JSON, so it was left alone`, unsafe: `${r.reason}, so it was left alone` };
-		d.log(`${user}: ${what[r.status]}`);
-	}
+	// The group goes first: it is what gives the agent its socket, so nothing the agent can do to
+	// its own home directory (which the MCP cleanup below edits) can stop the removal.
 	d.removeGroup(user);
 	d.log(`${user}: group ${agentGroup(user)} removed`);
+	const info = d.userInfo(user);
+	if (info) {
+		try {
+			const r = removeMcpConfig({ home: info.home, dir: agentsDir(config.listen), uid: info.uid }, d.mcpIO);
+			const what = { removed: `removed the broker entry from ${r.path} (backup: ${MCP_BACKUP})`, absent: `no broker entry in ${r.path}`, "no-file": `no ${MCP_FILE} to edit`, unreadable: `${r.path} is not valid JSON, so it was left alone`, unsafe: `${r.reason}, so it was left alone` };
+			d.log(`${user}: ${what[r.status]}`);
+		} catch (err) {
+			d.error(`${user}: could not remove the broker entry from ${info.home}/${MCP_FILE}: ${err.message}. The agent is unregistered anyway; remove the entry by hand.`);
+		}
+	}
 	const statePath = statePathOf(config);
 	const read = d.readState(statePath);
 	if (read.status === "ok" && Object.hasOwn(read.state.users, user)) {
@@ -133,6 +148,7 @@ function sync(config, only, noMcp, d) {
 		assertAgentName(only);
 		if (!agents.includes(only)) throw new Error(`"${only}" is not a registered agent`);
 	}
-	for (const user of only ? [only] : agents) configureMcp(user, config, d, { noMcp });
-	return 0;
+	let ok = true;
+	for (const user of only ? [only] : agents) if (["failed", "unsafe", "unreadable"].includes(configureMcp(user, config, d, { noMcp }))) ok = false;
+	return ok ? 0 : 1;
 }

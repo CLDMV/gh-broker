@@ -21,7 +21,7 @@
  * file format (version 1, per-user counters under `users`).
  */
 import { randomBytes } from "node:crypto";
-import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, fchmodSync, fchownSync, constants } from "node:fs";
+import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, fchmodSync, fchownSync, statSync, constants } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import QRCode from "qrcode";
 
@@ -183,10 +183,16 @@ export function withoutUser(state, user) {
  * `state` ready to be written by the CLI: every code up to one step ahead of `now` counts as
  * spent. The CLI rewrites the whole file while the daemon may be accepting a code (it accepts
  * at most one step ahead), so this keeps a write from handing back a code the daemon just used.
- * The cost is that a code from the last 30-60 s can't open a window; the next one can.
+ * The cost is that the code an authenticator shows now, and the one after it, can't open a
+ * window; see secondsUntilFreshCode.
  */
 export function spendRecentCodes(state, now) {
 	return { ...state, lastAcceptedStep: Math.max(state.lastAcceptedStep, Math.floor(now / 30000) + 1) };
+}
+
+/** Seconds from `now` until an authenticator shows a code spendRecentCodes(…, now) didn't spend (31 to 60). */
+export function secondsUntilFreshCode(now) {
+	return Math.ceil(((Math.floor(now / 30000) + 2) * 30000 - now) / 1000);
 }
 
 /** The state with every user cleared. */
@@ -199,10 +205,11 @@ export function withoutUsers(state) {
  * chowned to uid:gid. The directory can belong to someone else (an agent user's home), so the
  * temp file has a random name and is opened with O_EXCL|O_NOFOLLOW (never an existing file or a
  * planted symlink), and the mode and owner are set on the open descriptor, not the path. The
- * rename replaces a symlink at `path` rather than following it. `fchown` (it needs root) and
+ * rename replaces a symlink at `path` rather than following it. `beforeRename`, when given, runs
+ * just before the rename and can throw to abandon the write. `fchown` (it needs root) and
  * `random` are injectable for tests.
  */
-export function writeFileAtomic(path, text, { uid, gid, mode = 0o600 }, { fchown = fchownSync, random = randomBytes } = {}) {
+export function writeFileAtomic(path, text, { uid, gid, mode = 0o600 }, { fchown = fchownSync, random = randomBytes, beforeRename } = {}) {
 	const tmp = join(dirname(path), `.${basename(path)}.${random(8).toString("hex")}.tmp`);
 	const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
 	try {
@@ -214,6 +221,7 @@ export function writeFileAtomic(path, text, { uid, gid, mode = 0o600 }, { fchown
 		} finally {
 			closeSync(fd);
 		}
+		beforeRename?.();
 		renameSync(tmp, path);
 	} catch (err) {
 		rmSync(tmp, { force: true });
@@ -224,6 +232,41 @@ export function writeFileAtomic(path, text, { uid, gid, mode = 0o600 }, { fchown
 /** Write the state file atomically as 0600, chowned to the service user. */
 export function writeStateAtomic(path, state, owner, io) {
 	writeFileAtomic(path, JSON.stringify(state, null, "\t") + "\n", { ...owner, mode: 0o600 }, io);
+}
+
+/** Identity of one version of a file on disk ("missing" when there is none); the daemon uses the same test. */
+export function fileSignature(path, stat = statSync) {
+	try {
+		const st = stat(path);
+		return `${st.ino}:${st.mtimeMs}:${st.size}`;
+	} catch (err) {
+		if (err.code === "ENOENT") return "missing";
+		throw err;
+	}
+}
+
+/**
+ * The CLI's state-file reader and writer, as a compare-and-swap: a write is abandoned when the
+ * file changed after this store read it (the daemon wrote a lockout or a step meanwhile), so a
+ * CLI edit never puts back data the daemon just replaced. The command then fails and is run again.
+ * @param {{ uid: number, gid: number }} owner  the service user
+ */
+export function stateStore(owner, { read = readFileSync, stat = statSync, ...io } = {}) {
+	const seen = new Map();
+	return {
+		read(path) {
+			seen.set(path, fileSignature(path, stat)); // before reading: a change in between fails the write, which is the safe side
+			return readState(path, read);
+		},
+		write(path, state) {
+			const expected = seen.get(path);
+			const beforeRename = () => {
+				if (fileSignature(path, stat) !== expected) throw new Error(`${path} changed while this command ran (the broker wrote to it); nothing was changed, run the command again`);
+			};
+			writeStateAtomic(path, state, owner, { ...io, beforeRename });
+			seen.set(path, fileSignature(path, stat));
+		}
+	};
 }
 
 /** One user's facts for `status`, from their entry and the config's limits. */

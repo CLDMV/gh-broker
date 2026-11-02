@@ -23,7 +23,7 @@ import { hostname } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseGroups, parsePasswd } from "./lib/agents.mjs";
-import { readState, writeStateAtomic, writeFileAtomic, storeSeed } from "./lib/otp.mjs";
+import { stateStore, writeFileAtomic, storeSeed } from "./lib/otp.mjs";
 import { readOwnedFile } from "./lib/mcp-config.mjs";
 import { readSecretsFile, writeSecretsFile } from "./lib/secret-store.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
@@ -44,6 +44,8 @@ const readText = (p) => {
 
 /** The real effects for lib/cli.mjs `runCli` (also used by the installer for the MCP config and smoke test). */
 export function realDeps() {
+	let store;
+	const states = () => (store ??= stateStore({ uid: requireUid(SVC), gid: requireGid(SVC) }));
 	return {
 		log: (m) => console.log(m),
 		error: (m) => console.error(m),
@@ -62,8 +64,8 @@ export function realDeps() {
 		socketExists: existsSync,
 		smoke: smokeTest,
 		versions: () => ({ pkg: JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version, deployed: readText("/opt/gh-broker/version")?.trim() }),
-		readState: (path) => readState(path),
-		writeState: (path, state) => writeStateAtomic(path, state, { uid: requireUid(SVC), gid: requireGid(SVC) }),
+		readState: (path) => states().read(path),
+		writeState: (path, state) => states().write(path, state),
 		storeSeed: (cfg, name, seed) => {
 			const secrets = cfg.secrets?.path || process.env.GH_BROKER_SECRETS || join(configDir(), "secrets.json");
 			const gid = requireGid(SVC);
