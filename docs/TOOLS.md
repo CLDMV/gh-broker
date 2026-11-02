@@ -6,7 +6,7 @@ Every tool the broker advertises falls into one of three categories, set per ent
 |---|---|---|---|
 | **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
 | **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_release_prs`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
-| **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s `ciVerbosity` extension |
+| **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s and `list_pull_requests`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
 
@@ -528,6 +528,29 @@ Unknown keys anywhere in the block are refused. The block is operator data, not 
 - *Reach.* Push and list only, only to allowlisted images of configured owners. No delete, no visibility changes. The PAT should carry `write:packages` and nothing else (`write:packages` implies `read:packages`). `delete:packages` must not be granted.
 - *Resource abuse.* Archive size, tar member count, JSON member size, layer count and the job queue are all bounded.
 - *Release integrity.* With `protectReleaseTags`, a published `1.2.3` can't be replaced, so a compromised agent can't swap a released image. Mutable tags such as `latest` can still move; keep the allowlist tight.
+
+---
+
+## `list_pull_requests` + `ciVerbosity` (augmented)
+
+`list_pull_requests` takes the same opt-in parameters, and adds a `ci` field to every PR in the returned array:
+
+```json
+{
+	"owner": "cldmv",
+	"repo": "droidsock",
+	"state": "open",
+	"ciVerbosity": 1,
+	"maxDetail": 5
+}
+```
+
+- `ciVerbosity` (0-3) uses the same tiers as `report_ci_status`; `logLines` tunes tier 3's tail length. Both are stripped before the call is forwarded.
+- `maxDetail` (default 10, hard cap 50) limits how many PRs, counting from the top of the list, get tier 1-3 detail. Every PR still gets its tier-0 counts, so a long list costs at least one Actions call per PR. A PR past the cap comes back with `"ci": { "pull": 41, "summary": { … }, "truncated": true, "truncatedReason": "max-detail" }`, which means the detail was withheld, not that the PR is healthy.
+- The whole list shares one call budget (250 REST calls, hard cap 1000) and the same rate-limit floor as `report_ci_status`. When either runs out, the PR being evaluated and every PR after it get an empty summary with `truncated: true` and `truncatedReason` of `max-api-calls` or `rate-limited` (plus `retryAfterSeconds` when GitHub sent one).
+- Head shas come from the forwarded list, so there is no extra PR lookup. Items without a `number` or `head.sha` are returned untouched.
+
+**Opt-in only.** Omitting `ciVerbosity` is a byte-identical forward. If the upstream response isn't a JSON array in a text block, it is returned unmodified.
 
 ---
 

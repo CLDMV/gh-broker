@@ -163,6 +163,32 @@ describe("buildCatalog", () => {
 		expect((tool.inputSchema as any).properties.logLines).toMatchObject({ type: "number" });
 	});
 
+	it("layers ciVerbosity/logLines/maxDetail onto list_pull_requests's real upstream schema", async () => {
+		const upstreamTool = {
+			name: "list_pull_requests",
+			description: "List pull requests.",
+			inputSchema: { type: "object", required: ["owner", "repo"], properties: { state: { type: "string" } } }
+		};
+		upstream.listToolsFor.mockResolvedValue([upstreamTool]);
+		const config = makeConfig([{ name: "list_pull_requests", mode: "read", augment: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const tool = catalog[0]!;
+		expect(tool.description).toContain("List pull requests.");
+		expect(tool.description).toContain("maxDetail");
+		expect((tool.inputSchema as any).required).toEqual(["owner", "repo"]);
+		expect((tool.inputSchema as any).properties.state).toEqual({ type: "string" });
+		expect((tool.inputSchema as any).properties.ciVerbosity).toMatchObject({ type: "number", enum: [0, 1, 2, 3] });
+		expect((tool.inputSchema as any).properties.logLines).toMatchObject({ type: "number" });
+		expect((tool.inputSchema as any).properties.maxDetail).toMatchObject({ type: "number" });
+	});
+
+	it("still adds the extension params to list_pull_requests when the upstream fetch fails entirely", async () => {
+		upstream.listToolsFor.mockRejectedValue(new Error("network down"));
+		const config = makeConfig([{ name: "list_pull_requests", mode: "read", augment: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(Object.keys((catalog[0]!.inputSchema as any).properties)).toEqual(["ciVerbosity", "logLines", "maxDetail"]);
+	});
+
 	it("still adds ciVerbosity/logLines to pull_request_read when the upstream fetch fails entirely", async () => {
 		upstream.listToolsFor.mockRejectedValue(new Error("network down"));
 		const config = makeConfig([{ name: "pull_request_read", mode: "read", augment: true }]);

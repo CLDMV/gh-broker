@@ -28,7 +28,8 @@
 		},
 		{
 			"name": "list_pull_requests",
-			"mode": "read"
+			"mode": "read",
+			"augment": true
 		},
 		{
 			"name": "pull_request_read",
