@@ -19,7 +19,7 @@
 	},
 	"scripts": {
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"build": "npm run typecheck && rm -rf dist && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.mjs --sourcemap",
+		"build": "npm run typecheck && rm -rf dist && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.mjs --sourcemap && esbuild deploy/cli.mjs --bundle --platform=node --format=esm --target=node20 --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=dist/cli.mjs",
 		"start": "node dist/index.mjs",
 		"dev": "node --experimental-strip-types --watch src/index.ts",
 		"build:ci": "npm run build",
@@ -67,7 +67,8 @@
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.32.2",
 		"@octokit/auth-app": "^8.3.1",
-		"@octokit/core": "^7.0.8"
+		"@octokit/core": "^7.0.8",
+		"qrcode": "^1.5.4"
 	},
 	"publishConfig": {
 		"access": "public"

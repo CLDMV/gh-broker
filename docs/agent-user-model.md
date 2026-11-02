@@ -29,6 +29,8 @@ Filesystem and socket:
 |---|---|---|---|
 | `/etc/gh-broker` | `root:gh-broker` | `0750` | Agent (not in `gh-broker`) can't even traverse into it. |
 | the token store — `creds/*.cred` (systemd-creds) or `secrets.json` (file) | `root:root` / `root:gh-broker` | `0400` / `0640` | The tokens, in whichever backend was chosen at install. Readable only by root / the `gh-broker` group; the agent (not in it) can't. Referenced by `cred:` names in the config. |
+| the OTP seed — `creds/otp-seed.cred` or the `otp-seed` key in `secrets.json` | same as the tokens | same as the tokens | The TOTP seed behind the OTP gate. Stored with the PATs, so the agent can't read it and can't compute a code. |
+| `/var/lib/gh-broker` | `gh-broker:gh-broker` | `0700` | OTP gate state: bad-code counters, lockouts, the hard lock. The agent can't read or edit it. |
 | `/run/gh-broker` | `gh-broker:gh-broker` | `0755` | Traversable so the socket can be reached. |
 | `/run/gh-broker/gh-broker.sock` | `gh-broker:gh-broker-clients` | `0660` | Agent connects (it's in the bridge group); non-members can't. |
 
@@ -46,6 +48,10 @@ Three independent gates, each verifiable:
 1. **Credentials** — `/etc/gh-broker` is `0750 root:gh-broker`. The agent user is deliberately *not* in the `gh-broker` group, so it cannot list or traverse the directory, let alone read the token store. Verify: as the agent user, `cat /etc/gh-broker/secrets.json` (or a `creds/*.cred`) → *Permission denied*.
 2. **Socket** — `0660 gh-broker:gh-broker-clients`. The agent is in `gh-broker-clients`, so it can `connect()`; a user in neither group cannot. The socket speaks MCP frames only — no credential material is ever written to it.
 3. **Process** — the broker runs under the hardened unit (`ProtectHome`, `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges`, restricted syscalls). A separate user can't `ptrace` it or read `/proc/<pid>/environ`, so the in-memory token isn't reachable that way either.
+
+## The OTP gate depends on the same split
+
+The OTP gate for risky tools only means something because of this boundary. The agent passes the code, but it can only get one from you: the seed sits in the token store, out of its reach, and a code is valid for 30 seconds. After repeated bad codes the broker hard-locks, and the only thing that clears the lock is `sudo gh-broker otp unlock` on the host. The agent has no sudo, so it can't clear its own lock; a locked agent can only tell you what happened and which command to run. Giving the agent sudo, or putting it in the `gh-broker` group, would let it read the seed or edit the state file and defeat the gate along with everything else.
 
 ## Host hardening that backs the split
 

@@ -237,6 +237,18 @@ export function deployDist(srcDir, destDir, svcUser, svcGroup) {
 	run("chown", ["-R", `${uid}:${gid}`, destDir]);
 }
 
+/**
+ * Write the `gh-broker` launcher on root's PATH: a tiny shell script that runs the deployed,
+ * self-contained CLI bundle (dist/cli.mjs) with the maintained node symlink. A script rather
+ * than a symlink, so the bundle needs no execute bit or shebang and the node used is always the
+ * service's. Written 0755 root:root.
+ */
+export function installCliLauncher(appDir, path = "/usr/local/bin/gh-broker", nodePath = "/usr/local/bin/node") {
+	writeFileSync(path, `#!/bin/sh\nexec ${nodePath} ${join(appDir, "dist", "cli.mjs")} "$@"\n`, { mode: 0o755 });
+	chmodSync(path, 0o755);
+	chownSync(path, 0, 0);
+}
+
 /** Write the token-free config, 0640 root:group. */
 export function writeConfigFile(path, obj, svcGroup) {
 	const gid = requireGid(svcGroup);

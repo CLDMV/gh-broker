@@ -353,3 +353,17 @@ describe("directories, unit and service", () => {
 });
 
 afterEach(() => vi.clearAllMocks());
+
+describe("installCliLauncher (#143)", () => {
+	it("writes a 0755 root launcher that runs the deployed CLI bundle with the node symlink", () => {
+		sys.installCliLauncher("/opt/gh-broker");
+		expect(f.writeFileSync).toHaveBeenCalledWith("/usr/local/bin/gh-broker", '#!/bin/sh\nexec /usr/local/bin/node /opt/gh-broker/dist/cli.mjs "$@"\n', { mode: 0o755 });
+		expect(f.chmodSync).toHaveBeenCalledWith("/usr/local/bin/gh-broker", 0o755);
+		expect(f.chownSync).toHaveBeenCalledWith("/usr/local/bin/gh-broker", 0, 0);
+	});
+
+	it("takes the launcher and node paths as arguments", () => {
+		sys.installCliLauncher("/app", "/x/gh-broker", "/n/node");
+		expect(f.writeFileSync).toHaveBeenCalledWith("/x/gh-broker", '#!/bin/sh\nexec /n/node /app/dist/cli.mjs "$@"\n', { mode: 0o755 });
+	});
+});
