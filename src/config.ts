@@ -14,8 +14,10 @@
  */
 
 import { readFileSync } from "node:fs";
-import type { Config, Mode, ToolRule } from "./types.ts";
+import { isAbsolute } from "node:path";
+import type { Config, Mode, OtpConfig, ToolRule } from "./types.ts";
 import { parseGhcrConfig } from "./verbs/ghcr/config.ts";
+import { OTP_STATUS } from "./otp/policy.ts";
 
 const MODES: readonly Mode[] = ["read", "write"];
 
@@ -50,7 +52,13 @@ export function loadConfig(path: string): Config {
 		const custom = o.custom === true;
 		const augment = o.augment === true;
 		if (custom && augment) throw new Error(`config.tools[${i}] ("${o.name}"): custom and augment are mutually exclusive`);
-		return { name: o.name, mode: o.mode as Mode, custom, augment };
+		if (o.otp !== undefined && typeof o.otp !== "boolean") throw new Error(`config.tools[${i}].otp: must be true or false`);
+		if (o.name === OTP_STATUS) {
+			// otp_status has to keep working while everything else is locked, so it can't be gated.
+			if (o.otp === true) throw new Error(`config.tools[${i}] ("${OTP_STATUS}"): can't be gated (otp: true)`);
+			if (!custom) throw new Error(`config.tools[${i}] ("${OTP_STATUS}"): must be custom: true`);
+		}
+		return { name: o.name, mode: o.mode as Mode, custom, augment, ...(typeof o.otp === "boolean" ? { otp: o.otp } : {}) };
 	});
 
 	if (typeof c.owners !== "object" || c.owners === null) throw new Error("config.owners: must be an object");
@@ -138,6 +146,8 @@ export function loadConfig(path: string): Config {
 		};
 	}
 
+	const otp = c.otp !== undefined ? parseOtpConfig(c.otp) : undefined;
+
 	return {
 		listen: c.listen,
 		upstream: c.upstream,
@@ -147,8 +157,28 @@ export function loadConfig(path: string): Config {
 		...(secrets ? { secrets } : {}),
 		...(defaultOwner ? { defaultOwner } : {}),
 		...(npm ? { npm } : {}),
-		...(c.ghcr !== undefined ? { ghcr: parseGhcrConfig(c.ghcr) } : {})
+		...(c.ghcr !== undefined ? { ghcr: parseGhcrConfig(c.ghcr) } : {}),
+		...(otp ? { otp } : {})
 	};
+}
+
+/** Validate config.otp. Every limit is a positive integer; omitted ones take the defaults. */
+function parseOtpConfig(raw: unknown): OtpConfig {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("config.otp: must be an object");
+	const o = raw as Record<string, unknown>;
+	if (typeof o.seed !== "string" || !o.seed.startsWith("cred:")) throw new Error('config.otp.seed: must be a "cred:<name>" ref');
+	const out: OtpConfig = { seed: o.seed };
+	for (const key of ["windowSeconds", "maxFailures", "lockoutSeconds", "maxLockouts"] as const) {
+		const v = o[key];
+		if (v === undefined) continue;
+		if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error(`config.otp.${key}: must be a positive integer`);
+		out[key] = v;
+	}
+	if (o.statePath !== undefined) {
+		if (typeof o.statePath !== "string" || !isAbsolute(o.statePath)) throw new Error("config.otp.statePath: must be an absolute path");
+		out.statePath = o.statePath;
+	}
+	return out;
 }
 
 /** Build a name→rule index for O(1) allowlist checks. */

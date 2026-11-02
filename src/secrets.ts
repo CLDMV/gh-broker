@@ -86,7 +86,7 @@ function credName(ref: string): string {
 /**
  * Eagerly read every REQUIRED credential (the owners' PATs, the App key) so a missing token
  * fails at startup, not on first request. Optional credentials (the npm token, the GHCR
- * credentials) are only
+ * credentials, the OTP seed) are only
  * format-checked here: when one isn't stored, the tools that need it are hidden instead
  * (see availability.ts), and the rest of the broker runs normally.
  */
@@ -112,6 +112,8 @@ function validateRefs(config: Config, read: (name: string) => string): void {
 	// GHCR credentials are optional too: format-checked here, and the ghcr_* tools are hidden
 	// while none is stored (availability.ts).
 	for (const ref of ghcrCredRefs(config.ghcr)) credName(ref);
+	// The OTP seed is optional as well: without it the gated tools are hidden (availability.ts).
+	if (config.otp) credName(config.otp.seed);
 }
 
 /** systemd-creds provider: read decrypted creds from $CREDENTIALS_DIRECTORY. */

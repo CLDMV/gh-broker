@@ -39,6 +39,11 @@ export interface ToolRule {
 	mode: Mode;
 	custom?: boolean;
 	augment?: boolean;
+	/**
+	 * Whether the tool needs a broker OTP (#143). Overrides the built-in default in either
+	 * direction; omitted means the default (src/otp/policy.ts). Never allowed on otp_status.
+	 */
+	otp?: boolean;
 }
 
 /** Credential *references* (e.g. "cred:cldmv-read"), resolved via the SecretStore. */
@@ -91,6 +96,25 @@ export interface NpmConfig {
 	tokenOrgs?: string[];
 }
 
+/**
+ * The OTP gate (#143). Optional: without it, or while its seed isn't stored, every gated
+ * tool is unavailable and everything else runs as before. Defaults in src/otp/policy.ts.
+ */
+export interface OtpConfig {
+	/** Credential reference (e.g. "cred:otp-seed") for the base32 TOTP seed. */
+	seed: string;
+	/** How long a window stays open after its code first passes. Default 300. */
+	windowSeconds?: number;
+	/** Bad codes before a short lockout. Default 5. */
+	maxFailures?: number;
+	/** Length of a short lockout. Default 600. */
+	lockoutSeconds?: number;
+	/** Short lockouts in a rolling 24 h before the hard lock. Default 3. */
+	maxLockouts?: number;
+	/** The persistent state file. Default /var/lib/gh-broker/otp-state.json. */
+	statePath?: string;
+}
+
 export interface Config {
 	/** e.g. "unix:/run/gh-broker/gh-broker.sock" */
 	listen: string;
@@ -118,6 +142,8 @@ export interface Config {
 	npm?: NpmConfig;
 	/** Optional GHCR push policy + credentials for the ghcr_* verbs (src/verbs/ghcr/config.ts). */
 	ghcr?: GhcrConfig;
+	/** Optional OTP gate for risky tools (src/otp/). */
+	otp?: OtpConfig;
 }
 
 /** Resolves a "cred:<name>" reference to a token, never logging it. */

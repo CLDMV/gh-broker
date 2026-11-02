@@ -5,12 +5,85 @@ Every tool the broker advertises falls into one of three categories, set per ent
 | Category | Config flag | What happens | Example |
 |---|---|---|---|
 | **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_dependents`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
+| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_dependents`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags`, `otp_status` |
 | **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s and `list_pull_requests`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
 
 This document covers the **custom** and **augmented** tools — the ones that don't exist in the hosted MCP at all, or that gh-broker extends beyond what it offers. For everything else, see the hosted GitHub MCP's own tool documentation; gh-broker just routes the credential.
+
+Any tool can additionally be put behind the broker's OTP gate with `"otp": true`; see [OTP gate and `otp_status`](#otp-gate-and-otp_status).
+
+---
+
+## OTP gate and `otp_status`
+
+Some tools should only run after the user has approved them. A tool marked `"otp": true` in `config.tools` (or gated by the built-in default, which is empty for now) needs a code from the user's authenticator app. The agent can't produce one: it asks the user, and passes the code it's given as the `otp` argument. `"otp": false` turns a default-gated tool off again. Every tool that isn't gated behaves exactly as before.
+
+```json
+{ "owner": "cldmv", "repo": "gh-broker", "pullNumber": 12, "otp": "123456" }
+```
+
+**Windows.** The first gated call with a valid TOTP code (RFC 6238, SHA1, 6 digits, 30 s step, ±1 step accepted) that is newer than the last accepted one opens a window. For `windowSeconds` (default 300) every gated tool runs when it carries that same code; the window is fixed, with no renewal. A code can open only one window, ever: the last accepted TOTP step is stored, so a code can't reopen a window after it closes or after a restart. Several windows can be open at once, one per code. Windows are held in memory, so a restart closes them.
+
+**Refusals.** A missing, wrong, expired or reused code gets the same answer, and nothing runs:
+
+```
+OTP required for <tool>: ask the user for a current code from their authenticator app and pass it as "otp". Nothing was run.
+```
+
+The `otp` argument is the broker's own: it is removed from the arguments of every call, gated or not, before anything is forwarded upstream or handed to a verb.
+
+**Guessing.** A missing code doesn't count. Each wrong, expired or reused code does: after `maxFailures` (default 5) the gated tools are refused for `lockoutSeconds` (default 600) without any code being checked (`OTP is locked for <n> more minute(s) after too many bad codes. Nothing was run.`). After `maxLockouts` (default 3) of those short lockouts in a rolling 24 hours, the broker hard-locks: every tool except `otp_status` is refused, ungated ones included, until root clears it.
+
+```
+gh-broker is locked after repeated bad OTP codes (since <ISO>). Ask the user to run "sudo gh-broker otp unlock" on <host>. Nothing was run.
+```
+
+The counters are broker-wide; the socket carries no caller identity yet.
+
+**Setup.** The gate needs `config.otp` and its seed credential (base32, generated and shown once by the installer, stored with the PATs). Without either, every gated tool is hidden and refused with the reason, and the rest of the broker runs normally.
+
+```json
+"otp": {
+	"seed": "cred:otp-seed",
+	"windowSeconds": 300,
+	"maxFailures": 5,
+	"lockoutSeconds": 600,
+	"maxLockouts": 3,
+	"statePath": "/var/lib/gh-broker/otp-state.json"
+}
+```
+
+Only `seed` is required. A gated tool's advertised schema gains a required `otp` string, and its description says it needs a code and how long one lasts.
+
+**State file.** `statePath` holds the last accepted step, the bad-code count, the short lockout, the lockout times of the last 24 hours and the hard lock. The broker writes it atomically (temp file in the same directory, mode 0600, fsync, rename) and re-reads it whenever its inode, mtime or size changes, so `sudo gh-broker otp unlock` applies on the next call. A missing file is a clean state. A file that can't be read or parsed fails closed: it counts as a hard lock, and the broker never overwrites it.
+
+**Audit.** Gated calls log `otp: "window" | "opened" | "refused" | "locked"`, and hard-locked refusals `otp: "hard-locked"`. Window and opened calls add `window`, an HMAC of the code under a key that exists only in the running process, so lines from one run can be correlated and nothing can be derived from it. Codes and the seed are never logged.
+
+### `otp_status`
+
+The gate's state. Read, `mode: "read"`, `custom: true`, no arguments, no owner or PAT. It is never gated and never blocked by a lock, so a locked-out agent can still tell the user what happened.
+
+```json
+{
+	"configured": true,
+	"gatedTools": ["merge_pull_request"],
+	"windowSeconds": 300,
+	"openWindows": 1,
+	"nextWindowExpiresAt": "2026-11-01T12:05:00.000Z",
+	"failures": 0,
+	"maxFailures": 5,
+	"lockedUntil": null,
+	"lockoutsLast24h": 0,
+	"maxLockouts": 3,
+	"hardLock": null,
+	"unlockCommand": "sudo gh-broker otp unlock",
+	"host": "broker-host"
+}
+```
+
+`hardLock` is `{ "since", "lockouts" }` while hard-locked (`lockouts: 0` when the cause is an unusable state file). It never contains a code, the seed or anything derived from them.
 
 ---
 
@@ -570,7 +643,7 @@ npm only accepts a trusted publisher on a package that already exists, and that 
 | `owner` | string | — (required) | A configured owner. Its **read** PAT does the GitHub reads; the verb never writes to GitHub. |
 | `repo` | string | — (required) | The repo whose `package.json` names the package. |
 | `package` | string | — (required) | Lowercase scoped name, e.g. `@cldmv/new-thing`. Must be under a scope in `config.npm.scopes`. |
-| `npm_otp` | string | — (required) | 6–8 digit npm one-time password. Never logged or returned. |
+| `npm_otp` | string | — (required) | 6–8 digit npm one-time password. Never logged or returned. (Named `npm_otp` because `otp` is the broker's own gate code, see [OTP gate](#otp-gate-and-otp_status); a gated `npm_scaffold` call carries both.) |
 | `workflow` | string | `publish.yml` | The repo's publish workflow file in `.github/workflows`; the trusted publisher names it. |
 
 **Guardrails, checked before any npm write.**
