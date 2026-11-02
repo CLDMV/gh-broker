@@ -15,7 +15,7 @@ users:x:100:repo
 describe("names and paths", () => {
 	it("validates agent user names (group name stays within 32 chars)", () => {
 		for (const ok of ["repo", "_svc", "a", "glm-test_1", "a".repeat(16)]) expect(a.validAgentName(ok)).toBe(true);
-		for (const bad of ["", "Repo", "1abc", "a".repeat(17), "a b", "../x", "a.b", undefined, 5]) expect(a.validAgentName(bad as string)).toBe(false);
+		for (const bad of ["", "Repo", "1abc", "a".repeat(17), "a b", "../x", "a.b", "__proto__", undefined, 5]) expect(a.validAgentName(bad as string)).toBe(false);
 		expect(a.assertAgentName("repo")).toBe("repo");
 		expect(() => a.assertAgentName("Repo")).toThrow(/not a valid agent user name/);
 		expect((a.AGENT_GROUP_PREFIX + "a".repeat(16)).length).toBeLessThanOrEqual(32);

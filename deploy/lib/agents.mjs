@@ -29,9 +29,9 @@ export const DEFAULT_LISTEN = `agents:${DEFAULT_AGENTS_DIR}`;
 /** Keeps `gh-broker-agent-<u>` within the 32-character group name limit. */
 export const AGENT_NAME = /^[a-z_][a-z0-9_-]{0,15}$/;
 
-/** Whether `name` may be registered as an agent user. */
+/** Whether `name` may be registered as an agent user. "__proto__" fits the pattern but is refused, as the daemon refuses it (src/agents.ts). */
 export function validAgentName(name) {
-	return typeof name === "string" && AGENT_NAME.test(name);
+	return typeof name === "string" && AGENT_NAME.test(name) && name !== "__proto__";
 }
 
 /** Throws a clear error for an invalid agent user name. */
