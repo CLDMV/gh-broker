@@ -26,7 +26,7 @@ export const USAGE = `Usage: sudo gh-broker <command>
 Commands:
   install [flags]            install or upgrade the broker (see: gh-broker install --help)
   agent add <user>           register an agent user: group, MCP config, restart, smoke test (--no-mcp-config to skip the config)
-  agent remove <user>        unregister an agent: group, MCP entry, lock state, restart
+  agent remove <user>        unregister an agent: empty its group, restart, MCP entry, lock state
   agent list                 each agent, its socket, and whether its MCP config points at it
   agent sync [<user>]        re-apply the MCP config for one agent or all
   otp status [<user>] [--json]

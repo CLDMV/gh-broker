@@ -131,10 +131,12 @@ The broker knows which agent is calling from the socket the call arrives on: the
 
 ```sh
 sudo gh-broker agent add <user>      # group, MCP config, restart, smoke test over the user's socket
-sudo gh-broker agent remove <user>   # group, MCP entry (backup first), the user's lock state, restart
+sudo gh-broker agent remove <user>   # empty the group, restart (closes the socket), then the MCP entry (backup first) and the user's lock state
 sudo gh-broker agent list            # socket path, whether it exists, and whether the MCP config points at it (ok / missing / points elsewhere)
 sudo gh-broker agent sync [<user>]   # re-apply the MCP config for one agent or all
 ```
+
+`agent remove` empties the agent's group rather than deleting it. Processes the user already has running keep that group's id, so deleting it would let a later `agent add` reuse the id and give those processes the new agent's socket. An empty group isn't an agent; `agent add` for the same user fills it again.
 
 **The MCP config.** The broker writes the entry into the top-level `mcpServers` of `<home>/.claude.json`, using `sg` so the new group is effective without a re-login:
 

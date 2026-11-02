@@ -7,6 +7,7 @@ gh-broker-clients:x:984:gh-broker,repo,glmtest,Bad.Name,rummage
 gh-broker-agent-repo:x:990:gh-broker,repo
 gh-broker-agent-half:x:991:repo
 gh-broker-agent-extra:x:993:gh-broker,extra,glmtest
+gh-broker-agent-gone:x:994:
 gh-broker-agent-BAD:x:992:gh-broker,BAD
 nogid
 :x:1:

@@ -21,7 +21,7 @@
  * read-back check) with every filesystem effect injected. Root does that work in a directory the
  * agent user owns, so `readOwnedFile` refuses anything but the user's own plain file.
  */
-import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { agentGroup, socketPath } from "./agents.mjs";
 
 export const MCP_FILE = ".claude.json";
@@ -55,8 +55,12 @@ export function readOwnedFile(path, uid) {
 		if (!st.isFile()) throw new UnsafeFile(`${path} is not a regular file`);
 		if (st.uid !== uid) throw new UnsafeFile(`${path} is owned by uid ${st.uid}, not the agent user (uid ${uid})`);
 		if (st.nlink !== 1) throw new UnsafeFile(`${path} has ${st.nlink} hard links`);
-		if (st.size > MAX_CONFIG_BYTES) throw new UnsafeFile(`${path} is ${st.size} bytes, over the ${MAX_CONFIG_BYTES}-byte limit`);
-		return { text: readFileSync(fd, "utf8"), stat: { uid: st.uid, gid: st.gid, mode: st.mode } };
+		// Read at most one byte past the limit ourselves: the owner can grow the file after fstat.
+		const buf = Buffer.alloc(MAX_CONFIG_BYTES + 1);
+		let length = 0;
+		for (let n; length < buf.length && (n = readSync(fd, buf, length, buf.length - length, null)) > 0; ) length += n;
+		if (length > MAX_CONFIG_BYTES) throw new UnsafeFile(`${path} is over the ${MAX_CONFIG_BYTES}-byte limit`);
+		return { text: buf.toString("utf8", 0, length), stat: { uid: st.uid, gid: st.gid, mode: st.mode } };
 	} finally {
 		closeSync(fd);
 	}

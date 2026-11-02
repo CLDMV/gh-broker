@@ -100,10 +100,12 @@ async function add(config, user, noMcp, d) {
 function remove(config, user, d) {
 	assertAgentName(user);
 	if (!registry(d).some((a) => a.user === user)) throw new Error(`"${user}" is not a registered agent`);
-	// The group goes first: it is what gives the agent its socket, so nothing the agent can do to
-	// its own home directory (which the MCP cleanup below edits) can stop the removal.
+	// The group and the restart go first: they are what close the agent's socket, so nothing the
+	// agent can do to its own home directory (which the MCP cleanup below edits) can stop that.
 	d.removeGroup(user);
-	d.log(`${user}: group ${agentGroup(user)} removed`);
+	d.log(`${user}: unregistered (group ${agentGroup(user)} emptied; it is kept so its id is never given to another agent)`);
+	d.restart();
+	d.log("service restarted");
 	const info = d.userInfo(user);
 	if (info) {
 		try {
@@ -124,12 +126,9 @@ function remove(config, user, d) {
 			d.error(`${statePath} is corrupt, so ${user}'s entry was not cleared; run "sudo gh-broker otp unlock --all"`);
 		}
 	} catch (err) {
-		// The agent is already unregistered; a leftover entry is harmless, and the restart below
-		// still has to run to close its socket.
+		// The agent is already unregistered and its socket closed; a leftover entry is harmless.
 		d.error(`${user}: lock state not cleared: ${err.message}. "sudo gh-broker otp unlock ${user}" clears it later.`);
 	}
-	d.restart();
-	d.log("service restarted");
 	return 0;
 }
 

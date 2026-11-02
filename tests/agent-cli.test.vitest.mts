@@ -137,7 +137,7 @@ describe("agent remove", () => {
 			mcpIO: { read: () => { order.push("mcp"); return { text: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } }), stat: { uid: 1000, gid: 1000, mode: 0o100600 } }; }, write: () => { throw new Error("EISDIR"); } }
 		});
 		expect(await agentCommand("remove", ["repo"], config, blocked.d)).toBe(0);
-		expect(order).toEqual(["group", "mcp", "restart"]);
+		expect(order).toEqual(["group", "restart", "mcp"]);
 		expect(blocked.err[0]).toBe("repo: could not remove the broker entry from /home/repo/.claude.json: EISDIR. The agent is unregistered anyway; remove the entry by hand.");
 		const gone = makeDeps({ userInfo: () => undefined });
 		await agentCommand("remove", ["repo"], config, gone.d);

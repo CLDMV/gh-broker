@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { OtpStateFile, emptyState, emptyUser, parseState, userState } from "../src/otp/state.ts";
 
@@ -82,6 +82,16 @@ describe("OtpStateFile", () => {
 		expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(state);
 		expect(f.read()).toEqual({ ok: true, state });
 		expect(new OtpStateFile(path).read()).toEqual({ ok: true, state });
+	});
+
+	it("after its own write, still notices a file put in place by someone else (the root CLI)", () => {
+		const path = join(dir, "state.json");
+		const f = new OtpStateFile(path);
+		f.write({ ...emptyState(), lastAcceptedStep: 5 });
+		expect(f.read()).toEqual({ ok: true, state: { ...emptyState(), lastAcceptedStep: 5 } }); // served from the cache
+		writeFileSync(`${path}.cli`, JSON.stringify({ ...emptyState(), lastAcceptedStep: 6 }));
+		renameSync(`${path}.cli`, path);
+		expect(f.read()).toEqual({ ok: true, state: { ...emptyState(), lastAcceptedStep: 6 } });
 	});
 
 	it("serves the cached read while the file is unchanged and re-reads when it changes", () => {

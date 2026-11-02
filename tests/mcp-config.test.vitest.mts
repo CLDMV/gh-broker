@@ -248,6 +248,10 @@ describe("readOwnedFile", () => {
 		const big = join(dir, "big.json");
 		writeFileSync(big, "");
 		truncateSync(big, m.MAX_CONFIG_BYTES + 1);
-		expect(() => m.readOwnedFile(big, uid)).toThrow(/over the 16777216-byte limit/);
+		expect(() => m.readOwnedFile(big, uid)).toThrow(/is over the 16777216-byte limit/);
+		const exact = join(dir, "exact.json");
+		writeFileSync(exact, "");
+		truncateSync(exact, m.MAX_CONFIG_BYTES);
+		expect(m.readOwnedFile(exact, uid)!.text.length).toBe(m.MAX_CONFIG_BYTES); // the limit itself is fine
 	});
 });

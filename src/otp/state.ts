@@ -27,7 +27,7 @@
  *   the file can never unlock anything.
  */
 
-import { closeSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fstatSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { isAgentUser } from "../agents.ts";
@@ -158,11 +158,16 @@ export class OtpStateFile {
 	write(state: OtpState): void {
 		this.cached = { ok: true, state };
 		const tmp = `${this.path}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+		let written: string;
 		try {
 			const fd = openSync(tmp, "wx", 0o600);
 			try {
 				writeSync(fd, `${JSON.stringify(state, null, "\t")}\n`);
 				fsyncSync(fd);
+				// The signature of this file, taken now: the rename keeps its inode and mtime. Taking it
+				// after the rename could pick up a CLI write that landed in between and treat it as ours.
+				const st = fstatSync(fd);
+				written = `${st.ino}:${st.mtimeMs}:${st.size}`;
 			} finally {
 				closeSync(fd);
 			}
@@ -176,8 +181,8 @@ export class OtpStateFile {
 			this.sig = signature(this.path); // keep serving the in-memory state while the file is unchanged
 			throw new Error(`OTP state could not be saved to ${this.path}: ${(err as Error).message}`);
 		}
+		this.sig = written;
 		syncDir(dirname(this.path));
-		this.sig = signature(this.path);
 	}
 }
 

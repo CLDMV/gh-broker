@@ -160,14 +160,15 @@ describe("account creation", () => {
 		expect(calls()).toContain("gpasswd --members svc,repo gh-broker-agent-repo");
 	});
 
-	it("removeAgentGroup deletes the group only when it exists", () => {
+	it("removeAgentGroup empties the group (keeping its gid) only when it exists", () => {
 		route({ getent: ok("x:x:1:") });
 		sys.removeAgentGroup("repo");
-		expect(calls()).toContain("groupdel gh-broker-agent-repo");
+		expect(calls()).toContain("gpasswd --members  gh-broker-agent-repo");
+		expect(calls().some((c) => c.startsWith("groupdel"))).toBe(false);
 		h.spawnSync.mockReset();
 		route({ getent: fail(2) });
 		sys.removeAgentGroup("repo");
-		expect(calls().some((c) => c.startsWith("groupdel"))).toBe(false);
+		expect(calls().some((c) => c.startsWith("gpasswd"))).toBe(false);
 	});
 
 	it("createAgentUser creates a plain user", () => {

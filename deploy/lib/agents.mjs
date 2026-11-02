@@ -65,7 +65,8 @@ export function parseGroups(text) {
 
 /**
  * Every `gh-broker-agent-<u>` group, with whether it is complete: its members are exactly the
- * service user and `<u>`, the same test the daemon uses (it ignores a group that isn't).
+ * service user and `<u>`, the same test the daemon uses (it ignores a group that isn't). A group
+ * with no members is a removed agent (see removeAgentGroup) and isn't listed.
  * @returns {Array<{ user: string, gid: number, complete: boolean }>} sorted by user
  */
 export function registeredAgents(groups) {
@@ -73,7 +74,7 @@ export function registeredAgents(groups) {
 	for (const g of groups) {
 		if (!g.name.startsWith(AGENT_GROUP_PREFIX)) continue;
 		const user = g.name.slice(AGENT_GROUP_PREFIX.length);
-		if (!validAgentName(user)) continue;
+		if (!validAgentName(user) || g.members.length === 0) continue;
 		const members = new Set(g.members);
 		out.push({ user, gid: g.gid, complete: members.size === 2 && members.has(SVC_USER) && members.has(user) });
 	}

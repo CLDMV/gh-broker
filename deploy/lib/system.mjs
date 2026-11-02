@@ -95,10 +95,14 @@ export function ensureAgentGroup(user, svcUser = "gh-broker") {
 	run("gpasswd", ["--members", `${svcUser},${user}`, group]);
 }
 
-/** Unregister an agent: delete its group. */
+/**
+ * Unregister an agent: empty its group, which the broker then ignores. The group itself is kept,
+ * because processes the agent already has running keep its gid; deleting the group would free
+ * that gid for the next agent's group, and those processes could reach the new agent's socket.
+ */
 export function removeAgentGroup(user) {
 	const group = `gh-broker-agent-${user}`;
-	if (groupExists(group)) run("groupdel", [group]);
+	if (groupExists(group)) run("gpasswd", ["--members", "", group]);
 }
 
 /** Create a plain unprivileged agent user with a home + login shell, and no sudo. */
