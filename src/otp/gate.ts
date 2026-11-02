@@ -95,6 +95,8 @@ export class OtpGate {
 	/** Per-process key for window ids. */
 	private readonly idKey = randomBytes(32);
 	private windows: OpenWindow[] = [];
+	/** Users whose latest bad-code count is only in memory because the state file couldn't be written. */
+	private readonly unsaved = new Set<string>();
 
 	constructor(config: Config, secrets: SecretStore, options: OtpGateOptions = {}) {
 		this.config = config;
@@ -150,6 +152,19 @@ export class OtpGate {
 			throw new OtpRefusal(`OTP is locked for ${minutes} more minute(s) after too many bad codes. Nothing was run.`, { otp: "locked" });
 		}
 
+		const unsavedRefusal = (): OtpRefusal => new OtpRefusal(`OTP could not be checked: the broker could not save its OTP state. Nothing was run.`, { otp: "refused" });
+		// A bad code this user sent couldn't be saved (disk full, say): check nothing more for them
+		// until the counters are on disk, so a restart can't hand out a fresh guess budget.
+		if (this.unsaved.has(user)) {
+			try {
+				this.state.write(this.compact(state, now));
+				this.unsaved.delete(user);
+			} catch (err) {
+				console.error(`gh-broker: ${(err as Error).message}`);
+				throw unsavedRefusal();
+			}
+		}
+
 		const refusal = (): OtpRefusal =>
 			new OtpRefusal(`OTP required for ${tool}: ask the user for a current code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`, { otp: "refused" });
 
@@ -173,7 +188,7 @@ export class OtpGate {
 				this.state.write(this.compact({ ...state, lastAcceptedStep: step, users: { ...state.users, [user]: { ...mine, failures: 0 } } }, now));
 			} catch (err) {
 				console.error(`gh-broker: ${(err as Error).message}`);
-				throw new OtpRefusal(`OTP could not be checked: the broker could not save its OTP state. Nothing was run.`, { otp: "refused" });
+				throw unsavedRefusal();
 			}
 			const id = createHmac("sha256", this.idKey).update(`${user}\0${code}`).digest("hex").slice(0, 16);
 			const expiresAt = now + this.settings.windowSeconds * 1000;
@@ -181,6 +196,9 @@ export class OtpGate {
 			return { otp: "opened", window: id, until: new Date(expiresAt).toISOString() };
 		}
 
+		// A real code whose step is already spent (reused, or spent by an unlock) is refused but isn't
+		// a guess, so it doesn't count toward a lockout.
+		if (step !== undefined) throw refusal();
 		this.recordFailure(tool, state, mine, user, now);
 		throw refusal();
 	}
@@ -204,7 +222,9 @@ export class OtpGate {
 		try {
 			this.state.write(this.compact({ ...state, users: { ...state.users, [user]: next } }, now));
 		} catch (err) {
-			// The counters still advance in memory; the refusal stands either way.
+			// The counters still advance in memory and the refusal stands; authorize() refuses this
+			// user's gated calls until they can be saved.
+			this.unsaved.add(user);
 			console.error(`gh-broker: ${(err as Error).message}`);
 		}
 	}

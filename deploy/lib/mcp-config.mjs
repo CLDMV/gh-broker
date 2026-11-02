@@ -28,12 +28,15 @@ export const MCP_FILE = ".claude.json";
 export const MCP_BACKUP = ".claude.json.gh-broker.bak";
 const BROKER_PATH = "/run/gh-broker/";
 
-/** A file root must not read or replace: a symlink, not a regular file, not the user's, or hard-linked. */
+/** Largest ~/.claude.json root will read (Claude Code's own file is far smaller). */
+export const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
+
+/** A file root must not read or replace: a symlink, not a regular file, not the user's, hard-linked, or oversized. */
 export class UnsafeFile extends Error {}
 
 /**
  * Read `path` as root on behalf of the user `uid`, without following a symlink: the file must be
- * a regular file owned by `uid` with a single link. Opened with O_NOFOLLOW (and O_NONBLOCK, so a
+ * a regular file owned by `uid` with a single link, and no larger than MAX_CONFIG_BYTES. Opened with O_NOFOLLOW (and O_NONBLOCK, so a
  * FIFO can't hang the read), then checked and read through the same descriptor, so it can't be
  * swapped between the check and the read.
  * @returns {{ text: string, stat: { uid: number, gid: number, mode: number } } | undefined} undefined when there is no file
@@ -52,6 +55,7 @@ export function readOwnedFile(path, uid) {
 		if (!st.isFile()) throw new UnsafeFile(`${path} is not a regular file`);
 		if (st.uid !== uid) throw new UnsafeFile(`${path} is owned by uid ${st.uid}, not the agent user (uid ${uid})`);
 		if (st.nlink !== 1) throw new UnsafeFile(`${path} has ${st.nlink} hard links`);
+		if (st.size > MAX_CONFIG_BYTES) throw new UnsafeFile(`${path} is ${st.size} bytes, over the ${MAX_CONFIG_BYTES}-byte limit`);
 		return { text: readFileSync(fd, "utf8"), stat: { uid: st.uid, gid: st.gid, mode: st.mode } };
 	} finally {
 		closeSync(fd);

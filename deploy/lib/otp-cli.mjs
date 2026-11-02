@@ -128,7 +128,7 @@ async function rotate(config, d) {
 	try {
 		d.storeSeed(config, name, seed);
 	} catch (err) {
-		throw new Error(`storing the new seed failed (${err.message}); the key above is not in use. Nothing was restarted; run "sudo gh-broker otp rotate" again`);
+		throw new Error(`storing the new seed failed (${err.message}); the key above is not in use and the old seed is still the stored one. Nothing was restarted; run "sudo gh-broker otp rotate" again`);
 	}
 	d.restart();
 	d.log("service restarted. The old authenticator entry no longer works; remove it from your app.");

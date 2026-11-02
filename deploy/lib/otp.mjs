@@ -94,7 +94,8 @@ export function seedExists({ name, existingFile, credFileExists }) {
 
 /**
  * Store a seed in the backend the install uses. The systemd-creds backend replaces the `.cred`
- * and rewrites the unit drop-in so the credential is delivered; the file backend sets the key in
+ * (atomically: the old one stays until the new one is written) and rewrites the unit drop-in so
+ * the credential is delivered; the file backend sets the key in
  * the secrets file. `io` carries every effect.
  * @param {object} o
  * @param {{ secrets?: { provider?: string } }} o.config
@@ -108,9 +109,14 @@ export function storeSeed({ config, name, seed, paths, io }) {
 		io.writeSecretsFile(paths.secrets, { ...io.readSecretsFile(paths.secrets), [name]: seed });
 		return "file";
 	}
+	// Encrypt to a side file and rename it over the old one, so a failed encrypt leaves the old
+	// seed (and the unit's LoadCredentialEncrypted) intact. systemd-creds won't overwrite a file,
+	// so a leftover side file from an earlier failure is removed first.
 	const credFile = join(paths.credsDir, `${name}.cred`);
-	io.removeFile(credFile); // systemd-creds will not replace an existing output file
-	io.encrypt(name, seed, credFile);
+	const next = `${credFile}.new`;
+	io.removeFile(next);
+	io.encrypt(name, seed, next);
+	io.rename(next, credFile);
 	const names = new Set(io.listCreds(paths.credsDir));
 	names.add(name);
 	io.writeDropin([...names].sort(), paths.credsDir);

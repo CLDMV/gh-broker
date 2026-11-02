@@ -140,7 +140,14 @@ function list(config, d) {
 	for (const a of agents) {
 		const sock = socketPath(dir, a.user);
 		const info = d.userInfo(a.user);
-		const mcp = info ? mcpFileStatus({ home: info.home, user: a.user, dir, uid: info.uid }, d.mcpIO) : "no such user";
+		let mcp = "no such user";
+		if (info) {
+			try {
+				mcp = mcpFileStatus({ home: info.home, user: a.user, dir, uid: info.uid }, d.mcpIO);
+			} catch (err) {
+				mcp = `can't read (${err.message})`; // one agent's file must not hide the others
+			}
+		}
 		d.log(`${a.user}  ${sock}  socket: ${d.socketExists(sock) ? "yes" : "no"}  mcp: ${mcp}${a.complete ? "" : "  (group members incomplete; run agent add)"}`);
 	}
 	const warn = versionWarning(d.versions().pkg, d.versions().deployed);

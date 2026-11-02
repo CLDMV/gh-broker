@@ -176,6 +176,10 @@ describe("agent list", () => {
 		const unsafe = makeDeps({ mcpIO: unsafeIO });
 		await agentCommand("list", [], config, unsafe.d);
 		expect(unsafe.out).toContain("repo  /run/gh-broker/agents/repo.sock  socket: yes  mcp: unsafe (/home/repo/.claude.json is a symlink)");
+		const broken = makeDeps({ mcpIO: { read: (p: string) => { if (p.includes("glmtest")) throw new Error("ERR_STRING_TOO_LONG"); return undefined; }, write: () => {} } });
+		expect(await agentCommand("list", [], config, broken.d)).toBe(0);
+		expect(broken.out).toContain("glmtest  /run/gh-broker/agents/glmtest.sock  socket: yes  mcp: can't read (ERR_STRING_TOO_LONG)  (group members incomplete; run agent add)");
+		expect(broken.out).toContain("repo  /run/gh-broker/agents/repo.sock  socket: yes  mcp: missing");
 	});
 
 	it("handles no agents, a missing user, a missing config, and version drift", async () => {

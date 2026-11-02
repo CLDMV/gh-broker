@@ -18,7 +18,7 @@
  * MCP config and smoke test. Wiring only: the logic and its tests are in lib/. Kept apart from
  * cli.mjs because cli.mjs awaits the installer, which imports this.
  */
-import { readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, rmSync, renameSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,6 +88,7 @@ export function realDeps() {
 					writeSecretsFile: (p, v) => writeSecretsFile(p, v, { gid }),
 					removeFile: (f) => rmSync(f, { force: true }),
 					encrypt: systemdCredsEncrypt,
+					rename: renameSync,
 					listCreds: (dir) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".cred")).map((f) => f.slice(0, -".cred".length)) : []),
 					writeDropin: writeCredsDropin
 				}

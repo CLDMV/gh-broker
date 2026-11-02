@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync, chmodSync, symlinkSync, linkSync, lstatSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync, chmodSync, symlinkSync, linkSync, lstatSync, truncateSync } from "node:fs";
 import { join } from "node:path";
 import * as m from "../deploy/lib/mcp-config.mjs";
 import { writeFileAtomic } from "../deploy/lib/otp.mjs";
@@ -245,5 +245,9 @@ describe("readOwnedFile", () => {
 		expect(() => m.readOwnedFile(p, uid + 1)).toThrow(/is owned by uid/);
 		linkSync(p, join(dir, "hard.json"));
 		expect(() => m.readOwnedFile(p, uid)).toThrow(/2 hard links/);
+		const big = join(dir, "big.json");
+		writeFileSync(big, "");
+		truncateSync(big, m.MAX_CONFIG_BYTES + 1);
+		expect(() => m.readOwnedFile(big, uid)).toThrow(/over the 16777216-byte limit/);
 	});
 });

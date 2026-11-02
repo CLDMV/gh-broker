@@ -87,7 +87,7 @@ Flags:
   --agent-user <name>     an unprivileged agent user to register (also positional).
                           Each agent gets its own socket and MCP config. Optional on an
                           upgrade (registered agents are kept); a first install with none
-                          uses $SUDO_USER or asks
+                          asks (never $SUDO_USER)
   --no-mcp-config         do not write any agent's ~/.claude.json; print the entry instead
   --secrets-provider <p>  systemd-creds | file   (skips the prompt)
   --secrets-file <path>   JSON { "<cred-name>": "<token>" } to import tokens from
@@ -187,7 +187,8 @@ async function main() {
 	// --- agent users ---
 	// An agent is registered by the group gh-broker-agent-<user>. Upgrades keep the registered ones,
 	// migrate members of the old shared gh-broker-clients group, and add the one named on the
-	// command line. A first install with none asks (or uses $SUDO_USER).
+	// command line. A first install with none asks. It never defaults to $SUDO_USER: that is the
+	// admin running sudo, and an agent must be a plain user without it.
 	step("agent users");
 	const groupFile = "/etc/group";
 	const groups = parseGroups(existsSync(groupFile) ? readFileSync(groupFile, "utf8") : "");
@@ -196,11 +197,8 @@ async function main() {
 	for (const name of migration.skipped) log(`  skipping ${LEGACY_CLIENTS_GROUP} member "${name}": not a valid agent user name`);
 	let requested = opts.agentUser || opts.positional[0] || "";
 	if (!requested && registered.length === 0 && migration.add.length === 0) {
-		requested = process.env.SUDO_USER || "";
-		if (!requested) {
-			if (opts.nonInteractive) die("no agent user — pass --agent-user <name>");
-			requested = await promptLine("Which unprivileged user does the agent run as? ");
-		}
+		if (opts.nonInteractive) die("no agent user — pass --agent-user <name>");
+		requested = await promptLine("Which unprivileged user does the agent run as? ");
 		if (!requested) die("no agent user given");
 	}
 	if (requested) {

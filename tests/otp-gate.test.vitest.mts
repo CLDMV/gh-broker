@@ -139,10 +139,11 @@ describe("OtpGate windows", () => {
 		const c = h.code();
 		h.auth(c, "repo");
 		// glmtest sends the same code: it isn't repo's window, and the code is spent for everyone.
+		// It is a real code, though, so it isn't counted as a guess.
 		expect(refusal(() => h.auth(c, "glmtest")).message).toMatch(REFUSED);
-		expect(h.readState().users).toEqual({ glmtest: { failures: 1, lockedUntil: null, lockouts: [], hardLock: null } });
+		expect(h.readState().users).toEqual({});
 		expect(h.auth(c, "repo").otp).toBe("window");
-		expect(h.gate.status("glmtest")).toMatchObject({ openWindows: 0, failures: 1 });
+		expect(h.gate.status("glmtest")).toMatchObject({ openWindows: 0, failures: 0 });
 		expect(h.gate.status("repo")).toMatchObject({ openWindows: 1, failures: 0 });
 	});
 
@@ -161,6 +162,7 @@ describe("OtpGate windows", () => {
 		h.auth(c);
 		h.clock.t = T0 + 15_000; // window closed, the code's step is still within ±1
 		expect(refusal(() => h.auth(c)).audit.otp).toBe("refused");
+		expect(h.gate.status("repo")).toMatchObject({ failures: 0 }); // spent, not a guess
 	});
 
 	it("a restart closes the windows and the persisted step stops the old code reopening one", () => {
@@ -169,7 +171,7 @@ describe("OtpGate windows", () => {
 		h.auth(c);
 		const restarted = h.make();
 		expect(refusal(() => h.auth(c, "repo", restarted)).message).toMatch(REFUSED);
-		expect(restarted.status("repo")).toMatchObject({ openWindows: 0, failures: 1 });
+		expect(restarted.status("repo")).toMatchObject({ openWindows: 0, failures: 0 });
 	});
 
 	it("an older code than the last accepted one is refused", () => {
@@ -218,10 +220,15 @@ describe("OtpGate windows", () => {
 		expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/OTP state could not be saved/));
 	});
 
-	it("keeps counting in memory when a failure can't be saved", () => {
-		const h = harness({ statePath: join(ROOT, "no-such-dir", "state.json"), maxFailures: 2 });
+	it("after a failure that can't be saved, refuses that user until the counters are on disk", () => {
+		const missing = join(ROOT, "late-dir");
+		const h = harness({ statePath: join(missing, "state.json"), maxFailures: 2 });
 		expect(() => h.auth("000000")).toThrow(REFUSED);
-		expect(() => h.auth("000000")).toThrow(REFUSED);
+		const r = refusal(() => h.auth(h.code()));
+		expect(r.message).toBe("OTP could not be checked: the broker could not save its OTP state. Nothing was run.");
+		mkdirSync(missing);
+		expect(() => h.auth("000000")).toThrow(REFUSED); // the saved count is 1, so this is the 2nd bad code
+		expect(JSON.parse(readFileSync(join(missing, "state.json"), "utf8")).users.repo).toMatchObject({ failures: 0, lockouts: [expect.any(String)] });
 		expect(refusal(() => h.auth(h.code())).audit.otp).toBe("locked");
 	});
 });

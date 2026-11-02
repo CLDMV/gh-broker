@@ -34,13 +34,13 @@ OTP required for <tool>: ask the user for a current code from their authenticato
 
 The `otp` argument is the broker's own: it is removed from the arguments of every call, gated or not, before anything is forwarded upstream or handed to a verb.
 
-**Guessing.** A missing code doesn't count. Each wrong, expired or reused code does: after `maxFailures` (default 5) the gated tools are refused for that user for `lockoutSeconds` (default 600) without any code being checked (`OTP is locked for <n> more minute(s) after too many bad codes. Nothing was run.`). After `maxLockouts` (default 3) of those short lockouts in a rolling 24 hours, that user is hard-locked: every tool except `otp_status` is refused for them, ungated ones included, until root clears it. Other agents are not affected.
+**Guessing.** A missing code doesn't count, and neither does a real code whose time step is already spent (reused, or spent by an unlock): it is refused but isn't a guess. Each wrong or expired code does count: after `maxFailures` (default 5) the gated tools are refused for that user for `lockoutSeconds` (default 600) without any code being checked (`OTP is locked for <n> more minute(s) after too many bad codes. Nothing was run.`). After `maxLockouts` (default 3) of those short lockouts in a rolling 24 hours, that user is hard-locked: every tool except `otp_status` is refused for them, ungated ones included, until root clears it. Other agents are not affected.
 
 ```
 gh-broker is locked for <user> after repeated bad OTP codes (since <ISO>). Ask the user to run "sudo gh-broker otp unlock <user>" on <host>. Nothing was run.
 ```
 
-Bad-code counts, short lockouts and hard locks are kept per agent user. A short lockout and a hard lock each get their own audit entry (`otp: "lockout"` with `until`, or `otp: "hard-lock"`), and a call that opens a window logs `otp: "opened"` with the window's `until`. A code sent as a JSON number is read as six digits (so `12345` is `012345`); any other non-string `otp` is refused without counting as a bad code.
+Bad-code counts, short lockouts and hard locks are kept per agent user. A short lockout and a hard lock each get their own audit entry (`otp: "lockout"` with `until`, or `otp: "hard-lock"`), and a call that opens a window logs `otp: "opened"` with the window's `until`. If a bad code can't be saved to the state file (a full disk, say), that user's gated calls are refused until it can, so a restart can't wipe a count that was never written. A code sent as a JSON number is read as six digits (so `12345` is `012345`); any other non-string `otp` is refused without counting as a bad code.
 
 **Setup.** The gate needs `config.otp` and its seed credential (base32, generated and shown once by the installer, stored with the PATs). Without either, every gated tool is hidden and refused with the reason, and the rest of the broker runs normally.
 

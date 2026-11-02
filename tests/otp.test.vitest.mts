@@ -78,6 +78,7 @@ describe("seed credential", () => {
 				writeSecretsFile: vi.fn((p: string, v: unknown) => calls.push(`write ${p} ${JSON.stringify(v)}`)),
 				removeFile: vi.fn((f: string) => calls.push(`rm ${f}`)),
 				encrypt: vi.fn((n: string, v: string, f: string) => calls.push(`enc ${n} ${v} ${f}`)),
+				rename: vi.fn((a: string, b: string) => calls.push(`mv ${a} ${b}`)),
 				listCreds: vi.fn(() => creds),
 				writeDropin: vi.fn((names: string[], d: string) => calls.push(`dropin ${names.join(",")} ${d}`))
 			}
@@ -94,7 +95,15 @@ describe("seed credential", () => {
 	it("replaces the .cred and rewrites the drop-in for systemd-creds (default backend)", () => {
 		const t = io(["b-read", "a-read"]);
 		expect(otp.storeSeed({ config: {}, name: "otp-seed", seed: "SEED", paths, io: t.io })).toBe("systemd-creds");
-		expect(t.calls).toEqual(["rm /c/creds/otp-seed.cred", "enc otp-seed SEED /c/creds/otp-seed.cred", "dropin a-read,b-read,otp-seed /c/creds"]);
+		expect(t.calls).toEqual(["rm /c/creds/otp-seed.cred.new", "enc otp-seed SEED /c/creds/otp-seed.cred.new", "mv /c/creds/otp-seed.cred.new /c/creds/otp-seed.cred", "dropin a-read,b-read,otp-seed /c/creds"]);
+	});
+
+	it("keeps the old .cred when the encrypt fails", () => {
+		const t = io();
+		t.io.encrypt.mockImplementation(() => { throw new Error("tpm busy"); });
+		expect(() => otp.storeSeed({ config: {}, name: "otp-seed", seed: "SEED", paths, io: t.io })).toThrow("tpm busy");
+		expect(t.calls).toEqual(["rm /c/creds/otp-seed.cred.new"]);
+		expect(t.io.rename).not.toHaveBeenCalled();
 	});
 });
 

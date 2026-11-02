@@ -168,7 +168,7 @@ describe("otp rotate", () => {
 
 	it("shows the seed before storing it, and says it isn't in use when storing fails", async () => {
 		const { d, out } = makeDeps({ storeSeed: () => { throw new Error("disk full"); } });
-		await expect(otpCommand("rotate", [], config, d)).rejects.toThrow('storing the new seed failed (disk full); the key above is not in use. Nothing was restarted; run "sudo gh-broker otp rotate" again');
+		await expect(otpCommand("rotate", [], config, d)).rejects.toThrow('storing the new seed failed (disk full); the key above is not in use and the old seed is still the stored one. Nothing was restarted; run "sudo gh-broker otp rotate" again');
 		expect(out.join("\n")).toContain("key: NEWSEED");
 		expect(d.restart).not.toHaveBeenCalled();
 	});
