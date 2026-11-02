@@ -73,10 +73,16 @@ The only thing that can't be Node is bootstrapping node itself. So the entrypoin
 4. **regenerate the config** by layering the example, the deployed config, `--config` and the flags (a first install with no owner asks for one),
 5. **choose the secret backend and store the PATs** — keep existing, migrate a legacy `systemd-creds` token, or take it from `--secrets-file` / env / a prompt (see the Secrets section),
 6. validate the config with the real loader (`node dist/index.mjs --check`),
-7. build + deploy (unit → `/usr/local/bin/node`, `dist/`, config, secrets),
+7. build + deploy (unit → `/usr/local/bin/node`, `dist/`, the `gh-broker` launcher, config, secrets), generating the OTP seed on the way if none is stored,
 8. **smoke test** — MCP `initialize` + one real read over the socket → ✅/❌.
 
 The same flow runs **fully unattended** via flags — `--agent-user`, `--secrets-provider`, `--secrets-file` / `GH_BROKER_SECRET_<NAME>`, `--create-agent-user`, `--non-interactive`, and the config flags (`--owner`, `--config`, ...); prompts are the default when flags are omitted. See [`../deploy/README.md`](../deploy/README.md) and `--help`.
+
+## The OTP gate's install side
+
+The TOTP seed is a credential like the PATs: `config.otp.seed` is a `cred:` ref, it is stored by the same backend code path (so `systemd-creds` delivers it through the unit drop-in, `file` keeps it in `secrets.json`), and the config stays token-free. The installer generates it only when none is stored and prints it once from the secrets step; `gh-broker otp rotate` is the only way to replace it afterwards.
+
+The `gh-broker` command is a second esbuild entry (`deploy/cli.mjs` → `dist/cli.mjs`) bundled with its own dependencies, so it runs from the deployed `/opt/gh-broker/dist` with no `node_modules`. The installer writes `/usr/local/bin/gh-broker`, a two-line shell launcher that runs the bundle with the maintained `/usr/local/bin/node`, so the command and the service share a node. The commands that change state (`unlock`, `rotate`) need root: the lock state is in `/var/lib/gh-broker` (`StateDirectory=gh-broker`, `0700`), which is the unit's only writable path besides the runtime directory.
 
 ## What is deliberately deferred
 

@@ -48,6 +48,10 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 ReadWritePaths=/run/gh-broker
+# OTP gate state (lock counters, hard lock): /var/lib/gh-broker, created 0700 gh-broker:gh-broker.
+# StateDirectory= makes it writable under ProtectSystem=strict; `sudo gh-broker otp unlock` edits it.
+StateDirectory=gh-broker
+StateDirectoryMode=0700
 UMask=0077
 # Optional egress lockdown once GitHub ranges are pinned:
 # IPAddressDeny=any

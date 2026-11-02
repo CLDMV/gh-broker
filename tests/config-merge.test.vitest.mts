@@ -323,3 +323,40 @@ describe("secretsBlock", () => {
 		expect(() => secretsBlock("systemd-creds", { path: "/s.json" })).toThrow(/only used by the "file" provider/);
 	});
 });
+
+describe("otp block (#143)", () => {
+	const exampleOtp = { ...example, otp: { seed: "cred:otp-seed" } };
+
+	it("carries the example's otp block into an existing install that has none", () => {
+		expect(mergeConfig(exampleOtp, { ...example }).otp).toEqual({ seed: "cred:otp-seed" });
+		expect(mergeConfig(exampleOtp, null).otp).toEqual({ seed: "cred:otp-seed" });
+	});
+
+	it("lets the deployed otp block win per field and keeps new example defaults", () => {
+		const current = { ...example, otp: { seed: "cred:mine", maxFailures: 9 } };
+		expect(mergeConfig(exampleOtp, current).otp).toEqual({ seed: "cred:mine", maxFailures: 9 });
+		expect(mergeConfig(exampleOtp, { ...example, otp: { statePath: "/x.json" } }).otp).toEqual({ seed: "cred:otp-seed", statePath: "/x.json" });
+		expect(mergeConfig(example, { ...example, otp: { seed: "cred:mine" } }).otp).toEqual({ seed: "cred:mine" });
+	});
+
+	it("does not mutate the deployed block", () => {
+		const current = { ...example, otp: { seed: "cred:mine" } };
+		const merged = mergeConfig(exampleOtp, current);
+		merged.otp.maxFailures = 1;
+		expect(current.otp).toEqual({ seed: "cred:mine" });
+	});
+
+	it("layers a --config otp block per field and accepts the key", () => {
+		expect(layerConfig(exampleOtp, { otp: { maxLockouts: 2 } }).otp).toEqual({ seed: "cred:otp-seed", maxLockouts: 2 });
+		expect(layerConfig(example, { otp: { seed: "cred:s" } }).otp).toEqual({ seed: "cred:s" });
+		expect(readOperatorConfig("c.json", () => JSON.stringify({ otp: { seed: "cred:s" } }))).toEqual({ otp: { seed: "cred:s" } });
+	});
+
+	it("buildConfig keeps the example's otp on a first install and a user's override on upgrade", async () => {
+		const flags = { owners: [], installationIds: {}, ghcrImages: [] };
+		const first = await buildConfig({ example: exampleOtp, current: null, file: undefined, opts: flags, nonInteractive: true, ask: async () => "" });
+		expect(first.config.otp).toEqual({ seed: "cred:otp-seed" });
+		const up = await buildConfig({ example: exampleOtp, current: { ...example, otp: { seed: "cred:otp-seed", maxFailures: 3 } }, file: undefined, opts: flags, nonInteractive: true, ask: async () => "" });
+		expect(up.config.otp).toEqual({ seed: "cred:otp-seed", maxFailures: 3 });
+	});
+});

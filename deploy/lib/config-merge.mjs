@@ -26,7 +26,7 @@
  *     removal or tightening in an update applies and neither the deployed copy, a --config
  *     file nor a flag can widen it. A --config file that contains `tools` is refused.
  *   - Everything else is operator data and the deployed copy wins over the example: `listen`,
- *     `upstream`, `defaultOwner`, `owners`, `ghcr`, `app`, `secrets`, `npm`. The example ships
+ *     `upstream`, `defaultOwner`, `owners`, `ghcr`, `app`, `secrets`, `npm`, `otp`. The example ships
  *     none of the owner-specific ones, so a fresh install has no owners until the operator
  *     supplies one (--owner, --config, or the interactive prompt).
  *   - Layers 3 and 4 are merged on top of what is deployed rather than replacing it: scalars are
@@ -39,7 +39,7 @@
  */
 export const DEFAULT_GHCR_DROP_DIR = "/srv/gh-broker/ghcr-drop";
 
-const OPERATOR_KEYS = ["listen", "upstream", "defaultOwner", "owners", "app", "secrets", "npm", "ghcr"];
+const OPERATOR_KEYS = ["listen", "upstream", "defaultOwner", "owners", "app", "secrets", "npm", "ghcr", "otp"];
 const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 /** Shapes of live GitHub / npm tokens (classic, fine-grained, app, npm granular). */
 const TOKEN_SHAPE = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|npm_[A-Za-z0-9]{30,})\b/;
@@ -66,6 +66,10 @@ export function mergeConfig(example, current) {
 		if (current[k] !== undefined) out[k] = structuredClone(current[k]);
 	}
 
+	// otp: the example ships the default seed ref; the deployed block wins per field, so a
+	// user's own limits or state path survive an upgrade and new default fields still arrive.
+	if (current.otp !== undefined) out.otp = { ...(example.otp ?? {}), ...structuredClone(current.otp) };
+
 	return out;
 }
 
@@ -78,7 +82,7 @@ export function layerConfig(base, overlay) {
 	for (const k of ["listen", "upstream", "defaultOwner"]) {
 		if (overlay[k] !== undefined) out[k] = overlay[k];
 	}
-	for (const k of ["app", "secrets", "npm"]) {
+	for (const k of ["app", "secrets", "npm", "otp"]) {
 		if (overlay[k] !== undefined) out[k] = { ...(out[k] ?? {}), ...structuredClone(overlay[k]) };
 	}
 	if (overlay.owners !== undefined) {

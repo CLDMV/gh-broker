@@ -165,3 +165,15 @@ describe("detectSecretsProvider", () => {
 		expect(detectSecretsProvider({ credNames: ["a"], fileTokenNames: ["a"] })).toBeUndefined();
 	});
 });
+
+describe("referencedCredNames: otp seed (#143)", () => {
+	it("includes the otp seed credential and validates its name", () => {
+		expect(referencedCredNames({ otp: { seed: "cred:otp-seed" } })).toEqual(["otp-seed"]);
+		expect(referencedCredNames({ otp: {} })).toEqual([]);
+		expect(() => referencedCredNames({ otp: { seed: "cred:../x" } })).toThrow(/unsafe credential name/);
+	});
+
+	it("never treats the seed as an optional credential", () => {
+		expect(optionalCredNames({ otp: { seed: "cred:otp-seed" } })).toEqual([]);
+	});
+});
