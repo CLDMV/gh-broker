@@ -65,6 +65,15 @@ describe("buildCatalog", () => {
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
 	});
 
+	it("advertises report_dependents with its local schema", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const config = makeConfig([{ name: "report_dependents", mode: "read", custom: true }]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog).toHaveLength(1);
+		expect(catalog[0]).toMatchObject({ name: "report_dependents" });
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "name"] });
+	});
+
 	it("advertises report_release_prs with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "report_release_prs", mode: "read", custom: true }]);

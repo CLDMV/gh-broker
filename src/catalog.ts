@@ -20,6 +20,7 @@ import type { UpstreamPool } from "./upstream.ts";
 // import { LINK_ISSUE_SCHEMA } from "./verbs/link_issue.ts";
 import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verbs/review_thread.ts";
 import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
+import { REPORT_DEPENDENTS_SCHEMA } from "./verbs/report_dependents.ts";
 import { REPORT_SECURITY_ALERTS_SCHEMA } from "./verbs/report_security_alerts.ts";
 import { REPORT_RELEASE_PRS_SCHEMA } from "./verbs/report_release_prs.ts";
 import { REPORT_RELEASE_CHANGES_SCHEMA } from "./verbs/report_release_changes.ts";
@@ -124,6 +125,13 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 					description:
 						"For every open Dependabot alert in one repo, a list of repos, or every repo an owner has, say where its fix stands. Each alert gets one bucket: released-still-open (the default branch's lockfile is already patched, yet the alert is open), fixed-on-next (next or hotfixes is patched, the default branch isn't; waiting for a release), open-pr (an open PR bumps the package; notes a hotfix-redirect twin), closed-unmerged (only closed PRs, and whether a later merge superseded them), or no-pr. Reads package-lock.json / pnpm-lock.yaml / yarn.lock nearest the alert's manifest at each branch, once per commit, size-capped. Also hints per repo whether Dependabot looks paused. Bounded by maxApiCalls; returns truncated:true with a reason and the unreached repos in pending if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
 					inputSchema: REPORT_ALERT_STATUS_SCHEMA
+				});
+			} else if (rule.name === "report_dependents") {
+				tools.push({
+					name: "report_dependents",
+					description:
+						"Find every non-archived, non-fork repo an owner has that declares an npm package in dependencies, devDependencies or peerDependencies, with the declared range, the version the lockfile resolved (package-lock.json or pnpm-lock.yaml), the repo's flow tier (v4 / dev-trunk / non-v4), default branch and visibility. Workspace members are reported against their repo with the member path. Optional latest:true marks the resolved versions that are behind the latest published one. Candidates come from one org code search and are each verified against the default-branch package.json; the search lags recent commits and misses dev-trunk repos whose manifests live on dev (see discovery.note). Bounded by maxRepos/maxFileBytes/maxApiCalls; returns truncated:true (with a reason) instead of failing outright if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
+					inputSchema: REPORT_DEPENDENTS_SCHEMA
 				});
 			} else if (rule.name === "report_release_prs") {
 				tools.push({

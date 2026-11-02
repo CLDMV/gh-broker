@@ -72,13 +72,13 @@ function looksRateLimited(err: Error, headers: Record<string, string> | undefine
 }
 
 /** Runs one octokit.request call, charging the budget and enforcing the rate-limit floor. */
-async function doRequest(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>): Promise<{ data: unknown }> {
+async function doRequest(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>, ignoreRateFloor = false): Promise<{ data: unknown }> {
 	budget.spend();
 	try {
 		const res = await octokit.request(route, params);
 		const headers = res.headers as Record<string, string> | undefined;
 		const remainingHeader = headers?.["x-ratelimit-remaining"];
-		if (remainingHeader !== undefined) {
+		if (remainingHeader !== undefined && !ignoreRateFloor) {
 			const remaining = Number(remainingHeader);
 			const limit = Number(headers?.["x-ratelimit-limit"]);
 			const floor = Number.isFinite(limit) ? Math.max(RATE_LIMIT_FLOOR_MIN, Math.ceil(limit * RATE_LIMIT_FLOOR_RATIO)) : RATE_LIMIT_FLOOR_MIN;
@@ -114,9 +114,20 @@ export async function req<T>(
 	return extract(res.data);
 }
 
-/** Runs one octokit.request call expected to return a single resource (not a listing). */
-export async function reqOne<T>(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>): Promise<T> {
-	const res = await doRequest(octokit, budget, route, params);
+/**
+ * Runs one octokit.request call expected to return a single resource (not a listing).
+ * `ignoreRateFloor` skips the proactive 2% floor for endpoints on their own small quota
+ * (code search allows 10 requests a minute, which would always read as "under the floor");
+ * a real 403/429 still raises RateLimited.
+ */
+export async function reqOne<T>(
+	octokit: Octokit,
+	budget: CallBudget,
+	route: string,
+	params: Record<string, unknown>,
+	opts: { ignoreRateFloor?: boolean } = {}
+): Promise<T> {
+	const res = await doRequest(octokit, budget, route, params, opts.ignoreRateFloor);
 	return res.data as T;
 }
 

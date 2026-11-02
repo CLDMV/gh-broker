@@ -166,3 +166,19 @@ export class NpmRegistry {
 		return (Array.isArray(parsed) ? parsed : [parsed]).filter((c): c is TrustConfig => Boolean(c) && typeof c === "object");
 	}
 }
+
+/**
+ * The latest published version of a package, from the public registry (`GET /<name>/latest`,
+ * no credentials sent). Undefined when the package does not exist.
+ */
+export async function latestVersion(name: string, opts: { registry?: string; fetch?: FetchLike } = {}): Promise<string | undefined> {
+	const base = (opts.registry ?? DEFAULT_REGISTRY).replace(/\/+$/, "");
+	const fetchImpl = opts.fetch ?? (globalThis.fetch as unknown as FetchLike);
+	const res = await fetchImpl(`${base}/${escapePackageName(name)}/latest`, { method: "GET", headers: { accept: "application/json", "user-agent": "gh-broker (report_dependents)" } });
+	const body = await res.text();
+	if (res.status === 404) return undefined;
+	if (res.status !== 200) throw new NpmHttpError("latest lookup", res.status, errorDetail(body));
+	const version = (JSON.parse(body) as { version?: unknown }).version;
+	if (typeof version !== "string") throw new NpmHttpError("latest lookup", res.status, "response has no version");
+	return version;
+}

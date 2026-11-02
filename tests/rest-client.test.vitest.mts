@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { CallBudget, CallBudgetExhausted, RateLimited, listOwnerRepos, paginateAfter, req } from "../src/verbs/rest-client.ts";
+import { CallBudget, CallBudgetExhausted, RateLimited, listOwnerRepos, paginateAfter, req, reqOne } from "../src/verbs/rest-client.ts";
 
 function octokitWith(handler: (route: string, params: any) => Promise<{ data: unknown; headers?: Record<string, string> }>): any {
 	return { request: vi.fn(handler) };
@@ -111,5 +111,26 @@ describe("listOwnerRepos", () => {
 	it("propagates a non-404 error", async () => {
 		const octokit = octokitWith(async () => { throw Object.assign(new Error("boom"), { status: 500 }); });
 		await expect(listOwnerRepos(octokit, new CallBudget(5), "cldmv", 50)).rejects.toThrow("boom");
+	});
+});
+
+describe("rate-limit floor", () => {
+	const lowQuota = { "x-ratelimit-remaining": "9", "x-ratelimit-limit": "10" };
+
+	it("stops proactively once remaining drops under the floor", async () => {
+		const o = octokitWith(async () => ({ data: {}, headers: lowQuota }));
+		await expect(reqOne(o, new CallBudget(5), "GET /x", {})).rejects.toBeInstanceOf(RateLimited);
+	});
+
+	it("ignoreRateFloor skips the proactive stop for small-quota endpoints like code search", async () => {
+		const o = octokitWith(async () => ({ data: { ok: true }, headers: lowQuota }));
+		await expect(reqOne(o, new CallBudget(5), "GET /x", {}, { ignoreRateFloor: true })).resolves.toEqual({ ok: true });
+	});
+
+	it("ignoreRateFloor still raises RateLimited on a real 429", async () => {
+		const o = octokitWith(async () => {
+			throw Object.assign(new Error("Too Many Requests"), { status: 429 });
+		});
+		await expect(reqOne(o, new CallBudget(5), "GET /x", {}, { ignoreRateFloor: true })).rejects.toBeInstanceOf(RateLimited);
 	});
 });
