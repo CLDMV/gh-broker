@@ -18,6 +18,7 @@ import { isAbsolute } from "node:path";
 import type { Config, Mode, OtpConfig, ToolRule } from "./types.ts";
 import { parseGhcrConfig } from "./verbs/ghcr/config.ts";
 import { OTP_STATUS } from "./otp/policy.ts";
+import { agentsDir } from "./agents.ts";
 
 const MODES: readonly Mode[] = ["read", "write"];
 
@@ -32,8 +33,11 @@ export function loadConfig(path: string): Config {
 	if (typeof raw !== "object" || raw === null) throw new Error("config: root must be an object");
 	const c = raw as Record<string, unknown>;
 
-	if (typeof c.listen !== "string" || !c.listen.startsWith("unix:")) {
-		throw new Error('config.listen: must be a "unix:<path>" string');
+	if (typeof c.listen === "string" && c.listen.startsWith("unix:")) {
+		throw new Error('config.listen: the shared "unix:" socket was replaced by one socket per agent; re-run the installer (sudo gh-broker install) to set listen to "agents:/run/gh-broker/agents"');
+	}
+	if (typeof c.listen !== "string" || !agentsDir(c.listen)) {
+		throw new Error('config.listen: must be "agents:<absolute directory>", e.g. "agents:/run/gh-broker/agents"');
 	}
 	if (typeof c.upstream !== "string" || !/^https?:\/\//.test(c.upstream)) {
 		throw new Error("config.upstream: must be an http(s) URL");

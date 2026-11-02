@@ -1,5 +1,5 @@
 {
-	"listen": "unix:/run/gh-broker/gh-broker.sock",
+	"listen": "agents:/run/gh-broker/agents",
 	"upstream": "https://api.githubcopilot.com/mcp/x/all",
 	"tools": [
 		{

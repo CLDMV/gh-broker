@@ -13,7 +13,14 @@ vi.mock("@octokit/core", () => ({
 }));
 
 import { Octokit } from "@octokit/core";
-import { Router, extractOwner } from "../src/router.ts";
+import { Router as RealRouter, extractOwner } from "../src/router.ts";
+
+// Every call in this file comes from one agent user; the per-user behaviour is covered in otp-router.
+class Router extends RealRouter {
+	override call(tool: string, args: Record<string, unknown>, caller = { user: "tester" }) {
+		return super.call(tool, args, caller);
+	}
+}
 
 function makeConfig(overrides: Record<string, unknown> = {}): any {
 	return {

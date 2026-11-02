@@ -24,7 +24,7 @@ Some tools should only run after the user has approved them. A tool marked `"otp
 { "owner": "cldmv", "repo": "gh-broker", "pullNumber": 12, "otp": "123456" }
 ```
 
-**Windows.** The first gated call with a valid TOTP code (RFC 6238, SHA1, 6 digits, 30 s step, ±1 step accepted) that is newer than the last accepted one opens a window. For `windowSeconds` (default 300) every gated tool runs when it carries that same code; the window is fixed, with no renewal. A code can open only one window, ever: the last accepted TOTP step is stored, so a code can't reopen a window after it closes or after a restart. Several windows can be open at once, one per code. Windows are held in memory, so a restart closes them.
+**Windows.** Each call comes from a known agent user: every registered agent has its own socket (see [Callers](#callers-one-socket-per-agent) below). The first gated call with a valid TOTP code (RFC 6238, SHA1, 6 digits, 30 s step, ±1 step accepted) that is newer than the last accepted one opens a window for that user. For `windowSeconds` (default 300) every gated tool runs for that user when the call carries the same code; the window is fixed, with no renewal. A window only serves the user who opened it: another agent sending the same code is refused. A code can open only one window, ever, for anyone: there is one seed, and the last accepted TOTP step is stored, so a code can't reopen a window after it closes or after a restart. A user can have several windows open at once, one per code. Windows are held in memory, so a restart closes them.
 
 **Refusals.** A missing, wrong, expired or reused code gets the same answer, and nothing runs:
 
@@ -34,13 +34,13 @@ OTP required for <tool>: ask the user for a current code from their authenticato
 
 The `otp` argument is the broker's own: it is removed from the arguments of every call, gated or not, before anything is forwarded upstream or handed to a verb.
 
-**Guessing.** A missing code doesn't count. Each wrong, expired or reused code does: after `maxFailures` (default 5) the gated tools are refused for `lockoutSeconds` (default 600) without any code being checked (`OTP is locked for <n> more minute(s) after too many bad codes. Nothing was run.`). After `maxLockouts` (default 3) of those short lockouts in a rolling 24 hours, the broker hard-locks: every tool except `otp_status` is refused, ungated ones included, until root clears it.
+**Guessing.** A missing code doesn't count. Each wrong, expired or reused code does: after `maxFailures` (default 5) the gated tools are refused for that user for `lockoutSeconds` (default 600) without any code being checked (`OTP is locked for <n> more minute(s) after too many bad codes. Nothing was run.`). After `maxLockouts` (default 3) of those short lockouts in a rolling 24 hours, that user is hard-locked: every tool except `otp_status` is refused for them, ungated ones included, until root clears it. Other agents are not affected.
 
 ```
-gh-broker is locked after repeated bad OTP codes (since <ISO>). Ask the user to run "sudo gh-broker otp unlock" on <host>. Nothing was run.
+gh-broker is locked for <user> after repeated bad OTP codes (since <ISO>). Ask the user to run "sudo gh-broker otp unlock <user>" on <host>. Nothing was run.
 ```
 
-The counters are broker-wide; the socket carries no caller identity yet.
+Bad-code counts, short lockouts and hard locks are kept per agent user.
 
 **Setup.** The gate needs `config.otp` and its seed credential (base32, generated and shown once by the installer, stored with the PATs). Without either, every gated tool is hidden and refused with the reason, and the rest of the broker runs normally.
 
@@ -57,17 +57,30 @@ The counters are broker-wide; the socket carries no caller identity yet.
 
 Only `seed` is required. A gated tool's advertised schema gains a required `otp` string, and its description says it needs a code and how long one lasts.
 
-**State file.** `statePath` holds the last accepted step, the bad-code count, the short lockout, the lockout times of the last 24 hours and the hard lock. The broker writes it atomically (temp file in the same directory, mode 0600, fsync, rename) and re-reads it whenever its inode, mtime or size changes, so `sudo gh-broker otp unlock` applies on the next call. A missing file is a clean state. A file that can't be read or parsed fails closed: it counts as a hard lock, and the broker never overwrites it.
+**State file.** `statePath` holds the last accepted step (global) and, per agent user, the bad-code count, the short lockout, the lockout times of the last 24 hours and the hard lock:
 
-**Audit.** Gated calls log `otp: "window" | "opened" | "refused" | "locked"`, and hard-locked refusals `otp: "hard-locked"`. Window and opened calls add `window`, an HMAC of the code under a key that exists only in the running process, so lines from one run can be correlated and nothing can be derived from it. Codes and the seed are never logged.
+```json
+{
+	"version": 1,
+	"lastAcceptedStep": 0,
+	"users": {
+		"repo": { "failures": 0, "lockedUntil": null, "lockouts": [], "hardLock": null }
+	}
+}
+```
+
+A user with no entry has nothing recorded, and the broker drops entries that have gone back to all zero/null when it writes. It writes the file atomically (temp file in the same directory, mode 0600, fsync, rename) and re-reads it whenever its inode, mtime or size changes, so `sudo gh-broker otp unlock <user>` applies on the next call. A missing file is a clean state. A file that can't be read or parsed, or has the wrong shape (including a user key that isn't a valid agent name), fails closed: every user counts as hard-locked, and the broker never overwrites it.
+
+**Audit.** Every audit line carries `user`, the agent the call came from. Gated calls log `otp: "window" | "opened" | "refused" | "locked"`, and hard-locked refusals `otp: "hard-locked"`. Window and opened calls add `window`, an HMAC of the code under a key that exists only in the running process, so lines from one run can be correlated and nothing can be derived from it. Codes and the seed are never logged.
 
 ### `otp_status`
 
-The gate's state. Read, `mode: "read"`, `custom: true`, no arguments, no owner or PAT. It is never gated and never blocked by a lock, so a locked-out agent can still tell the user what happened.
+The gate's state for the calling agent user, plus every hard-locked user. Read, `mode: "read"`, `custom: true`, no arguments, no owner or PAT. It is never gated and never blocked by a lock, so a locked-out agent can still tell the user what happened.
 
 ```json
 {
 	"configured": true,
+	"user": "repo",
 	"gatedTools": ["merge_pull_request"],
 	"windowSeconds": 300,
 	"openWindows": 1,
@@ -78,12 +91,17 @@ The gate's state. Read, `mode: "read"`, `custom: true`, no arguments, no owner o
 	"lockoutsLast24h": 0,
 	"maxLockouts": 3,
 	"hardLock": null,
-	"unlockCommand": "sudo gh-broker otp unlock",
+	"unlockCommand": "sudo gh-broker otp unlock repo",
+	"lockedUsers": [{ "user": "glmtest", "since": "2026-11-01T11:00:00.000Z", "lockouts": 3, "unlockCommand": "sudo gh-broker otp unlock glmtest" }],
 	"host": "broker-host"
 }
 ```
 
-`hardLock` is `{ "since", "lockouts" }` while hard-locked (`lockouts: 0` when the cause is an unusable state file). It never contains a code, the seed or anything derived from them.
+Windows, counts and `hardLock` are the caller's own. `hardLock` is `{ "since", "lockouts" }` while the caller is hard-locked. When the state file is unusable, everyone is locked; the caller's `hardLock` then has `lockouts: 0` and `lockedUsers` lists only the caller, since the file can't say who else there is. It never contains a code, the seed or anything derived from them.
+
+### Callers: one socket per agent
+
+`listen` is `"agents:<dir>"` (the installer sets `"agents:/run/gh-broker/agents"`). An agent user `<user>` is registered when the group `gh-broker-agent-<user>` exists with exactly two members, `gh-broker` and `<user>`; names must match `^[a-z_][a-z0-9_-]{0,15}$`. At start the broker reads `/etc/group`, creates `<dir>` (0755) if needed, and listens on `<dir>/<user>.sock` for each agent, owned by that agent's group with mode 0660, so only that user can connect. Sockets in `<dir>` for agents that are no longer registered are removed. With no agents it logs that and serves nothing. Agents added later take effect on restart (`sudo gh-broker agent add <user>` restarts it). The old shared `unix:` socket is gone; a config still using it fails to load and says to re-run the installer.
 
 ---
 

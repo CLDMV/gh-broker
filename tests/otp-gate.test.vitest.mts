@@ -2,26 +2,27 @@ import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vites
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { OtpGate, OtpRefusal, UNLOCK_COMMAND, windowText } from "../src/otp/gate.ts";
+import { OtpGate, OtpRefusal, UNLOCK_COMMAND, unlockCommand, windowText } from "../src/otp/gate.ts";
 import { DEFAULT_GATED, OTP_DEFAULTS, isGated, otpSettings, otpSetupProblem, readSeed } from "../src/otp/policy.ts";
 import { base32Encode, hotp, stepAt, totpAt } from "../src/otp/totp.ts";
-import { emptyState } from "../src/otp/state.ts";
+import { emptyState, emptyUser } from "../src/otp/state.ts";
 
 const KEY = Buffer.from("12345678901234567890", "ascii");
 const SEED = base32Encode(KEY);
 const T0 = Date.parse("2026-11-01T12:00:00.000Z");
 const MIN = 60_000;
+const TOOL = "merge_pull_request";
 
 const ROOT = join(process.cwd(), "tmp", "otp-gate-tests");
 let n = 0;
 
 function makeConfig(otp: Record<string, unknown> | null, dir: string): any {
 	return {
-		listen: "unix:/x",
+		listen: "agents:/run/gh-broker/agents",
 		upstream: "https://api.githubcopilot.com/mcp/",
 		owners: { cldmv: { read: "cred:r", write: "cred:w" } },
 		tools: [
-			{ name: "merge_pull_request", mode: "write", otp: true },
+			{ name: TOOL, mode: "write", otp: true },
 			{ name: "get_me", mode: "read" },
 			{ name: "otp_status", mode: "read", custom: true }
 		],
@@ -40,10 +41,12 @@ function harness(otp: Record<string, unknown> | null = {}, seed = SEED) {
 	const code = (at = clock.t) => totpAt(KEY, at);
 	const statePath = join(dir, "state.json");
 	const readState = () => JSON.parse(readFileSync(statePath, "utf8"));
-	return { dir, clock, secrets, config, gate, make, code, statePath, readState };
+	/** authorize() as `user` (default "repo"). */
+	const auth = (c: unknown, user = "repo", g = gate) => g.authorize(TOOL, c, user);
+	return { dir, clock, secrets, config, gate, make, code, statePath, readState, auth };
 }
 
-/** Run authorize and return the refusal it throws. */
+/** Run fn and return the OtpRefusal it throws. */
 function refusal(fn: () => unknown): OtpRefusal {
 	try {
 		fn();
@@ -99,10 +102,12 @@ describe("policy", () => {
 		expect(readSeed(cfg, { has: () => true, resolve: () => SEED } as any)).toEqual({ key: KEY });
 	});
 
-	it("windowText", () => {
+	it("windowText and unlockCommand", () => {
 		expect(windowText(300)).toBe("5 minutes");
 		expect(windowText(60)).toBe("1 minute");
 		expect(windowText(90)).toBe("90 seconds");
+		expect(UNLOCK_COMMAND).toBe("sudo gh-broker otp unlock");
+		expect(unlockCommand("repo")).toBe("sudo gh-broker otp unlock repo");
 	});
 });
 
@@ -110,137 +115,164 @@ describe("OtpGate windows", () => {
 	it("opens a window on a valid code and accepts the same code for the whole window, then refuses it", () => {
 		const h = harness();
 		const c = h.code();
-		const opened = h.gate.authorize("merge_pull_request", c);
+		const opened = h.auth(c);
 		expect(opened).toEqual({ otp: "opened", window: expect.stringMatching(/^[0-9a-f]{16}$/) });
 		expect(opened.window).not.toContain(c);
-		expect(h.readState()).toMatchObject({ lastAcceptedStep: stepAt(T0), failures: 0 });
+		expect(h.readState()).toEqual({ version: 1, lastAcceptedStep: stepAt(T0), users: {} });
 
 		h.clock.t = T0 + 5 * MIN - 1;
-		expect(h.gate.authorize("merge_pull_request", c)).toEqual({ otp: "window", window: opened.window });
+		expect(h.auth(c)).toEqual({ otp: "window", window: opened.window });
 
 		h.clock.t = T0 + 5 * MIN;
-		const r = refusal(() => h.gate.authorize("merge_pull_request", c));
+		const r = refusal(() => h.auth(c));
 		expect(r.message).toMatch(REFUSED);
 		expect(r.audit).toEqual({ otp: "refused" });
-		expect(h.readState().failures).toBe(1);
+		expect(h.readState().users).toEqual({ repo: { failures: 1, lockedUntil: null, lockouts: [], hardLock: null } });
+	});
+
+	it("a window belongs to the user who opened it, even for the same code", () => {
+		const h = harness();
+		const c = h.code();
+		h.auth(c, "repo");
+		// glmtest sends the same code: it isn't repo's window, and the code is spent for everyone.
+		expect(refusal(() => h.auth(c, "glmtest")).message).toMatch(REFUSED);
+		expect(h.readState().users).toEqual({ glmtest: { failures: 1, lockedUntil: null, lockouts: [], hardLock: null } });
+		expect(h.auth(c, "repo").otp).toBe("window");
+		expect(h.gate.status("glmtest")).toMatchObject({ openWindows: 0, failures: 1 });
+		expect(h.gate.status("repo")).toMatchObject({ openWindows: 1, failures: 0 });
+	});
+
+	it("each user can open their own window with their own code", () => {
+		const h = harness();
+		const a = h.auth(h.code(), "repo");
+		h.clock.t = T0 + 30_000;
+		const b = h.auth(h.code(), "glmtest");
+		expect(b.otp).toBe("opened");
+		expect(b.window).not.toBe(a.window);
 	});
 
 	it("a reused code can't open a second window, even when it is still a valid TOTP", () => {
 		const h = harness({ windowSeconds: 10 });
 		const c = h.code();
-		h.gate.authorize("merge_pull_request", c);
+		h.auth(c);
 		h.clock.t = T0 + 15_000; // window closed, the code's step is still within ±1
-		expect(refusal(() => h.gate.authorize("merge_pull_request", c)).audit.otp).toBe("refused");
+		expect(refusal(() => h.auth(c)).audit.otp).toBe("refused");
 	});
 
 	it("a restart closes the windows and the persisted step stops the old code reopening one", () => {
 		const h = harness();
 		const c = h.code();
-		h.gate.authorize("merge_pull_request", c);
+		h.auth(c);
 		const restarted = h.make();
-		expect(refusal(() => restarted.authorize("merge_pull_request", c)).message).toMatch(REFUSED);
-		expect(restarted.status()).toMatchObject({ openWindows: 0, failures: 1 });
+		expect(refusal(() => h.auth(c, "repo", restarted)).message).toMatch(REFUSED);
+		expect(restarted.status("repo")).toMatchObject({ openWindows: 0, failures: 1 });
 	});
 
 	it("an older code than the last accepted one is refused", () => {
 		const h = harness();
-		h.gate.authorize("merge_pull_request", h.code());
-		expect(() => h.gate.authorize("merge_pull_request", hotp(KEY, stepAt(T0) - 1))).toThrow(REFUSED);
+		h.auth(h.code());
+		expect(() => h.auth(hotp(KEY, stepAt(T0) - 1))).toThrow(REFUSED);
 	});
 
-	it("keeps several windows open at once, one per code", () => {
+	it("keeps several windows open at once for one user, one per code", () => {
 		const h = harness();
-		const a = h.gate.authorize("merge_pull_request", h.code());
+		const a = h.auth(h.code());
 		h.clock.t = T0 + 30_000;
-		const b = h.gate.authorize("merge_pull_request", h.code());
+		const b = h.auth(h.code());
 		expect(b.otp).toBe("opened");
 		expect(b.window).not.toBe(a.window);
-		expect(h.gate.status()).toMatchObject({ openWindows: 2, nextWindowExpiresAt: new Date(T0 + 5 * MIN).toISOString() });
-		expect(h.gate.authorize("merge_pull_request", totpAt(KEY, T0))).toEqual({ otp: "window", window: a.window });
+		expect(h.gate.status("repo")).toMatchObject({ openWindows: 2, nextWindowExpiresAt: new Date(T0 + 5 * MIN).toISOString() });
+		expect(h.auth(totpAt(KEY, T0))).toEqual({ otp: "window", window: a.window });
 	});
 
 	it("a missing code is refused without counting as a failure", () => {
 		const h = harness();
-		for (const missing of [undefined, null, ""]) expect(refusal(() => h.gate.authorize("merge_pull_request", missing)).message).toMatch(REFUSED);
-		expect(h.gate.status()).toMatchObject({ failures: 0 });
+		for (const missing of [undefined, null, ""]) expect(refusal(() => h.auth(missing)).message).toMatch(REFUSED);
+		expect(h.gate.status("repo")).toMatchObject({ failures: 0 });
 	});
 
 	it("wrong, malformed and non-string codes are refused and counted", () => {
 		const h = harness();
 		const wrong = String((Number(h.code()) + 1) % 1_000_000).padStart(6, "0");
-		for (const bad of [wrong, "12345", "abcdef", 123456]) expect(refusal(() => h.gate.authorize("merge_pull_request", bad)).message).toMatch(REFUSED);
-		expect(h.readState().failures).toBe(4);
+		for (const bad of [wrong, "12345", "abcdef", 123456]) expect(refusal(() => h.auth(bad)).message).toMatch(REFUSED);
+		expect(h.readState().users.repo.failures).toBe(4);
 	});
 
-	it("a valid code resets the failure counter", () => {
+	it("a valid code resets the user's failure counter and drops their now-empty entry", () => {
 		const h = harness();
-		expect(() => h.gate.authorize("merge_pull_request", "000000")).toThrow(REFUSED);
-		h.gate.authorize("merge_pull_request", h.code());
-		expect(h.readState().failures).toBe(0);
+		expect(() => h.auth("000000")).toThrow(REFUSED);
+		h.auth(h.code());
+		expect(h.readState().users).toEqual({});
 	});
 
 	it("refuses to open a window when the state can't be saved", () => {
 		const h = harness({ statePath: join(ROOT, "no-such-dir", "state.json") });
-		const r = refusal(() => h.gate.authorize("merge_pull_request", h.code()));
+		const r = refusal(() => h.auth(h.code()));
 		expect(r.message).toBe("OTP could not be checked: the broker could not save its OTP state. Nothing was run.");
 		expect(r.audit).toEqual({ otp: "refused" });
-		expect(h.gate.status()).toMatchObject({ openWindows: 0 });
+		expect(h.gate.status("repo")).toMatchObject({ openWindows: 0 });
 		expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/OTP state could not be saved/));
 	});
 
 	it("keeps counting in memory when a failure can't be saved", () => {
 		const h = harness({ statePath: join(ROOT, "no-such-dir", "state.json"), maxFailures: 2 });
-		expect(() => h.gate.authorize("merge_pull_request", "000000")).toThrow(REFUSED);
-		expect(() => h.gate.authorize("merge_pull_request", "000000")).toThrow(REFUSED);
-		expect(refusal(() => h.gate.authorize("merge_pull_request", h.code())).audit.otp).toBe("locked");
+		expect(() => h.auth("000000")).toThrow(REFUSED);
+		expect(() => h.auth("000000")).toThrow(REFUSED);
+		expect(refusal(() => h.auth(h.code())).audit.otp).toBe("locked");
 	});
 });
 
 describe("OtpGate lockouts", () => {
-	const fail = (h: ReturnType<typeof harness>, times: number) => {
-		for (let i = 0; i < times; i++) expect(() => h.gate.authorize("merge_pull_request", "000000")).toThrow(OtpRefusal);
+	const fail = (h: ReturnType<typeof harness>, times: number, user = "repo") => {
+		for (let i = 0; i < times; i++) expect(() => h.auth("000000", user)).toThrow(OtpRefusal);
 	};
 
-	it("maxFailures bad codes start the short lockout, which refuses even a valid code without counting", () => {
+	it("maxFailures bad codes start that user's short lockout, which refuses even a valid code without counting", () => {
 		const h = harness();
 		fail(h, 5);
-		const state = h.readState();
-		expect(state).toMatchObject({ failures: 0, lockedUntil: new Date(T0 + 10 * MIN).toISOString(), lockouts: [new Date(T0).toISOString()], hardLock: null });
-		expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/OTP locked until .* after 5 bad codes/));
+		expect(h.readState().users.repo).toEqual({ failures: 0, lockedUntil: new Date(T0 + 10 * MIN).toISOString(), lockouts: [new Date(T0).toISOString()], hardLock: null });
+		expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/OTP locked for repo until .* after 5 bad codes/));
 
-		const r = refusal(() => h.gate.authorize("merge_pull_request", h.code()));
+		const r = refusal(() => h.auth(h.code()));
 		expect(r.message).toBe("OTP is locked for 10 more minute(s) after too many bad codes. Nothing was run.");
 		expect(r.audit).toEqual({ otp: "locked" });
+		// Another user is not affected.
+		expect(h.auth(h.code(), "glmtest").otp).toBe("opened");
+
 		h.clock.t = T0 + 10 * MIN - 1000;
-		expect(refusal(() => h.gate.authorize("merge_pull_request", h.code())).message).toMatch(/locked for 1 more minute\(s\)/);
-		expect(h.readState().failures).toBe(0);
-		expect(h.gate.status()).toMatchObject({ lockedUntil: new Date(T0 + 10 * MIN).toISOString(), lockoutsLast24h: 1 });
+		expect(refusal(() => h.auth(h.code())).message).toMatch(/locked for 1 more minute\(s\)/);
+		expect(h.readState().users.repo.failures).toBe(0);
+		expect(h.gate.status("repo")).toMatchObject({ lockedUntil: new Date(T0 + 10 * MIN).toISOString(), lockoutsLast24h: 1 });
 
 		h.clock.t = T0 + 10 * MIN;
-		expect(h.gate.status()).toMatchObject({ lockedUntil: null });
-		expect(h.gate.authorize("merge_pull_request", h.code()).otp).toBe("opened");
-		expect(h.readState().lockedUntil).toBeNull(); // an expired lockout is cleared on the next write
+		expect(h.gate.status("repo")).toMatchObject({ lockedUntil: null });
+		expect(h.auth(h.code()).otp).toBe("opened");
+		expect(h.readState().users.repo.lockedUntil).toBeNull(); // an expired lockout is cleared on the next write
 	});
 
-	it("maxLockouts short lockouts in 24 h set the hard lock", () => {
+	it("maxLockouts short lockouts in 24 h hard-lock that user only", () => {
 		const h = harness({ maxFailures: 1, lockoutSeconds: 60, maxLockouts: 3 });
 		for (let i = 0; i < 3; i++) {
 			h.clock.t = T0 + i * 2 * MIN;
 			fail(h, 1);
 		}
 		const since = new Date(T0 + 4 * MIN).toISOString();
-		expect(h.readState().hardLock).toEqual({ since, lockouts: 3 });
-		expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/OTP hard lock after 3 lockouts in 24 h/));
+		expect(h.readState().users.repo.hardLock).toEqual({ since, lockouts: 3 });
+		expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/OTP hard lock for repo after 3 lockouts in 24 h/));
 
-		const r = h.gate.hardLockRefusal()!;
-		expect(r.message).toBe(`gh-broker is locked after repeated bad OTP codes (since ${since}). Ask the user to run "${UNLOCK_COMMAND}" on box. Nothing was run.`);
+		const r = h.gate.hardLockRefusal("repo")!;
+		expect(r.message).toBe(`gh-broker is locked for repo after repeated bad OTP codes (since ${since}). Ask the user to run "sudo gh-broker otp unlock repo" on box. Nothing was run.`);
 		expect(r.audit).toEqual({ otp: "hard-locked" });
+		expect(h.gate.hardLockRefusal("glmtest")).toBeUndefined();
 		h.clock.t = T0 + 60 * MIN;
-		expect(refusal(() => h.gate.authorize("merge_pull_request", h.code())).audit.otp).toBe("hard-locked");
-		expect(h.gate.status()).toMatchObject({ hardLock: { since, lockouts: 3 }, lockoutsLast24h: 3 });
+		expect(refusal(() => h.auth(h.code())).audit.otp).toBe("hard-locked");
+		expect(h.auth(h.code(), "glmtest").otp).toBe("opened");
+		expect(h.gate.status("repo")).toMatchObject({ hardLock: { since, lockouts: 3 }, lockoutsLast24h: 3 });
+		const lockedUsers = [{ user: "repo", since, lockouts: 3, unlockCommand: "sudo gh-broker otp unlock repo" }];
+		expect(h.gate.status("glmtest")).toMatchObject({ user: "glmtest", hardLock: null, lockedUsers });
 
 		// The hard lock survives a restart.
-		expect(h.make().hardLockRefusal()?.audit.otp).toBe("hard-locked");
+		expect(h.make().hardLockRefusal("repo")?.audit.otp).toBe("hard-locked");
 	});
 
 	it("only counts lockouts from the last 24 h", () => {
@@ -248,50 +280,73 @@ describe("OtpGate lockouts", () => {
 		fail(h, 1);
 		h.clock.t = T0 + 25 * 60 * MIN;
 		fail(h, 1);
-		expect(h.readState()).toMatchObject({ hardLock: null, lockouts: [new Date(h.clock.t).toISOString()] });
-		expect(h.gate.status()).toMatchObject({ lockoutsLast24h: 1 });
+		expect(h.readState().users.repo).toMatchObject({ hardLock: null, lockouts: [new Date(h.clock.t).toISOString()] });
+		expect(h.gate.status("repo")).toMatchObject({ lockoutsLast24h: 1 });
+	});
+
+	it("prunes other users' expired entries on write", () => {
+		const h = harness();
+		const old = new Date(T0 - 25 * 60 * MIN).toISOString();
+		writeFileSync(h.statePath, JSON.stringify({ ...emptyState(), users: { stale: { ...emptyUser(), lockedUntil: old, lockouts: [old] }, kept: { ...emptyUser(), failures: 2 } } }));
+		fail(h, 1);
+		expect(h.readState().users).toEqual({ kept: { ...emptyUser(), failures: 2 }, repo: { ...emptyUser(), failures: 1 } });
 	});
 
 	it("picks up the root CLI's edits without a restart (unlock clears the hard lock)", () => {
 		const h = harness({ maxFailures: 1, maxLockouts: 1 });
 		fail(h, 1);
-		expect(h.gate.hardLockRefusal()).toBeDefined();
+		expect(h.gate.hardLockRefusal("repo")).toBeDefined();
 		const kept = h.readState().lastAcceptedStep;
 		writeFileSync(h.statePath, JSON.stringify({ ...emptyState(), lastAcceptedStep: kept }, null, 2));
-		expect(h.gate.hardLockRefusal()).toBeUndefined();
-		expect(h.gate.authorize("merge_pull_request", h.code()).otp).toBe("opened");
+		expect(h.gate.hardLockRefusal("repo")).toBeUndefined();
+		expect(h.auth(h.code()).otp).toBe("opened");
 	});
 
 	it("an edited failure counter is honoured on the next call", () => {
 		const h = harness();
-		writeFileSync(h.statePath, JSON.stringify({ ...emptyState(), failures: 4 }));
-		expect(() => h.gate.authorize("merge_pull_request", "000000")).toThrow(REFUSED);
-		expect(h.readState().lockedUntil).not.toBeNull();
+		writeFileSync(h.statePath, JSON.stringify({ ...emptyState(), users: { repo: { ...emptyUser(), failures: 4 } } }));
+		expect(() => h.auth("000000")).toThrow(REFUSED);
+		expect(h.readState().users.repo.lockedUntil).not.toBeNull();
 	});
 });
 
 describe("OtpGate fail-closed state", () => {
-	it("a corrupt state file hard-locks everything, and authorize refuses too", () => {
+	it("a corrupt state file hard-locks every user, and authorize refuses too", () => {
 		const h = harness();
 		writeFileSync(h.statePath, "{ tampered");
-		const r = h.gate.hardLockRefusal()!;
-		expect(r.message).toMatch(/^gh-broker is locked after repeated bad OTP codes \(since 2026-11-01T12:00:00\.000Z\)\. Ask the user to run "sudo gh-broker otp unlock" on box\. Nothing was run\.$/);
-		expect(refusal(() => h.gate.authorize("merge_pull_request", h.code())).audit.otp).toBe("hard-locked");
-		expect(h.gate.status()).toMatchObject({ hardLock: { since: "2026-11-01T12:00:00.000Z", lockouts: 0 }, failures: 0, lockoutsLast24h: 0 });
+		for (const user of ["repo", "glmtest"]) {
+			expect(h.gate.hardLockRefusal(user)!.message).toBe(
+				`gh-broker is locked for ${user} after repeated bad OTP codes (since 2026-11-01T12:00:00.000Z). Ask the user to run "sudo gh-broker otp unlock ${user}" on box. Nothing was run.`
+			);
+		}
+		expect(refusal(() => h.auth(h.code())).audit.otp).toBe("hard-locked");
+		expect(h.gate.status("repo")).toMatchObject({
+			hardLock: { since: "2026-11-01T12:00:00.000Z", lockouts: 0 },
+			lockedUsers: [{ user: "repo", since: "2026-11-01T12:00:00.000Z", lockouts: 0, unlockCommand: "sudo gh-broker otp unlock repo" }],
+			failures: 0,
+			lockoutsLast24h: 0
+		});
 		// The daemon never overwrites the corrupt file.
 		expect(readFileSync(h.statePath, "utf8")).toBe("{ tampered");
+	});
+
+	it("round 1's flat shape is corrupt now (no users object)", () => {
+		const h = harness();
+		writeFileSync(h.statePath, JSON.stringify({ version: 1, lastAcceptedStep: 0, failures: 0, lockedUntil: null, lockouts: [], hardLock: null }));
+		expect(h.gate.hardLockRefusal("repo")).toBeDefined();
 	});
 });
 
 describe("OtpGate status", () => {
-	it("reports the documented fields and never a code or the seed", () => {
+	it("reports the documented fields for the caller and never a code or the seed", () => {
 		const h = harness();
 		const c = h.code();
-		h.gate.authorize("merge_pull_request", c);
-		const s = h.gate.status();
+		h.auth(c);
+		const s = h.gate.status("repo");
 		expect(s).toEqual({
 			configured: true,
-			gatedTools: ["merge_pull_request"],
+			user: "repo",
+			gatedTools: [TOOL],
 			windowSeconds: 300,
 			openWindows: 1,
 			nextWindowExpiresAt: new Date(T0 + 5 * MIN).toISOString(),
@@ -301,7 +356,8 @@ describe("OtpGate status", () => {
 			lockoutsLast24h: 0,
 			maxLockouts: 3,
 			hardLock: null,
-			unlockCommand: "sudo gh-broker otp unlock",
+			unlockCommand: "sudo gh-broker otp unlock repo",
+			lockedUsers: [],
 			host: "box"
 		});
 		const text = JSON.stringify(s);
@@ -311,17 +367,18 @@ describe("OtpGate status", () => {
 
 	it("reports configured:false when the seed isn't stored", () => {
 		const h = harness({}, "");
-		expect(h.gate.status()).toMatchObject({ configured: false, gatedTools: ["merge_pull_request"] });
+		expect(h.gate.status("repo")).toMatchObject({ configured: false, gatedTools: [TOOL] });
 	});
 
 	it("is inert without config.otp: no lock, defaults only, no state file read", () => {
 		const h = harness(null);
 		const gate = new OtpGate(h.config, h.secrets as any);
 		expect(gate.enabled).toBe(false);
-		expect(gate.hardLockRefusal()).toBeUndefined();
-		expect(gate.status()).toEqual({
+		expect(gate.hardLockRefusal("repo")).toBeUndefined();
+		expect(gate.status("repo")).toEqual({
 			configured: false,
-			gatedTools: ["merge_pull_request"],
+			user: "repo",
+			gatedTools: [TOOL],
 			windowSeconds: 300,
 			openWindows: 0,
 			nextWindowExpiresAt: null,
@@ -331,7 +388,8 @@ describe("OtpGate status", () => {
 			lockoutsLast24h: 0,
 			maxLockouts: 3,
 			hardLock: null,
-			unlockCommand: UNLOCK_COMMAND,
+			unlockCommand: "sudo gh-broker otp unlock repo",
+			lockedUsers: [],
 			host: hostname()
 		});
 	});

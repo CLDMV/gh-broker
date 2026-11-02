@@ -20,10 +20,14 @@
  * open at once, one per code. Windows live in memory only, so a restart closes them; the
  * last accepted TOTP step is persisted, so a code from before the restart can't reopen one.
  *
- * Guessing: `maxFailures` bad codes start a short lockout of `lockoutSeconds`; `maxLockouts`
- * short lockouts in a rolling 24 h set a hard lock that blocks every tool except otp_status
- * until root runs `gh-broker otp unlock`. Counters are broker-wide (there is no caller
- * identity on the socket yet, see #145).
+ * Every call comes from a known agent user (each has its own socket, see server.ts), so
+ * windows and counters are per user: a window only serves the user who opened it, even for the
+ * same code. The last accepted step stays global, since there is one seed: once any user has
+ * spent a code, nobody can open a window with it.
+ *
+ * Guessing: `maxFailures` bad codes start a short lockout of `lockoutSeconds` for that user;
+ * `maxLockouts` short lockouts in a rolling 24 h set a hard lock that blocks every tool except
+ * otp_status for that user until root runs `gh-broker otp unlock <user>`.
  *
  * Nothing here ever logs or returns a code, the seed, or anything derived from them except
  * the window id: an HMAC of the code under a per-process random key, which correlates audit
@@ -34,7 +38,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import type { Config, SecretStore } from "../types.ts";
 import { OTP_ARG, isGated, otpSettings, readSeed, type OtpSettings } from "./policy.ts";
-import { OtpStateFile, type OtpState } from "./state.ts";
+import { OtpStateFile, emptyUser, userState, type HardLock, type OtpState, type UserState } from "./state.ts";
 import { matchStep, safeEqual } from "./totp.ts";
 
 export type OtpOutcome = "window" | "opened" | "refused" | "locked" | "hard-locked";
@@ -67,9 +71,15 @@ export interface OtpGateOptions {
 }
 
 interface OpenWindow {
+	user: string;
 	code: string;
 	expiresAt: number;
 	id: string;
+}
+
+/** The root command that clears `user`'s counters and locks. */
+export function unlockCommand(user: string): string {
+	return `${UNLOCK_COMMAND} ${user}`;
 }
 
 export class OtpGate {
@@ -98,36 +108,40 @@ export class OtpGate {
 	}
 
 	/**
-	 * The hard-lock refusal, if the broker is hard-locked (or its state file is unusable).
-	 * The router checks this on every call except otp_status.
+	 * The hard-lock refusal for `user`, if that user is hard-locked (or the state file is
+	 * unusable, which locks everyone). The router checks this on every call except otp_status.
 	 */
-	hardLockRefusal(): OtpRefusal | undefined {
+	hardLockRefusal(user: string): OtpRefusal | undefined {
 		if (!this.enabled) return undefined;
-		const since = this.hardLockSince();
+		const since = this.hardLockSince(user);
 		if (since === undefined) return undefined;
-		return new OtpRefusal(`gh-broker is locked after repeated bad OTP codes (since ${since}). Ask the user to run "${UNLOCK_COMMAND}" on ${this.host}. Nothing was run.`, { otp: "hard-locked" });
+		return new OtpRefusal(
+			`gh-broker is locked for ${user} after repeated bad OTP codes (since ${since}). Ask the user to run "${unlockCommand(user)}" on ${this.host}. Nothing was run.`,
+			{ otp: "hard-locked" }
+		);
 	}
 
-	private hardLockSince(): string | undefined {
+	private hardLockSince(user: string): string | undefined {
 		const read = this.state.read();
 		if (!read.ok) return read.since;
-		return read.state.hardLock?.since;
+		return userState(read.state, user).hardLock?.since;
 	}
 
 	/**
-	 * Decide a call to the gated tool `tool` carrying `code` (the raw `otp` argument).
+	 * Decide `user`'s call to the gated tool `tool` carrying `code` (the raw `otp` argument).
 	 * Returns the audit fields when the call may run; throws OtpRefusal when it may not.
 	 * Only call this after hardLockRefusal() and the availability check passed (OTP is set up).
 	 */
-	authorize(tool: string, code: unknown): OtpAudit {
+	authorize(tool: string, code: unknown, user: string): OtpAudit {
 		const now = this.now();
 		const read = this.state.read();
-		// hardLockRefusal() ran first, so the file is usable; re-check anyway in case it
-		// changed in between, and fail closed.
-		if (!read.ok || read.state.hardLock) throw this.hardLockRefusal()!;
+		// hardLockRefusal() ran first, so this is normally clear; re-check anyway (authorize is
+		// public) and fail closed.
+		if (!read.ok || userState(read.state, user).hardLock) throw this.hardLockRefusal(user)!;
 		const state = read.state;
+		const mine = userState(state, user);
 
-		const lockedUntil = state.lockedUntil ? Date.parse(state.lockedUntil) : 0;
+		const lockedUntil = mine.lockedUntil ? Date.parse(mine.lockedUntil) : 0;
 		if (lockedUntil > now) {
 			const minutes = Math.max(1, Math.ceil((lockedUntil - now) / 60000));
 			throw new OtpRefusal(`OTP is locked for ${minutes} more minute(s) after too many bad codes. Nothing was run.`, { otp: "locked" });
@@ -141,7 +155,8 @@ export class OtpGate {
 		this.windows = this.windows.filter((w) => w.expiresAt > now);
 		if (typeof code === "string") {
 			let hit: OpenWindow | undefined;
-			for (const w of this.windows) if (safeEqual(w.code, code)) hit = w; // no early exit
+			// Only this user's windows: a code another agent opened a window with is no use here.
+			for (const w of this.windows) if (w.user === user && safeEqual(w.code, code)) hit = w; // no early exit
 			if (hit) return { otp: "window", window: hit.id };
 
 			const step = matchStep((readSeed(this.config, this.secrets) as { key: Buffer }).key, code, now);
@@ -149,24 +164,24 @@ export class OtpGate {
 				// Persist the step before anything runs: if it can't be saved, a restart could let
 				// this code open a second window, so refuse instead.
 				try {
-					this.state.write({ ...this.pruned(state, now), lastAcceptedStep: step, failures: 0 });
+					this.state.write(this.compact({ ...state, lastAcceptedStep: step, users: { ...state.users, [user]: { ...mine, failures: 0 } } }, now));
 				} catch (err) {
 					console.error(`gh-broker: ${(err as Error).message}`);
 					throw new OtpRefusal(`OTP could not be checked: the broker could not save its OTP state. Nothing was run.`, { otp: "refused" });
 				}
-				const id = createHmac("sha256", this.idKey).update(code).digest("hex").slice(0, 16);
-				this.windows.push({ code, expiresAt: now + this.settings.windowSeconds * 1000, id });
+				const id = createHmac("sha256", this.idKey).update(`${user}\0${code}`).digest("hex").slice(0, 16);
+				this.windows.push({ user, code, expiresAt: now + this.settings.windowSeconds * 1000, id });
 				return { otp: "opened", window: id };
 			}
 		}
 
-		this.recordFailure(state, now);
+		this.recordFailure(state, mine, user, now);
 		throw refusal();
 	}
 
-	/** Count one bad code, starting a short lockout (and maybe the hard lock) at the limit. */
-	private recordFailure(state: OtpState, now: number): void {
-		const next = this.pruned(state, now);
+	/** Count one bad code for `user`, starting a short lockout (and maybe the hard lock) at the limit. */
+	private recordFailure(state: OtpState, mine: UserState, user: string, now: number): void {
+		const next = { ...mine, lockouts: mine.lockouts.filter((t) => Date.parse(t) > now - DAY_MS) };
 		next.failures += 1;
 		if (next.failures >= this.settings.maxFailures) {
 			const at = new Date(now).toISOString();
@@ -176,12 +191,12 @@ export class OtpGate {
 			if (next.lockouts.length >= this.settings.maxLockouts) next.hardLock = { since: at, lockouts: next.lockouts.length };
 			console.error(
 				next.hardLock
-					? `gh-broker: OTP hard lock after ${next.lockouts.length} lockouts in 24 h; every tool except otp_status is refused until "${UNLOCK_COMMAND}"`
-					: `gh-broker: OTP locked until ${next.lockedUntil} after ${this.settings.maxFailures} bad codes`
+					? `gh-broker: OTP hard lock for ${user} after ${next.lockouts.length} lockouts in 24 h; every tool except otp_status is refused for ${user} until "${unlockCommand(user)}"`
+					: `gh-broker: OTP locked for ${user} until ${next.lockedUntil} after ${this.settings.maxFailures} bad codes`
 			);
 		}
 		try {
-			this.state.write(next);
+			this.state.write(this.compact({ ...state, users: { ...state.users, [user]: next } }, now));
 		} catch (err) {
 			// The counters still advance in memory; the refusal stands either way.
 			console.error(`gh-broker: ${(err as Error).message}`);
@@ -189,44 +204,62 @@ export class OtpGate {
 	}
 
 	/**
-	 * A copy of `state` for the next write, with lockouts older than 24 h dropped. Writes only
-	 * happen past the short-lockout check in authorize(), so any lockedUntil here has expired.
+	 * `state` tidied for a write: every user's lockouts pruned to the last 24 h, expired short
+	 * lockouts cleared, and users left with nothing to record dropped.
 	 */
-	private pruned(state: OtpState, now: number): OtpState {
-		return { ...state, lockedUntil: null, lockouts: state.lockouts.filter((t) => Date.parse(t) > now - DAY_MS) };
+	private compact(state: OtpState, now: number): OtpState {
+		const users: Record<string, UserState> = {};
+		for (const [name, u] of Object.entries(state.users)) {
+			const lockouts = u.lockouts.filter((t) => Date.parse(t) > now - DAY_MS);
+			const lockedUntil = u.lockedUntil && Date.parse(u.lockedUntil) > now ? u.lockedUntil : null;
+			if (u.failures === 0 && lockedUntil === null && lockouts.length === 0 && u.hardLock === null) continue;
+			users[name] = { failures: u.failures, lockedUntil, lockouts, hardLock: u.hardLock };
+		}
+		return { ...state, users };
 	}
 
-	/** The otp_status report. Never a code, the seed, or anything derived from them. */
-	status(): Record<string, unknown> {
+	/**
+	 * The otp_status report for `user`: their own windows and counters, plus every hard-locked
+	 * user. Never a code, the seed, or anything derived from them.
+	 */
+	status(user: string): Record<string, unknown> {
 		const now = this.now();
 		const gatedTools = this.config.tools.filter(isGated).map((t) => t.name);
-		let state: OtpState | undefined;
-		let hardLock: { since: string; lockouts: number } | null = null;
+		let mine = emptyUser();
+		let hardLock: HardLock | null = null;
+		let lockedUsers: Array<{ user: string; since: string; lockouts: number; unlockCommand: string }> = [];
 		if (this.enabled) {
 			const read = this.state.read();
 			if (read.ok) {
-				state = read.state;
-				hardLock = state.hardLock;
+				mine = userState(read.state, user);
+				hardLock = mine.hardLock;
+				lockedUsers = Object.entries(read.state.users)
+					.filter(([, u]) => u.hardLock)
+					.map(([name, u]) => ({ user: name, since: u.hardLock!.since, lockouts: u.hardLock!.lockouts, unlockCommand: unlockCommand(name) }));
 			} else {
+				// An unusable file locks every user; the caller is the one we can name.
 				hardLock = { since: read.since, lockouts: 0 };
+				lockedUsers = [{ user, since: read.since, lockouts: 0, unlockCommand: unlockCommand(user) }];
 			}
 		}
-		const open = this.windows.filter((w) => w.expiresAt > now);
+		const open = this.windows.filter((w) => w.user === user && w.expiresAt > now);
 		const next = open.length ? Math.min(...open.map((w) => w.expiresAt)) : undefined;
-		const lockedUntil = state?.lockedUntil && Date.parse(state.lockedUntil) > now ? state.lockedUntil : null;
+		const lockedUntil = mine.lockedUntil && Date.parse(mine.lockedUntil) > now ? mine.lockedUntil : null;
 		return {
 			configured: !("problem" in readSeed(this.config, this.secrets)),
+			user,
 			gatedTools,
 			windowSeconds: this.settings.windowSeconds,
 			openWindows: open.length,
 			nextWindowExpiresAt: next === undefined ? null : new Date(next).toISOString(),
-			failures: state?.failures ?? 0,
+			failures: mine.failures,
 			maxFailures: this.settings.maxFailures,
 			lockedUntil,
-			lockoutsLast24h: state ? state.lockouts.filter((t) => Date.parse(t) > now - DAY_MS).length : 0,
+			lockoutsLast24h: mine.lockouts.filter((t) => Date.parse(t) > now - DAY_MS).length,
 			maxLockouts: this.settings.maxLockouts,
 			hardLock,
-			unlockCommand: UNLOCK_COMMAND,
+			unlockCommand: unlockCommand(user),
+			lockedUsers,
 			host: this.host
 		};
 	}

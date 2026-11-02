@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { OtpStateFile, emptyState, parseState } from "../src/otp/state.ts";
+import { OtpStateFile, emptyState, emptyUser, parseState, userState } from "../src/otp/state.ts";
 
 const ROOT = join(process.cwd(), "tmp", "otp-state-tests");
 let n = 0;
@@ -24,28 +24,45 @@ afterAll(() => {
 const iso = "2026-11-01T00:00:00.000Z";
 
 describe("parseState", () => {
+	const user = { failures: 2, lockedUntil: iso, lockouts: [iso], hardLock: { since: iso, lockouts: 3 } };
+
 	it("accepts the documented shape and ignores extra keys", () => {
-		const s = { ...emptyState(), lastAcceptedStep: 7, failures: 2, lockedUntil: iso, lockouts: [iso], hardLock: { since: iso, lockouts: 3 }, extra: true };
-		expect(parseState(s)).toEqual({ version: 1, lastAcceptedStep: 7, failures: 2, lockedUntil: iso, lockouts: [iso], hardLock: { since: iso, lockouts: 3 } });
+		const s = { version: 1, lastAcceptedStep: 7, users: { repo: { ...user, extra: 1 }, glmtest: emptyUser() }, extra: true };
+		expect(parseState(s)).toEqual({ version: 1, lastAcceptedStep: 7, users: { repo: user, glmtest: emptyUser() } });
 	});
 
+	const bad = (u: unknown) => ({ ...emptyState(), users: { repo: u } });
 	it.each([
 		["not an object", 5],
 		["null", null],
 		["an array", []],
 		["wrong version", { ...emptyState(), version: 2 }],
 		["negative step", { ...emptyState(), lastAcceptedStep: -1 }],
-		["fractional failures", { ...emptyState(), failures: 1.5 }],
-		["non-ISO lockedUntil", { ...emptyState(), lockedUntil: "soon" }],
-		["missing lockedUntil", { version: 1, lastAcceptedStep: 0, failures: 0, lockouts: [], hardLock: null }],
-		["lockouts not an array", { ...emptyState(), lockouts: "x" }],
-		["a bad lockout entry", { ...emptyState(), lockouts: [iso, "nope"] }],
-		["missing hardLock", { version: 1, lastAcceptedStep: 0, failures: 0, lockedUntil: null, lockouts: [] }],
-		["hardLock not an object", { ...emptyState(), hardLock: "yes" }],
-		["hardLock without since", { ...emptyState(), hardLock: { lockouts: 3 } }],
-		["hardLock with a bad count", { ...emptyState(), hardLock: { since: iso, lockouts: "3" } }]
+		["no users", { version: 1, lastAcceptedStep: 0 }],
+		["users as an array", { ...emptyState(), users: [] }],
+		["a user that isn't an object", bad(1)],
+		["an invalid user name", { ...emptyState(), users: { "Bad Name": emptyUser() } }],
+		["a __proto__ key", JSON.parse('{"version":1,"lastAcceptedStep":0,"users":{"__proto__":{"failures":0,"lockedUntil":null,"lockouts":[],"hardLock":null}}}')],
+		["fractional failures", bad({ ...emptyUser(), failures: 1.5 })],
+		["non-ISO lockedUntil", bad({ ...emptyUser(), lockedUntil: "soon" })],
+		["missing lockedUntil", bad({ failures: 0, lockouts: [], hardLock: null })],
+		["lockouts not an array", bad({ ...emptyUser(), lockouts: "x" })],
+		["a bad lockout entry", bad({ ...emptyUser(), lockouts: [iso, "nope"] })],
+		["missing hardLock", bad({ failures: 0, lockedUntil: null, lockouts: [] })],
+		["hardLock not an object", bad({ ...emptyUser(), hardLock: "yes" })],
+		["hardLock without since", bad({ ...emptyUser(), hardLock: { lockouts: 3 } })],
+		["hardLock with a bad count", bad({ ...emptyUser(), hardLock: { since: iso, lockouts: "3" } })]
 	])("rejects %s", (_label, raw) => {
 		expect(parseState(raw)).toBeUndefined();
+	});
+
+	it("userState copies a user's entry, or gives zeros for an unknown one", () => {
+		const state = { ...emptyState(), users: { repo: user } };
+		const copy = userState(state, "repo");
+		copy.lockouts.push("x");
+		expect(state.users.repo.lockouts).toEqual([iso]);
+		expect(userState(state, "glmtest")).toEqual(emptyUser());
+		expect(userState(state, "__proto__")).toEqual(emptyUser());
 	});
 });
 
@@ -58,7 +75,7 @@ describe("OtpStateFile", () => {
 	it("writes atomically with mode 0600, leaves no temp file, and reads back what it wrote", () => {
 		const path = join(dir, "state.json");
 		const f = new OtpStateFile(path);
-		const state = { ...emptyState(), lastAcceptedStep: 42, lockouts: [iso] };
+		const state = { ...emptyState(), lastAcceptedStep: 42, users: { repo: { ...emptyUser(), lockouts: [iso] } } };
 		f.write(state);
 		expect(statSync(path).mode & 0o777).toBe(0o600);
 		expect(readdirSync(dir)).toEqual(["state.json"]);
@@ -69,16 +86,16 @@ describe("OtpStateFile", () => {
 
 	it("serves the cached read while the file is unchanged and re-reads when it changes", () => {
 		const path = join(dir, "state.json");
-		writeFileSync(path, JSON.stringify({ ...emptyState(), failures: 1 }));
+		writeFileSync(path, JSON.stringify({ ...emptyState(), lastAcceptedStep: 1 }));
 		const f = new OtpStateFile(path);
 		const first = f.read();
 		expect(f.read()).toBe(first);
 		// Same size, different content: the inode/mtime still differ after an atomic replace.
-		writeFileSync(`${path}.new`, JSON.stringify({ ...emptyState(), failures: 2 }));
+		writeFileSync(`${path}.new`, JSON.stringify({ ...emptyState(), lastAcceptedStep: 2 }));
 		rmSync(path);
 		writeFileSync(path, readFileSync(`${path}.new`));
 		const second = f.read();
-		expect(second).toEqual({ ok: true, state: { ...emptyState(), failures: 2 } });
+		expect(second).toEqual({ ok: true, state: { ...emptyState(), lastAcceptedStep: 2 } });
 	});
 
 	it("fails closed on an unparseable file, with the time it noticed and a log line", () => {
@@ -103,7 +120,7 @@ describe("OtpStateFile", () => {
 
 	it("throws when the directory is missing, keeping the new state in memory", () => {
 		const f = new OtpStateFile(join(dir, "missing", "state.json"));
-		const state = { ...emptyState(), failures: 3 };
+		const state = { ...emptyState(), lastAcceptedStep: 3 };
 		expect(() => f.write(state)).toThrow(/OTP state could not be saved to .*missing/);
 		expect(f.read()).toEqual({ ok: true, state });
 	});
@@ -121,11 +138,11 @@ describe("OtpStateFile", () => {
 		chmodSync(dir, 0o300); // write + search, no read: files can be created and renamed, the dir can't be opened
 		try {
 			const f = new OtpStateFile(path);
-			f.write({ ...emptyState(), failures: 1 });
-			expect(f.read()).toEqual({ ok: true, state: { ...emptyState(), failures: 1 } });
+			f.write({ ...emptyState(), lastAcceptedStep: 1 });
+			expect(f.read()).toEqual({ ok: true, state: { ...emptyState(), lastAcceptedStep: 1 } });
 		} finally {
 			chmodSync(dir, 0o700);
 		}
-		expect(JSON.parse(readFileSync(path, "utf8")).failures).toBe(1);
+		expect(JSON.parse(readFileSync(path, "utf8")).lastAcceptedStep).toBe(1);
 	});
 });

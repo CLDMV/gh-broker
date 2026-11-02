@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { Router } from "../src/router.ts";
 import { OtpGate } from "../src/otp/gate.ts";
 import { base32Encode, totpAt } from "../src/otp/totp.ts";
-import { emptyState } from "../src/otp/state.ts";
+import { emptyState, emptyUser } from "../src/otp/state.ts";
 
 const KEY = Buffer.from("12345678901234567890", "ascii");
 const SEED = base32Encode(KEY);
@@ -32,7 +32,7 @@ function setup(opts: { otp?: Record<string, unknown> | null; seedStored?: boolea
 	mkdirSync(dir, { recursive: true });
 	const statePath = join(dir, "state.json");
 	const config: any = {
-		listen: "unix:/x.sock",
+		listen: "agents:/run/gh-broker/agents",
 		upstream: "https://api.githubcopilot.com/mcp/",
 		tools: TOOLS,
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
@@ -48,7 +48,8 @@ function setup(opts: { otp?: Record<string, unknown> | null; seedStored?: boolea
 	const clock = { t: T0 };
 	const gate = new OtpGate(config, secrets as any, { now: () => clock.t, host: "box" });
 	const router = new Router(config, secrets as any, upstream as any, undefined, gate);
-	return { router, upstream, secrets, clock, statePath, code: () => totpAt(KEY, clock.t) };
+	const call = (tool: string, args: Record<string, unknown>, user = "repo") => router.call(tool, args, { user });
+	return { router, call, upstream, secrets, clock, statePath, code: () => totpAt(KEY, clock.t) };
 }
 
 let logs: string[];
@@ -71,19 +72,19 @@ describe("Router + OTP gate", () => {
 	it("runs a gated tool with a valid code, strips otp before forwarding, and audits the window, never the code", async () => {
 		const h = setup();
 		const c = h.code();
-		await h.router.call("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1, otp: c });
+		await h.call("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1, otp: c });
 		expect(h.upstream.forward).toHaveBeenCalledWith("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1 }, "token:cred:cldmv-write");
 		const opened = lastAudit();
-		expect(opened).toMatchObject({ tool: "merge_pull_request", decision: "forward", ok: true, otp: "opened", window: expect.stringMatching(/^[0-9a-f]{16}$/) });
+		expect(opened).toMatchObject({ tool: "merge_pull_request", user: "repo", decision: "forward", ok: true, otp: "opened", window: expect.stringMatching(/^[0-9a-f]{16}$/) });
 
-		await h.router.call("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 2, otp: c });
+		await h.call("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 2, otp: c });
 		expect(lastAudit()).toMatchObject({ otp: "window", window: opened.window });
 		for (const line of logs) expect(line).not.toContain(c);
 	});
 
 	it("refuses a gated call with no code: nothing forwarded, audited as refused", async () => {
 		const h = setup();
-		await expect(h.router.call("merge_pull_request", { owner: "cldmv", repo: "x" })).rejects.toThrow(
+		await expect(h.call("merge_pull_request", { owner: "cldmv", repo: "x" })).rejects.toThrow(
 			'OTP required for merge_pull_request: ask the user for a current code from their authenticator app and pass it as "otp". Nothing was run.'
 		);
 		expect(h.upstream.forward).not.toHaveBeenCalled();
@@ -93,7 +94,7 @@ describe("Router + OTP gate", () => {
 	it("audits a gated call whose dispatch fails with its otp fields", async () => {
 		const h = setup();
 		h.upstream.forward.mockRejectedValueOnce(new Error("boom"));
-		await expect(h.router.call("merge_pull_request", { owner: "cldmv", repo: "x", otp: h.code() })).rejects.toThrow("boom");
+		await expect(h.call("merge_pull_request", { owner: "cldmv", repo: "x", otp: h.code() })).rejects.toThrow("boom");
 		expect(lastAudit()).toMatchObject({ ok: false, detail: "boom", otp: "opened" });
 	});
 
@@ -101,7 +102,7 @@ describe("Router + OTP gate", () => {
 		const h = setup();
 		npmScaffoldMock.mockResolvedValue({ status: "done" });
 		const c = h.code();
-		const out = await h.router.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "654321", otp: c });
+		const out = await h.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "654321", otp: c });
 		expect(JSON.parse((out.content[0] as any).text)).toEqual({ status: "done" });
 		expect(npmScaffoldMock).toHaveBeenCalledTimes(1);
 		expect(npmScaffoldMock.mock.calls[0]![0]).toEqual({ owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "654321" });
@@ -111,9 +112,9 @@ describe("Router + OTP gate", () => {
 	it("an ungated tool behaves as before: args forwarded byte-identical once otp is stripped, no otp audit fields", async () => {
 		const h = setup();
 		const args = { owner: "cldmv", repo: "x", title: "t", nested: { a: [1, 2] } };
-		await h.router.call("create_pull_request", { ...args, otp: "123456" });
+		await h.call("create_pull_request", { ...args, otp: "123456" });
 		expect(JSON.stringify(h.upstream.forward.mock.calls[0]![1])).toBe(JSON.stringify(args));
-		await h.router.call("create_pull_request", args);
+		await h.call("create_pull_request", args);
 		expect(h.upstream.forward.mock.calls[1]![1]).toBe(args); // untouched object when there is nothing to strip
 		expect(lastAudit()).not.toHaveProperty("otp");
 		expect(lastAudit()).not.toHaveProperty("window");
@@ -121,55 +122,78 @@ describe("Router + OTP gate", () => {
 
 	it("without config.otp, ungated tools still have otp stripped and no state file is involved", async () => {
 		const h = setup({ otp: null });
-		await h.router.call("get_me", { owner: "cldmv", otp: "1" });
+		await h.call("get_me", { owner: "cldmv", otp: "1" });
 		expect(h.upstream.forward).toHaveBeenCalledWith("get_me", { owner: "cldmv" }, "token:cred:cldmv-read");
 	});
 
 	it("hides and refuses gated tools while OTP isn't set up, but otp_status still answers", async () => {
 		for (const h of [setup({ otp: null }), setup({ seedStored: false })]) {
 			expect(h.router.advertisedTools().map((t) => t.name)).toEqual(["get_me", "create_pull_request", "otp_status"]);
-			await expect(h.router.call("merge_pull_request", { owner: "cldmv", otp: "123456" })).rejects.toThrow(
+			await expect(h.call("merge_pull_request", { owner: "cldmv", otp: "123456" })).rejects.toThrow(
 				/tool "merge_pull_request" is not available on this broker: OTP is not set up on this broker.*re-run the installer/
 			);
-			const status = JSON.parse(((await h.router.call("otp_status", {})).content[0] as any).text);
+			const status = JSON.parse(((await h.call("otp_status", {})).content[0] as any).text);
 			expect(status).toMatchObject({ configured: false, gatedTools: ["merge_pull_request", "npm_scaffold"] });
 		}
 	});
 
-	it("the hard lock blocks every tool, ungated ones too, except otp_status", async () => {
+	it("a user's hard lock blocks every tool for that user, ungated ones too, except otp_status; others carry on", async () => {
 		const h = setup();
-		writeFileSync(h.statePath, JSON.stringify({ ...emptyState(), hardLock: { since: "2026-11-01T11:00:00.000Z", lockouts: 3 } }));
-		const msg = 'gh-broker is locked after repeated bad OTP codes (since 2026-11-01T11:00:00.000Z). Ask the user to run "sudo gh-broker otp unlock" on box. Nothing was run.';
-		await expect(h.router.call("get_me", { owner: "cldmv" })).rejects.toThrow(msg);
-		expect(lastAudit()).toMatchObject({ tool: "get_me", decision: "deny", otp: "hard-locked" });
-		await expect(h.router.call("merge_pull_request", { owner: "cldmv", otp: h.code() })).rejects.toThrow(msg);
+		writeFileSync(h.statePath, JSON.stringify({ ...emptyState(), users: { repo: { ...emptyUser(), hardLock: { since: "2026-11-01T11:00:00.000Z", lockouts: 3 } } } }));
+		const msg = 'gh-broker is locked for repo after repeated bad OTP codes (since 2026-11-01T11:00:00.000Z). Ask the user to run "sudo gh-broker otp unlock repo" on box. Nothing was run.';
+		await expect(h.call("get_me", { owner: "cldmv" })).rejects.toThrow(msg);
+		expect(lastAudit()).toMatchObject({ tool: "get_me", user: "repo", decision: "deny", otp: "hard-locked" });
+		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: h.code() })).rejects.toThrow(msg);
 		expect(h.upstream.forward).not.toHaveBeenCalled();
 
-		const status = JSON.parse(((await h.router.call("otp_status", { otp: "123456" })).content[0] as any).text);
-		expect(status).toMatchObject({ configured: true, hardLock: { since: "2026-11-01T11:00:00.000Z", lockouts: 3 }, unlockCommand: "sudo gh-broker otp unlock", host: "box" });
-		expect(lastAudit()).toMatchObject({ tool: "otp_status", decision: "custom", ok: true });
+		const status = JSON.parse(((await h.call("otp_status", { otp: "123456" })).content[0] as any).text);
+		expect(status).toMatchObject({
+			configured: true,
+			user: "repo",
+			hardLock: { since: "2026-11-01T11:00:00.000Z", lockouts: 3 },
+			unlockCommand: "sudo gh-broker otp unlock repo",
+			lockedUsers: [{ user: "repo", since: "2026-11-01T11:00:00.000Z", lockouts: 3, unlockCommand: "sudo gh-broker otp unlock repo" }],
+			host: "box"
+		});
+		expect(lastAudit()).toMatchObject({ tool: "otp_status", user: "repo", decision: "custom", ok: true });
+
+		await h.call("get_me", { owner: "cldmv" }, "glmtest");
+		await h.call("merge_pull_request", { owner: "cldmv", otp: h.code() }, "glmtest");
+		expect(h.upstream.forward).toHaveBeenCalledTimes(2);
+		expect(lastAudit()).toMatchObject({ user: "glmtest", otp: "opened" });
+		const other = JSON.parse(((await h.call("otp_status", {}, "glmtest")).content[0] as any).text);
+		expect(other).toMatchObject({ user: "glmtest", hardLock: null, lockedUsers: [{ user: "repo" }] });
+	});
+
+	it("a window opened by one user is refused for another, even with the same code", async () => {
+		const h = setup();
+		const c = h.code();
+		await h.call("merge_pull_request", { owner: "cldmv", otp: c }, "repo");
+		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: c }, "glmtest")).rejects.toThrow(/OTP required for merge_pull_request/);
+		expect(lastAudit()).toMatchObject({ user: "glmtest", decision: "deny", otp: "refused" });
+		expect(h.upstream.forward).toHaveBeenCalledTimes(1);
 	});
 
 	it("a corrupt state file fails closed for every tool but otp_status", async () => {
 		const h = setup();
 		writeFileSync(h.statePath, "garbage");
-		await expect(h.router.call("get_me", { owner: "cldmv" })).rejects.toThrow(/gh-broker is locked after repeated bad OTP codes/);
-		await expect(h.router.call("otp_status", {})).resolves.toBeDefined();
+		await expect(h.call("get_me", { owner: "cldmv" })).rejects.toThrow(/gh-broker is locked for repo after repeated bad OTP codes/);
+		await expect(h.call("otp_status", {})).resolves.toBeDefined();
 	});
 
 	it("a short lockout refuses gated tools only", async () => {
 		const h = setup({ otp: { maxFailures: 1 } });
-		await expect(h.router.call("merge_pull_request", { owner: "cldmv", otp: "000000" })).rejects.toThrow(/OTP required/);
-		await expect(h.router.call("merge_pull_request", { owner: "cldmv", otp: h.code() })).rejects.toThrow("OTP is locked for 10 more minute(s) after too many bad codes. Nothing was run.");
+		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: "000000" })).rejects.toThrow(/OTP required/);
+		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: h.code() })).rejects.toThrow("OTP is locked for 10 more minute(s) after too many bad codes. Nothing was run.");
 		expect(lastAudit()).toMatchObject({ otp: "locked" });
-		await expect(h.router.call("get_me", { owner: "cldmv" })).resolves.toBeDefined();
+		await expect(h.call("get_me", { owner: "cldmv" })).resolves.toBeDefined();
 	});
 
 	it("otp_status output never carries a code or the seed", async () => {
 		const h = setup();
 		const c = h.code();
-		await h.router.call("merge_pull_request", { owner: "cldmv", otp: c });
-		const text = ((await h.router.call("otp_status", {})).content[0] as any).text as string;
+		await h.call("merge_pull_request", { owner: "cldmv", otp: c });
+		const text = ((await h.call("otp_status", {})).content[0] as any).text as string;
 		expect(JSON.parse(text)).toMatchObject({ openWindows: 1 });
 		expect(text).not.toContain(c);
 		expect(text).not.toContain(SEED);
@@ -178,7 +202,7 @@ describe("Router + OTP gate", () => {
 	it("builds its own gate when none is injected", async () => {
 		const h = setup({ otp: null });
 		const r = new Router({ ...(h.router as any).config }, h.secrets as any, h.upstream as any);
-		const status = JSON.parse(((await r.call("otp_status", {})).content[0] as any).text);
+		const status = JSON.parse(((await r.call("otp_status", {}, { user: "repo" })).content[0] as any).text);
 		expect(status.configured).toBe(false);
 	});
 });

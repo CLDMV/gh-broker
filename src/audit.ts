@@ -20,6 +20,8 @@
 
 export interface AuditEntry {
 	tool: string;
+	/** The agent user whose socket the call came in on. */
+	user?: string;
 	owner?: string;
 	mode?: "read" | "write";
 	repo?: string;

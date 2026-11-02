@@ -17,7 +17,7 @@ function writeConfig(contents: unknown): string {
 
 function baseConfig(): Record<string, unknown> {
 	return {
-		listen: "unix:/run/gh-broker/gh-broker.sock",
+		listen: "agents:/run/gh-broker/agents",
 		upstream: "https://api.githubcopilot.com/mcp/",
 		tools: [{ name: "get_me", mode: "read" }],
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } }
@@ -60,10 +60,20 @@ describe("loadConfig — listen / upstream", () => {
 		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.listen/);
 	});
 
-	it("rejects a listen without the unix: prefix", () => {
+	it("rejects a listen that isn't agents:<absolute dir>", () => {
+		for (const listen of ["tcp:0.0.0.0:9000", "agents:relative/dir", "agents:"]) {
+			const c = baseConfig();
+			c.listen = listen;
+			expect(() => loadConfig(writeConfig(c))).toThrow('config.listen: must be "agents:<absolute directory>", e.g. "agents:/run/gh-broker/agents"');
+		}
+	});
+
+	it("rejects the old shared unix: socket and says to re-run the installer", () => {
 		const c = baseConfig();
-		c.listen = "tcp:0.0.0.0:9000";
-		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.listen/);
+		c.listen = "unix:/run/gh-broker/gh-broker.sock";
+		expect(() => loadConfig(writeConfig(c))).toThrow(
+			'config.listen: the shared "unix:" socket was replaced by one socket per agent; re-run the installer (sudo gh-broker install) to set listen to "agents:/run/gh-broker/agents"'
+		);
 	});
 
 	it("rejects a non-http upstream", () => {
@@ -299,7 +309,7 @@ describe("loadConfig — full valid config", () => {
 		c.app = { appId: 7, privateKey: "cred:app" };
 		const out = loadConfig(writeConfig(c));
 		expect(out).toEqual({
-			listen: "unix:/run/gh-broker/gh-broker.sock",
+			listen: "agents:/run/gh-broker/agents",
 			upstream: "https://api.githubcopilot.com/mcp/",
 			tools: [{ name: "get_me", mode: "read", custom: false, augment: false }],
 			owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },

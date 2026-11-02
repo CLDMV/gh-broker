@@ -116,7 +116,10 @@ export interface OtpConfig {
 }
 
 export interface Config {
-	/** e.g. "unix:/run/gh-broker/gh-broker.sock" */
+	/**
+	 * "agents:<abs dir>", e.g. "agents:/run/gh-broker/agents": one socket per registered agent
+	 * user, `<dir>/<user>.sock` (see src/agents.ts).
+	 */
 	listen: string;
 	/** GitHub hosted MCP base URL, e.g. "https://api.githubcopilot.com/mcp/" */
 	upstream: string;
@@ -144,6 +147,11 @@ export interface Config {
 	ghcr?: GhcrConfig;
 	/** Optional OTP gate for risky tools (src/otp/). */
 	otp?: OtpConfig;
+}
+
+/** Who made a call: the agent user whose socket it arrived on. */
+export interface Caller {
+	user: string;
 }
 
 /** Resolves a "cred:<name>" reference to a token, never logging it. */
