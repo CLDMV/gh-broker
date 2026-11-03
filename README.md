@@ -19,19 +19,19 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.9.0 (November 2026)
+### Latest: v0.10.0 (November 2026)
 
-- **Three report verbs for the release and fleet skills.** `report_alert_status` buckets each open Dependabot alert by where its fix stands (released but still open, fixed on `next`, open PR, closed PR, nothing). `report_release_changes` returns the PRs a release actually ships, grouped by changelog section, with the net `package.json` and dependency deltas. `report_dependents` finds every repo that declares an npm package, including dev-trunk repos on `dev`, and skips a `dev` that has fallen behind the default branch.
-- **`ciVerbosity` on `list_pull_requests`.** The same opt-in CI detail as `pull_request_read`, across a whole PR list with one shared call budget.
-- **Install from npm.** `sudo npx @cldmv/gh-broker <agent-user>` runs the installer from the prebuilt package. The tarball now ships only runtime files.
-- [View full v0.9.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.9.0.md)
+- **OTP gate for risky write tools.** Gated tools need a current code from an authenticator app, so the agent has to ask you. The first good code opens a five-minute window for that agent, and bad codes lock it out, then hard-lock it until `sudo gh-broker otp unlock <user>`.
+- **One socket per agent and the `gh-broker` command.** Each agent user gets its own socket, and `gh-broker agent add|remove|list|sync` writes its MCP config. `gh-broker otp status|list|unlock|rotate` manages the gate, and `gh-broker install` runs the installer.
+- **Eleven new write tools and a deny list.** These include merging, branch updates, repo create and fork, `delete_branch`, `dismiss_alert` and `minimize_comment`, with the risky ones gated by default and the Copilot coding-agent tools disabled. A built-in deny list refuses file writes, repo deletion and repo settings at config load. Breaking: the socket path, the `bin` and `npm_scaffold`'s `npm_otp`; see the upgrade notes.
+- [View full v0.10.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.0.md)
 
 ### Recent Releases
 
+- **v0.9.0** (November 2026) — `report_alert_status`, `report_release_changes` and `report_dependents` for the release and fleet skills, `ciVerbosity` on `list_pull_requests`, and install from npm ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.9.0.md))
 - **v0.8.0** (November 2026) — `npm_scaffold` creates an npm package and its trusted publisher, `ghcr_push` pushes images without an agent-held token, and optional credentials hide their tools ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.8.0.md))
 - **v0.7.0** (October 2026) — `issue_labels` adds, removes or swaps single labels without replacing the set, and `issue_write` warns that its `labels` does ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.7.0.md))
 - **v0.6.1** (October 2026) — MCP SDK 1.32.0 (same-origin redirects only) and a refreshed vitest toolchain; no broker source changes ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.1.md))
-- **v0.6.0** (October 2026) — Compact per-repo roll-up, filters and flow tier for `report_security_alerts`, and release-readiness analysis for `report_release_prs` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.0.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
