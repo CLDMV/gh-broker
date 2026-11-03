@@ -257,6 +257,65 @@
 			"custom": true
 		},
 		{
+			"name": "update_pull_request_branch",
+			"mode": "write"
+		},
+		{
+			"name": "request_copilot_review",
+			"mode": "write"
+		},
+		{
+			"name": "minimize_comment",
+			"mode": "write",
+			"custom": true
+		},
+		{
+			"name": "create_repository",
+			"mode": "write"
+		},
+		{
+			"name": "fork_repository",
+			"mode": "write"
+		},
+		{
+			"name": "merge_pull_request",
+			"mode": "write"
+		},
+		{
+			"name": "pull_request_review_write",
+			"mode": "write"
+		},
+		{
+			"name": "actions_run_trigger",
+			"mode": "write"
+		},
+		{
+			"name": "label_write",
+			"mode": "write"
+		},
+		{
+			"name": "delete_branch",
+			"mode": "write",
+			"custom": true
+		},
+		{
+			"name": "dismiss_alert",
+			"mode": "write",
+			"custom": true
+		},
+		{
+			"name": "create_pull_request_with_copilot",
+			"mode": "write"
+		},
+		{
+			"name": "assign_copilot_to_issue",
+			"mode": "write"
+		},
+		{
+			"name": "assign_copilot_to_issue_with_intent",
+			"mode": "write"
+		},
+		{
 			"name": "report_unlabeled",
 			"mode": "read",
 			"custom": true

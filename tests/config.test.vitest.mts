@@ -123,6 +123,19 @@ describe("loadConfig — tools", () => {
 		expect(() => loadConfig(writeConfig(c))).toThrow(/duplicate tool "get_me"/);
 	});
 
+	it("carries an enabled flag through, refuses a non-boolean one, and never lets otp_status be disabled", () => {
+		const c = baseConfig();
+		c.tools = [{ name: "assign_copilot_to_issue", mode: "write", enabled: true }, { name: "get_me", mode: "read", enabled: false }];
+		expect(loadConfig(writeConfig(c)).tools).toEqual([
+			{ name: "assign_copilot_to_issue", mode: "write", custom: false, augment: false, enabled: true },
+			{ name: "get_me", mode: "read", custom: false, augment: false, enabled: false }
+		]);
+		c.tools = [{ name: "get_me", mode: "read", enabled: "yes" }];
+		expect(() => loadConfig(writeConfig(c))).toThrow("config.tools[0].enabled: must be true or false");
+		c.tools = [{ name: "otp_status", mode: "read", custom: true, enabled: false }];
+		expect(() => loadConfig(writeConfig(c))).toThrow(`config.tools[0] ("otp_status"): can't be disabled (enabled: false)`);
+	});
+
 	it("carries the custom flag through, defaulting to false", () => {
 		const c = baseConfig();
 		c.tools = [
@@ -147,6 +160,20 @@ describe("loadConfig — tools", () => {
 			{ name: "get_me", mode: "read", custom: false, augment: false },
 			{ name: "pull_request_read", mode: "read", custom: false, augment: true }
 		]);
+	});
+
+	it("refuses a tool on the built-in deny list, even gated, and names why", () => {
+		const c = baseConfig();
+		c.tools = [{ name: "get_me", mode: "read" }, { name: "push_files", mode: "write", otp: true }];
+		expect(() => loadConfig(writeConfig(c))).toThrow('config.tools[1] ("push_files"): never allowed in gh-broker (file writes go through git); remove it from config.tools');
+		c.tools = [{ name: "delete_repository", mode: "write" }];
+		expect(() => loadConfig(writeConfig(c))).toThrow(/never allowed in gh-broker \(deleting a repo stays a manual step in GitHub\)/);
+	});
+
+	it("loads the shipped config.example.json tool list", () => {
+		const c = baseConfig();
+		c.tools = JSON.parse(readFileSync("config.example.json", "utf8")).tools;
+		expect(loadConfig(writeConfig(c)).tools).toHaveLength(87);
 	});
 
 	it("rejects a tool marked both custom and augment", () => {

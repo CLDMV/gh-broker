@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T14:02:26-08:00 (1793570546)
+ *	@Last modified time: 2026-11-02T20:12:05-08:00 (1793679125)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -31,6 +31,9 @@ import { NPM_SCAFFOLD_SCHEMA } from "./verbs/npm_scaffold.ts";
 import { unavailableReason } from "./availability.ts";
 import { GHCR_CATALOG } from "./verbs/ghcr_push.ts";
 import { OTP_STATUS_DESCRIPTION, OTP_STATUS_SCHEMA } from "./verbs/otp_status.ts";
+import { MINIMIZE_COMMENT_DESCRIPTION, MINIMIZE_COMMENT_SCHEMA } from "./verbs/minimize_comment.ts";
+import { DELETE_BRANCH_DESCRIPTION, DELETE_BRANCH_SCHEMA } from "./verbs/delete_branch.ts";
+import { DISMISS_ALERT_DESCRIPTION, DISMISS_ALERT_SCHEMA } from "./verbs/dismiss_alert.ts";
 import { OTP_ARG, OTP_STATUS, isGated, otpSettings } from "./otp/policy.ts";
 import { windowText } from "./otp/gate.ts";
 
@@ -157,6 +160,12 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 						"Report CI health for a PR, or every open PR in a repo, at a chosen verbosity: 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log. Detail beyond tier 0 is only fetched for runs that are actually failing. Runs on the read PAT.",
 					inputSchema: REPORT_CI_STATUS_SCHEMA
 				});
+			} else if (rule.name === "minimize_comment") {
+				tools.push({ name: "minimize_comment", description: MINIMIZE_COMMENT_DESCRIPTION, inputSchema: MINIMIZE_COMMENT_SCHEMA });
+			} else if (rule.name === "delete_branch") {
+				tools.push({ name: "delete_branch", description: DELETE_BRANCH_DESCRIPTION, inputSchema: DELETE_BRANCH_SCHEMA });
+			} else if (rule.name === "dismiss_alert") {
+				tools.push({ name: "dismiss_alert", description: DISMISS_ALERT_DESCRIPTION, inputSchema: DISMISS_ALERT_SCHEMA });
 			} else if (rule.name === OTP_STATUS) {
 				tools.push({ name: OTP_STATUS, description: OTP_STATUS_DESCRIPTION, inputSchema: OTP_STATUS_SCHEMA });
 			} else if (GHCR_CATALOG[rule.name]) {
@@ -207,6 +216,26 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 					}
 				}
 			});
+			continue;
+		}
+		if (rule.name === "create_repository" || rule.name === "fork_repository") {
+			// The router refuses these without an organization (and create_repository without an
+			// explicit private), so the schema says the same.
+			const schema = base.inputSchema as { properties?: Record<string, unknown>; required?: string[]; [k: string]: unknown };
+			const needed = rule.name === "create_repository" ? ["organization", "private"] : ["organization"];
+			const note =
+				rule.name === "create_repository"
+					? ' gh-broker: "organization" and "private" are required; the repo is never created in a personal account or left public by default.'
+					: ' gh-broker: "organization" (where the fork goes) is required; forks are never created in a personal account.';
+			tools.push({
+				...base,
+				description: `${base.description ?? ""}${note}`.trim(),
+				inputSchema: { ...schema, type: "object", required: [...new Set([...(schema.required ?? []), ...needed])] } as Tool["inputSchema"]
+			});
+			continue;
+		}
+		if (rule.name === "actions_run_trigger") {
+			tools.push({ ...base, description: `${base.description ?? ""} gh-broker: method "delete_workflow_run_logs" is refused; a run's logs are kept.`.trim() });
 			continue;
 		}
 		if (rule.name === "issue_write") {

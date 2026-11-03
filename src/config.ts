@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:23:22-07:00 (1793471002)
+ *	@Last modified time: 2026-11-02T21:27:13-08:00 (1793683633)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,6 +19,7 @@ import type { Config, Mode, OtpConfig, ToolRule } from "./types.ts";
 import { parseGhcrConfig } from "./verbs/ghcr/config.ts";
 import { OTP_STATUS } from "./otp/policy.ts";
 import { agentsDir } from "./agents.ts";
+import { deniedReason } from "./denylist.ts";
 
 const MODES: readonly Mode[] = ["read", "write"];
 
@@ -52,17 +53,21 @@ export function loadConfig(path: string): Config {
 		if (typeof o.name !== "string" || !o.name) throw new Error(`config.tools[${i}].name: required`);
 		if (!MODES.includes(o.mode as Mode)) throw new Error(`config.tools[${i}].mode: must be read|write`);
 		if (seen.has(o.name)) throw new Error(`config.tools: duplicate tool "${o.name}"`);
+		const denied = deniedReason(o.name);
+		if (denied) throw new Error(`config.tools[${i}] ("${o.name}"): never allowed in gh-broker (${denied}); remove it from config.tools`);
 		seen.add(o.name);
 		const custom = o.custom === true;
 		const augment = o.augment === true;
 		if (custom && augment) throw new Error(`config.tools[${i}] ("${o.name}"): custom and augment are mutually exclusive`);
 		if (o.otp !== undefined && typeof o.otp !== "boolean") throw new Error(`config.tools[${i}].otp: must be true or false`);
+		if (o.enabled !== undefined && typeof o.enabled !== "boolean") throw new Error(`config.tools[${i}].enabled: must be true or false`);
 		if (o.name === OTP_STATUS) {
 			// otp_status has to keep working while everything else is locked, so it can't be gated.
 			if (o.otp === true) throw new Error(`config.tools[${i}] ("${OTP_STATUS}"): can't be gated (otp: true)`);
+			if (o.enabled === false) throw new Error(`config.tools[${i}] ("${OTP_STATUS}"): can't be disabled (enabled: false)`);
 			if (!custom) throw new Error(`config.tools[${i}] ("${OTP_STATUS}"): must be custom: true`);
 		}
-		return { name: o.name, mode: o.mode as Mode, custom, augment, ...(typeof o.otp === "boolean" ? { otp: o.otp } : {}) };
+		return { name: o.name, mode: o.mode as Mode, custom, augment, ...(typeof o.otp === "boolean" ? { otp: o.otp } : {}), ...(typeof o.enabled === "boolean" ? { enabled: o.enabled } : {}) };
 	});
 
 	if (typeof c.owners !== "object" || c.owners === null) throw new Error("config.owners: must be an object");

@@ -74,8 +74,23 @@ afterAll(() => {
 });
 
 describe("policy", () => {
-	it("gates by the rule's own flag, else the (empty) default set, and never otp_status", () => {
-		expect(DEFAULT_GATED.size).toBe(0);
+	it("gates by the rule's own flag, else the default set, and never otp_status", () => {
+		expect([...DEFAULT_GATED].sort()).toEqual([
+			"actions_run_trigger",
+			"assign_copilot_to_issue",
+			"assign_copilot_to_issue_with_intent",
+			"create_pull_request_with_copilot",
+			"create_repository",
+			"delete_branch",
+			"dismiss_alert",
+			"fork_repository",
+			"label_write",
+			"merge_pull_request",
+			"pull_request_review_write"
+		]);
+		expect(isGated({ name: "merge_pull_request", mode: "write" })).toBe(true);
+		expect(isGated({ name: "merge_pull_request", mode: "write", otp: false })).toBe(false);
+		expect(isGated({ name: "update_pull_request_branch", mode: "write" })).toBe(false);
 		expect(isGated({ name: "x", mode: "write" })).toBe(false);
 		expect(isGated({ name: "x", mode: "write", otp: true })).toBe(true);
 		expect(isGated({ name: "x", mode: "write", otp: false })).toBe(false);

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T14:02:26-08:00 (1793570546)
+ *	@Last modified time: 2026-11-02T20:20:16-08:00 (1793679616)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -37,6 +37,9 @@ import { reportAlertStatus, type ReportAlertStatusInput } from "./verbs/report_a
 import { issueLabels, type IssueLabelsInput } from "./verbs/issue_labels.ts";
 import { reportCiStatus, ciStatusForHeadSha, ciStatusForHeads, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
 import { npmScaffold } from "./verbs/npm_scaffold.ts";
+import { minimizeComment, type MinimizeCommentInput } from "./verbs/minimize_comment.ts";
+import { deleteBranch, type DeleteBranchInput } from "./verbs/delete_branch.ts";
+import { dismissAlert, type DismissAlertInput } from "./verbs/dismiss_alert.ts";
 import { NpmRegistry } from "./verbs/npm-registry.ts";
 import { GhcrService } from "./verbs/ghcr_push.ts";
 import { OtpGate, type OtpAudit, type OtpRefusal } from "./otp/gate.ts";
@@ -113,6 +116,18 @@ export class Router {
 			audit({ tool, user, mode: rule.mode, decision: "custom", ok: true });
 			return { content: [{ type: "text", text: JSON.stringify(this.otp.status(user)) }] };
 		}
+		// Checked before the gate, so a call that can't run never asks for a code.
+		let createdIn: string | undefined;
+		if (REPO_CREATING.has(tool) || tool === "actions_run_trigger") {
+			try {
+				if (tool === "actions_run_trigger") refuseLogDeletion(args);
+				else createdIn = creationOwner(tool, args, this.config.owners);
+			} catch (err) {
+				const requested = typeof args.organization === "string" ? args.organization : extractOwner(args);
+				audit({ tool, user, mode: rule.mode, ...(requested ? { owner: requested.toLowerCase() } : {}), decision: "error", detail: (err as Error).message });
+				throw err;
+			}
+		}
 		let otp: OtpAudit | undefined;
 		if (isGated(rule)) {
 			try {
@@ -128,7 +143,7 @@ export class Router {
 		// Owner-less reads (global advisory DB, get_me, notifications) fall back to
 		// the configured defaultOwner's READ PAT. Writes never fall back — a write
 		// must always name the owner it targets.
-		let owner = extractOwner(args);
+		let owner = createdIn ?? extractOwner(args);
 		if (!owner && rule.mode === "read" && this.config.defaultOwner && this.config.owners[this.config.defaultOwner]) {
 			owner = this.config.defaultOwner.toLowerCase();
 		}
@@ -142,7 +157,10 @@ export class Router {
 			throw new Error(`no credentials configured for owner "${owner}" — add it to config.owners + creds`);
 		}
 		const token = this.secrets.resolve(rule.mode === "write" ? creds.write : creds.read);
-		const repo = typeof args.repo === "string" ? `${owner}/${args.repo}` : owner;
+		const repoName = tool === "create_repository" ? args.name : args.repo;
+		const repo = typeof repoName === "string" ? `${owner}/${repoName}` : owner;
+		// A fork's audit line also names what was forked; owner/repo above are the new copy.
+		const forked = tool === "fork_repository" ? { source: `${String(args.owner)}/${String(args.repo)}` } : {};
 
 		const decision = rule.custom ? "custom" : rule.augment ? "augment" : "forward";
 		try {
@@ -151,10 +169,10 @@ export class Router {
 				: rule.augment
 					? await this.dispatchAugmented(tool, args, owner, token)
 					: await this.upstream.forward(tool, args, token);
-			audit({ tool, user, owner, mode: rule.mode, repo, decision, ok: true, ...otp });
+			audit({ tool, user, owner, mode: rule.mode, repo, ...forked, decision, ok: true, ...otp });
 			return out;
 		} catch (err) {
-			audit({ tool, user, owner, mode: rule.mode, repo, decision, ok: false, detail: (err as Error).message, ...otp });
+			audit({ tool, user, owner, mode: rule.mode, repo, ...forked, decision, ok: false, detail: (err as Error).message, ...otp });
 			throw err;
 		}
 	}
@@ -252,6 +270,18 @@ export class Router {
 				const octokit = new Octokit({ auth: this.secrets.resolve(this.config.owners[owner]!.read) });
 				const registry = new NpmRegistry({ token: this.secrets.resolve(npm.token), ...(npm.registry ? { registry: npm.registry } : {}) });
 				const out = await npmScaffold(args, { octokit, registry, scopes: npm.scopes });
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "minimize_comment": {
+				const out = await minimizeComment(new Octokit({ auth: token }), args as unknown as MinimizeCommentInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "delete_branch": {
+				const out = await deleteBranch(new Octokit({ auth: token }), args as unknown as DeleteBranchInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "dismiss_alert": {
+				const out = await dismissAlert(new Octokit({ auth: token }), args as unknown as DismissAlertInput);
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
 			default:
@@ -368,6 +398,37 @@ export class Router {
 				return this.upstream.forward(tool, args, token);
 		}
 	}
+}
+
+/** Tools that create a repo, whose PAT is picked by the org the repo lands in. */
+const REPO_CREATING = new Set(["create_repository", "fork_repository"]);
+
+/**
+ * The org a new repo lands in. Upstream creates it in the PAT user's own account when
+ * `organization` is left out, so it's required here, and it must be a configured owner. Repos
+ * are only created in orgs: upstream sends a configured user-owner's name to the org endpoint,
+ * which 404s. For a fork, `owner` is the repo being forked and `organization` is where the
+ * fork goes, so the write PAT is the destination's. create_repository also needs `private`
+ * said explicitly, so a repo's visibility is never left to a default.
+ */
+export function creationOwner(tool: string, args: Record<string, unknown>, owners: Config["owners"]): string {
+	if (typeof args.organization !== "string" || !args.organization) {
+		throw new Error(`tool "${tool}": "organization" is required (the org the repo is created in); gh-broker doesn't create repos in a personal account`);
+	}
+	const org = args.organization.toLowerCase();
+	if (!owners[org]) throw new Error(`no credentials configured for owner "${org}" — add it to config.owners + creds`);
+	if (tool === "create_repository" && typeof args.private !== "boolean") {
+		throw new Error('tool "create_repository": "private" is required, true or false; a repo\'s visibility is never left to a default');
+	}
+	return org;
+}
+
+/**
+ * actions_run_trigger's delete_workflow_run_logs method removes a run's logs, which are the
+ * record of what a run did. The other methods (dispatch, re-run, cancel) stay, behind the gate.
+ */
+export function refuseLogDeletion(args: Record<string, unknown>): void {
+	if (args.method === "delete_workflow_run_logs") throw new Error('tool "actions_run_trigger": method "delete_workflow_run_logs" is not allowed in gh-broker; a run\'s logs are kept');
 }
 
 /** Derive the repo owner from a tool call's arguments, so we pick the right PAT. */

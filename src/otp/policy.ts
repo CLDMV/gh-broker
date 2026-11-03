@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T20:43:25-08:00 (1793594605)
+ *	@Last modified time: 2026-11-02T21:27:13-08:00 (1793683633)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -28,8 +28,24 @@ export const OTP_STATUS = "otp_status";
 /** The argument a gated call carries its code in (npm_scaffold's own npm code is `npm_otp`). */
 export const OTP_ARG = "otp";
 
-/** Tools gated when config.tools[i].otp doesn't say otherwise. Empty for now (see #146). */
-export const DEFAULT_GATED: ReadonlySet<string> = new Set<string>();
+/**
+ * Tools gated when config.tools[i].otp doesn't say otherwise (#146): each one can publish,
+ * merge, release or undo something under the user's name. Every other tool defaults to ungated.
+ */
+export const DEFAULT_GATED: ReadonlySet<string> = new Set<string>([
+	"create_repository",
+	"fork_repository",
+	"merge_pull_request",
+	"pull_request_review_write",
+	"actions_run_trigger",
+	"label_write",
+	"delete_branch",
+	"dismiss_alert",
+	// Disabled by default too (src/availability.ts); gated once enabled.
+	"create_pull_request_with_copilot",
+	"assign_copilot_to_issue",
+	"assign_copilot_to_issue_with_intent"
+]);
 
 export const OTP_DEFAULTS = {
 	windowSeconds: 300,
