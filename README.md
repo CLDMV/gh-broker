@@ -133,7 +133,7 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ### 📦 **One-Command Install & Upgrade**
 
-`sudo node deploy/install.mjs` handles first install and every upgrade: builds under the checkout's own owner (no `chown`, ever), merges shipped config defaults over the deployed config, lets you choose how PATs are stored at rest, and runs a post-deploy smoke test.
+`sudo gh-broker install` (or `sudo node deploy/install.mjs` from a checkout) handles first install and every upgrade: builds under the checkout's own owner (no `chown`, ever), merges shipped config defaults over the deployed config, lets you choose how PATs are stored at rest, and runs a post-deploy smoke test.
 
 📦 **Full prerequisites, PAT scopes, and flags: [deploy/README.md](deploy/README.md)**
 
@@ -152,10 +152,11 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 gh-broker is a system service, not a library. The installer handles both the first install and every upgrade, and you can run it from npm or from a checkout.
 
-From npm ([`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker)), with the prebuilt bundle:
+From npm ([`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker)), with the prebuilt bundle, as a global install (upgrade with the same command, then `gh-broker install` again):
 
 ```sh
-sudo npx @cldmv/gh-broker <agent-user>
+sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker
+sudo gh-broker install <agent-user>
 ```
 
 From a checkout:
@@ -166,13 +167,13 @@ cd gh-broker
 sudo node deploy/install.mjs <agent-user>
 ```
 
-Both take the same flags. The installer creates the service user and the socket group, builds as the checkout's owner when there's no bundle yet, merges the shipped defaults with the deployed config, stores the PATs in the backend you pick, installs the unit and runs a smoke test. Prerequisites, PAT scopes, unattended installs and every flag: [deploy/README.md](deploy/README.md).
+Both take the same flags. The installer creates the service user, registers each agent user (its own group, socket and MCP config; see `gh-broker agent`), builds as the checkout's owner when there's no bundle yet, merges the shipped defaults with the deployed config, stores the PATs in the backend you pick, installs the unit and runs a smoke test. Prerequisites, PAT scopes, unattended installs and every flag: [deploy/README.md](deploy/README.md).
 
 ---
 
 ## 🚀 Quick Start
 
-Point the agent's MCP client at the socket ([deploy/README.md § 3](deploy/README.md#3-point-claude-at-the-broker)). From then on the client sees an ordinary `tools/call`, and the broker resolves the credential, routes it, and (for custom/augmented tools) does the extra work in between:
+The installer writes each agent's MCP config for its own socket ([deploy/README.md § 3](deploy/README.md#3-agents-one-socket-and-one-mcp-config-each)). From then on the client sees an ordinary `tools/call`, and the broker resolves the credential, routes it, and (for custom/augmented tools) does the extra work in between:
 
 ```json
 // tools/call

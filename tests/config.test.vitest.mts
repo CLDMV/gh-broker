@@ -17,7 +17,7 @@ function writeConfig(contents: unknown): string {
 
 function baseConfig(): Record<string, unknown> {
 	return {
-		listen: "unix:/run/gh-broker/gh-broker.sock",
+		listen: "agents:/run/gh-broker/agents",
 		upstream: "https://api.githubcopilot.com/mcp/",
 		tools: [{ name: "get_me", mode: "read" }],
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } }
@@ -60,10 +60,20 @@ describe("loadConfig — listen / upstream", () => {
 		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.listen/);
 	});
 
-	it("rejects a listen without the unix: prefix", () => {
+	it("rejects a listen that isn't agents:<absolute dir>", () => {
+		for (const listen of ["tcp:0.0.0.0:9000", "agents:relative/dir", "agents:"]) {
+			const c = baseConfig();
+			c.listen = listen;
+			expect(() => loadConfig(writeConfig(c))).toThrow('config.listen: must be "agents:<absolute directory>", e.g. "agents:/run/gh-broker/agents"');
+		}
+	});
+
+	it("rejects the old shared unix: socket and says to re-run the installer", () => {
 		const c = baseConfig();
-		c.listen = "tcp:0.0.0.0:9000";
-		expect(() => loadConfig(writeConfig(c))).toThrow(/config\.listen/);
+		c.listen = "unix:/run/gh-broker/gh-broker.sock";
+		expect(() => loadConfig(writeConfig(c))).toThrow(
+			'config.listen: the shared "unix:" socket was replaced by one socket per agent; re-run the installer (sudo gh-broker install) to set listen to "agents:/run/gh-broker/agents"'
+		);
 	});
 
 	it("rejects a non-http upstream", () => {
@@ -299,7 +309,7 @@ describe("loadConfig — full valid config", () => {
 		c.app = { appId: 7, privateKey: "cred:app" };
 		const out = loadConfig(writeConfig(c));
 		expect(out).toEqual({
-			listen: "unix:/run/gh-broker/gh-broker.sock",
+			listen: "agents:/run/gh-broker/agents",
 			upstream: "https://api.githubcopilot.com/mcp/",
 			tools: [{ name: "get_me", mode: "read", custom: false, augment: false }],
 			owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
@@ -369,7 +379,7 @@ describe("loadConfig — ghcr", () => {
 
 	it("ships no owner-specific data in config.example.json, and it loads once an owner is added", () => {
 		const raw = JSON.parse(readFileSync(join(process.cwd(), "config.example.json"), "utf8"));
-		expect(Object.keys(raw).sort()).toEqual(["listen", "tools", "upstream"]);
+		expect(Object.keys(raw).sort()).toEqual(["listen", "otp", "tools", "upstream"]);
 		const c = loadConfig(writeConfig({ ...raw, owners: { acme: { read: "cred:acme-read", write: "cred:acme-write" } } }));
 		expect(c.tools.filter((t) => t.name.startsWith("ghcr_")).map((t) => [t.name, t.mode, t.custom])).toEqual([
 			["ghcr_push", "write", true],
@@ -384,5 +394,55 @@ describe("loadConfig — ghcr", () => {
 		const c = loadConfig(writeConfig({ ...sample, tools: raw.tools }));
 		expect(c.ghcr?.dropDir).toBe("/srv/gh-broker/ghcr-drop");
 		expect(c.defaultOwner).toBe("your-org");
+	});
+});
+
+describe("loadConfig — otp", () => {
+	const withTools = (tools: unknown[]) => ({ ...baseConfig(), tools });
+
+	it("parses config.otp, keeping only what was given (defaults live in src/otp/policy.ts)", () => {
+		expect(loadConfig(writeConfig({ ...baseConfig(), otp: { seed: "cred:otp-seed" } })).otp).toEqual({ seed: "cred:otp-seed" });
+		const full = { seed: "cred:otp-seed", windowSeconds: 120, maxFailures: 3, lockoutSeconds: 60, maxLockouts: 2, statePath: "/var/lib/gh-broker/s.json" };
+		expect(loadConfig(writeConfig({ ...baseConfig(), otp: full })).otp).toEqual(full);
+		expect(loadConfig(writeConfig(baseConfig())).otp).toBeUndefined();
+	});
+
+	it.each([
+		[[], /config\.otp: must be an object/],
+		[null, /config\.otp: must be an object/],
+		[{}, /config\.otp\.seed: must be a "cred:<name>" ref/],
+		[{ seed: "GEZDGNBV" }, /config\.otp\.seed: must be a "cred:<name>" ref/],
+		[{ seed: "cred:s", windowSeconds: 0 }, /config\.otp\.windowSeconds: must be a positive integer/],
+		[{ seed: "cred:s", maxFailures: 1.5 }, /config\.otp\.maxFailures: must be a positive integer/],
+		[{ seed: "cred:s", lockoutSeconds: "600" }, /config\.otp\.lockoutSeconds: must be a positive integer/],
+		[{ seed: "cred:s", maxLockouts: -1 }, /config\.otp\.maxLockouts: must be a positive integer/],
+		[{ seed: "cred:s", statePath: "relative.json" }, /config\.otp\.statePath: must be an absolute path/],
+		[{ seed: "cred:s", statePath: 5 }, /config\.otp\.statePath: must be an absolute path/]
+	] as Array<[unknown, RegExp]>)("rejects a bad otp block (%#)", (otp, msg) => {
+		expect(() => loadConfig(writeConfig({ ...baseConfig(), otp }))).toThrow(msg);
+	});
+
+	it("carries a tool's otp flag only when it is set, and rejects a non-boolean", () => {
+		const out = loadConfig(writeConfig(withTools([{ name: "get_me", mode: "read" }, { name: "a", mode: "write", otp: true }, { name: "b", mode: "write", otp: false }])));
+		expect(out.tools).toEqual([
+			{ name: "get_me", mode: "read", custom: false, augment: false },
+			{ name: "a", mode: "write", custom: false, augment: false, otp: true },
+			{ name: "b", mode: "write", custom: false, augment: false, otp: false }
+		]);
+		expect(() => loadConfig(writeConfig(withTools([{ name: "a", mode: "write", otp: "yes" }])))).toThrow(/config\.tools\[0\]\.otp: must be true or false/);
+	});
+
+	it("otp_status must be custom and can't be gated", () => {
+		expect(loadConfig(writeConfig(withTools([{ name: "otp_status", mode: "read", custom: true, otp: false }]))).tools[0]).toMatchObject({ name: "otp_status", otp: false });
+		expect(() => loadConfig(writeConfig(withTools([{ name: "otp_status", mode: "read", custom: true, otp: true }])))).toThrow(/"otp_status"\): can't be gated/);
+		expect(() => loadConfig(writeConfig(withTools([{ name: "otp_status", mode: "read" }])))).toThrow(/"otp_status"\): must be custom: true/);
+	});
+
+	it("config.example.json enables otp_status and the otp block", () => {
+		const raw = JSON.parse(readFileSync(join(process.cwd(), "config.example.json"), "utf8"));
+		const c = loadConfig(writeConfig({ ...raw, owners: { acme: { read: "cred:acme-read", write: "cred:acme-write" } } }));
+		expect(c.otp).toEqual({ seed: "cred:otp-seed" });
+		expect(c.tools.find((t) => t.name === "otp_status")).toEqual({ name: "otp_status", mode: "read", custom: true, augment: false });
+		expect(c.tools.filter((t) => t.otp !== undefined)).toEqual([]);
 	});
 });

@@ -1,0 +1,136 @@
+/**
+ *
+ *	@Project: @cldmv/gh-broker
+ *	@Filename: /deploy/lib/otp-cli.mjs
+ *	@Date: 2026-11-02T09:12:00-08:00 (1793639520)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-11-02T09:12:00-08:00 (1793639520)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
+ * `gh-broker otp unlock | status | list | rotate` (#143, contract v2): the root-side half of the OTP gate.
+ * Lock state is per agent user, in the state file the daemon writes. Every effect is injected (see
+ * deploy/cli.mjs for the real wiring), so the commands are testable without root.
+ */
+import { DEFAULT_STATE_PATH, DEFAULT_MAX_FAILURES, DEFAULT_MAX_LOCKOUTS, describeUsers, emptyState, formatStatus, generateSeed, secondsUntilFreshCode, seedCredName, showSeed, spendRecentCodes, userOf, withoutUser, withoutUsers } from "./otp.mjs";
+import { assertAgentName, registeredAgents, versionWarning } from "./agents.mjs";
+
+export const statePathOf = (config) => config.otp?.statePath ?? DEFAULT_STATE_PATH;
+export const limitsOf = (config) => ({ maxFailures: config.otp?.maxFailures ?? DEFAULT_MAX_FAILURES, maxLockouts: config.otp?.maxLockouts ?? DEFAULT_MAX_LOCKOUTS });
+
+/** Run one `otp` subcommand. Returns the exit code; throws on a failure the dispatcher reports. */
+export async function otpCommand(command, rest, config, d) {
+	if (command === "status") return status(config, rest, d);
+	if (command === "unlock") return unlock(config, rest, d);
+	if (command === "list") return list(config, rest, d);
+	return rotate(config, d);
+}
+
+function status(config, rest, d) {
+	const only = rest.find((a) => !a.startsWith("-"));
+	const statePath = statePathOf(config);
+	const read = d.readState(statePath);
+	const known = registeredAgents(d.groups()).map((a) => a.user);
+	const users = describeUsers(read, only ? [only] : known, limitsOf(config), d.now()).filter((u) => !only || u.user === only);
+	const configured = seedCredName(config) !== undefined;
+	const warn = versionWarning(d.versions().pkg, d.versions().deployed);
+	if (rest.includes("--json")) {
+		d.log(JSON.stringify({ configured, statePath, fileStatus: read.status, users, unlockCommand: "sudo gh-broker otp unlock <user>" }, null, "\t"));
+	} else {
+		for (const line of formatStatus(users, { statePath, fileStatus: read.status, configured })) d.log(line);
+	}
+	if (warn) d.error(warn);
+	return 0;
+}
+
+/** Who is locked out right now (short lockout or hard lock), with the command that clears each. */
+function list(config, rest, d) {
+	const statePath = statePathOf(config);
+	const read = d.readState(statePath);
+	const known = registeredAgents(d.groups()).map((a) => a.user);
+	const locked = describeUsers(read, known, limitsOf(config), d.now())
+		.filter((u) => u.locked)
+		.map((u) => ({ user: u.user, corrupt: Boolean(u.corrupt), hardLock: u.hardLock, lockedUntil: u.lockedUntil, unlockCommand: u.corrupt ? "sudo gh-broker otp unlock --all" : `sudo gh-broker otp unlock ${u.user}` }));
+	if (rest.includes("--json")) {
+		d.log(JSON.stringify({ statePath, fileStatus: read.status, locked }, null, "\t"));
+		return 0;
+	}
+	if (locked.length === 0) d.log("nobody is locked out");
+	for (const u of locked) {
+		const why = u.corrupt ? `locked: ${statePath} is corrupt` : u.hardLock ? `hard-locked since ${u.hardLock.since} after ${u.hardLock.lockouts} lockouts` : `locked until ${u.lockedUntil}`;
+		d.log(`${u.user}  ${why}  unlock: ${u.unlockCommand}`);
+	}
+	return 0;
+}
+
+/** Record an unlock in the journal next to the daemon's audit log (never fatal). */
+function auditUnlock(d, user, detail) {
+	try {
+		d.audit({ ts: new Date(d.now()).toISOString(), decision: "otp-unlock", user, by: d.sudoUser() ?? "root", ...(detail ? { detail } : {}) });
+	} catch (err) {
+		d.error(`warning: the unlock could not be written to the journal: ${err.message}`);
+	}
+}
+
+/** What to tell the operator after a write that spent the recent codes (a code that is refused counts as a bad one). */
+const afterUnlock = (now) => `The code the authenticator shows now won't work, nor the one after it: wait ${secondsUntilFreshCode(now)} s for a fresh code.`;
+
+function unlock(config, rest, d) {
+	const all = rest.includes("--all");
+	const user = rest.find((a) => !a.startsWith("-"));
+	if (all === Boolean(user)) throw new Error('name the agent to unlock ("sudo gh-broker otp unlock <user>") or pass --all');
+	if (user) assertAgentName(user);
+	const statePath = statePathOf(config);
+	const read = d.readState(statePath);
+	if (read.status === "missing") {
+		d.log(`nothing to unlock: no state file at ${statePath}`);
+		return 0;
+	}
+	const now = d.now();
+	if (read.status === "corrupt") {
+		if (!all) throw new Error(`${statePath} is corrupt, so every user is locked; run "sudo gh-broker otp unlock --all" to rewrite it clean`);
+		// The old lastAcceptedStep can't be read back, so spend everything up to now instead.
+		d.writeState(statePath, spendRecentCodes(emptyState(), now));
+		auditUnlock(d, "*", "rewrote a corrupt state file");
+		d.log(`rewrote the corrupt state file at ${statePath}; everyone is unlocked. ${afterUnlock(now)}`);
+		return 0;
+	}
+	if (all) {
+		d.writeState(statePath, spendRecentCodes(withoutUsers(read.state), now));
+		auditUnlock(d, "*");
+		d.log(`cleared the lock state of every user in ${statePath}. ${afterUnlock(now)}`);
+		return 0;
+	}
+	if (!Object.hasOwn(read.state.users, user)) {
+		d.log(`${user} has no lock state; nothing to clear`);
+		return 0;
+	}
+	const wasLocked = Boolean(userOf(read.state, user).hardLock);
+	d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user), now));
+	auditUnlock(d, user);
+	d.log(`${wasLocked ? `unlocked ${user}` : `cleared ${user}'s counters (not hard-locked)`}. ${afterUnlock(now)}`);
+	return 0;
+}
+
+async function rotate(config, d) {
+	const name = seedCredName(config);
+	if (!name) throw new Error("OTP is not configured (no otp.seed in the config); re-run the installer first");
+	const seed = d.newSeed ? d.newSeed() : generateSeed();
+	// Shown before it is stored: storing replaces the old seed, so a failure after the store
+	// would otherwise leave a seed nobody has.
+	await showSeed({ seed, host: d.host(), log: d.log, ...(d.qr ? { qr: d.qr } : {}) });
+	try {
+		d.storeSeed(config, name, seed);
+	} catch (err) {
+		throw new Error(`storing the new seed failed (${err.message}); the key above is not in use and the old seed is still the stored one. Nothing was restarted; run "sudo gh-broker otp rotate" again`);
+	}
+	d.restart();
+	d.log("service restarted. The old authenticator entry no longer works; remove it from your app.");
+	return 0;
+}

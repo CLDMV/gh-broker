@@ -17,11 +17,13 @@
  * Tools that depend on an optional integration. An allowlisted tool whose integration isn't
  * configured, or whose credential isn't stored, is unavailable: the catalog doesn't advertise
  * it and the router refuses it like a tool that isn't allowed. Everything else keeps working.
- * Catalog and router both ask here, so they can never disagree.
+ * Gated tools (src/otp/policy.ts) are unavailable until OTP is set up. Catalog and router both
+ * ask here, so they can never disagree.
  */
 
 import type { Config, SecretStore, ToolRule } from "./types.ts";
 import { ghcrCredRefs } from "./verbs/ghcr/config.ts";
+import { isGated, otpSetupProblem } from "./otp/policy.ts";
 
 const GHCR_TOOLS = new Set(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
 
@@ -38,5 +40,7 @@ export function unavailableReason(rule: ToolRule, config: Config, secrets: Secre
 			return `no GHCR credential is stored (${refs.map((r) => `"${r.replace(/^cred:/, "")}"`).join(", ")}; re-run the installer to add one)`;
 		}
 	}
+	// A gated tool can only run once OTP is set up; until then it's hidden like the others.
+	if (isGated(rule)) return otpSetupProblem(config, secrets);
 	return undefined;
 }

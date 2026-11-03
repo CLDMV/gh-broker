@@ -117,7 +117,7 @@ describe("buildCatalog", () => {
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "npm_scaffold" });
 		expect(catalog[0]?.description).toMatch(/one-time password/);
-		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo", "package", "otp"] });
+		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo", "package", "npm_otp"] });
 	});
 
 	it("advertises issue_labels with its local schema", async () => {
@@ -282,5 +282,63 @@ describe("buildCatalog", () => {
 		const config = { ...makeConfig(rules), ghcr: { owners: { cldmv: { credential: "cred:cldmv-packages" } } } };
 		expect(await buildCatalog(config, secrets as any, upstream as any)).toEqual([]);
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/no GHCR credential is stored \("cldmv-packages"; re-run the installer/));
+	});
+
+	describe("OTP gate", () => {
+		const seedSecrets = () => ({ resolve: vi.fn((ref: string) => (ref === "cred:otp-seed" ? "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" : "tok")), has: vi.fn(() => true) });
+		const otpConfig = (rules: any[], otp: Record<string, unknown> = {}) => ({ ...makeConfig(rules), otp: { seed: "cred:otp-seed", ...otp } });
+
+		it("adds a required otp argument and a description sentence to gated tools, copying schemas", async () => {
+			const upstreamSchema = { type: "object", properties: { owner: { type: "string" } }, required: ["owner"] };
+			const upstreamTool = { name: "merge_pull_request", description: "Merge a PR.", inputSchema: upstreamSchema };
+			upstream.listToolsFor.mockResolvedValue([upstreamTool, { name: "get_me", description: "me", inputSchema: { type: "object" } }]);
+			const before = JSON.stringify(upstreamTool);
+			const catalog = await buildCatalog(
+				otpConfig([{ name: "merge_pull_request", mode: "write", otp: true }, { name: "get_me", mode: "read" }, { name: "otp_status", mode: "read", custom: true }]) as any,
+				seedSecrets() as any,
+				upstream as any
+			);
+			const merge = catalog.find((t) => t.name === "merge_pull_request")!;
+			expect(merge.inputSchema).toEqual({ type: "object", properties: { owner: { type: "string" }, otp: { type: "string", description: expect.any(String) } }, required: ["owner", "otp"] });
+			expect(merge.description).toBe(
+				'Merge a PR. Needs a broker OTP (gh-broker): ask the user for a current code from their authenticator app and pass it as "otp". One code works for every gated tool for 5 minutes after the first call that uses it.'
+			);
+			expect(JSON.stringify(upstreamTool)).toBe(before);
+			// Ungated tools are passed through untouched.
+			expect(catalog.find((t) => t.name === "get_me")).toBe((await upstream.listToolsFor.mock.results[0]!.value)[1]);
+			expect(catalog.find((t) => t.name === "otp_status")).toMatchObject({ name: "otp_status", inputSchema: { type: "object", properties: {} } });
+			expect(catalog.find((t) => t.name === "otp_status")!.description).toMatch(/Never shows a code or the seed/);
+		});
+
+		it("gates a custom verb without mutating its shared schema constant, and uses the configured window", async () => {
+			upstream.listToolsFor.mockResolvedValue([]);
+			const { NPM_SCAFFOLD_SCHEMA } = await import("../src/verbs/npm_scaffold.ts");
+			const before = JSON.stringify(NPM_SCAFFOLD_SCHEMA);
+			const cfg = { ...otpConfig([{ name: "npm_scaffold", mode: "write", custom: true, otp: true }], { windowSeconds: 90 }), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
+			const [tool] = await buildCatalog(cfg as any, seedSecrets() as any, upstream as any);
+			expect(tool!.inputSchema).toMatchObject({ required: ["owner", "repo", "package", "npm_otp", "otp"], properties: { npm_otp: expect.any(Object), otp: expect.any(Object) } });
+			expect(tool!.description).toMatch(/for 90 seconds after the first call/);
+			expect(JSON.stringify(NPM_SCAFFOLD_SCHEMA)).toBe(before);
+		});
+
+		it("fills in a minimal schema and never lists otp twice", async () => {
+			upstream.listToolsFor.mockRejectedValue(new Error("offline"));
+			const [minimal] = await buildCatalog(otpConfig([{ name: "merge_pull_request", mode: "write", otp: true }]) as any, seedSecrets() as any, upstream as any);
+			expect(minimal!.inputSchema).toEqual({ type: "object", properties: { otp: expect.any(Object) }, required: ["otp"] });
+
+			upstream.listToolsFor.mockResolvedValue([{ name: "merge_pull_request", inputSchema: { type: "object", required: ["otp"] } }]);
+			const [already] = await buildCatalog(otpConfig([{ name: "merge_pull_request", mode: "write", otp: true }]) as any, seedSecrets() as any, upstream as any);
+			expect((already!.inputSchema as any).required).toEqual(["otp"]);
+			expect(already!.description).toMatch(/^Needs a broker OTP/);
+		});
+
+		it("hides gated tools while OTP isn't set up, saying why", async () => {
+			upstream.listToolsFor.mockResolvedValue([{ name: "merge_pull_request", inputSchema: { type: "object" } }]);
+			const rules = [{ name: "merge_pull_request", mode: "write", otp: true }, { name: "otp_status", mode: "read", custom: true }];
+			expect((await buildCatalog(makeConfig(rules), secrets as any, upstream as any)).map((t) => t.name)).toEqual(["otp_status"]);
+			expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"merge_pull_request" is not exposed: OTP is not set up on this broker/));
+			const noSeed = { resolve: vi.fn(() => "tok"), has: vi.fn((ref: string) => ref !== "cred:otp-seed") };
+			expect((await buildCatalog(otpConfig(rules) as any, noSeed as any, upstream as any)).map((t) => t.name)).toEqual(["otp_status"]);
+		});
 	});
 });

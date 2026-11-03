@@ -147,6 +147,16 @@ describe("loadSecretStore (file provider)", () => {
 		expect(() => loadSecretStore(config(undefined, { npm: { ...npm, token: "npm_inline" } }))).toThrow(/config.npm.token must be a "cred:<name>" ref/);
 		expect(() => loadSecretStore(config(undefined, { npm: { ...npm, token: "cred:../x" } }))).toThrow(/unsafe credential name/);
 	});
+
+	it("treats the OTP seed as optional: startup does not require it, but its name is checked", () => {
+		const otp = { seed: "cred:otp-seed" };
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
+		expect(loadSecretStore(config(undefined, { otp })).has("cred:otp-seed")).toBe(false);
+		secretsFile({ "cldmv-read": "r", "cldmv-write": "w", "otp-seed": "GEZDGNBV" });
+		expect(loadSecretStore(config(undefined, { otp })).resolve("cred:otp-seed")).toBe("GEZDGNBV");
+		expect(() => loadSecretStore(config(undefined, { otp: { seed: "cred:../seed" } }))).toThrow(/unsafe credential name/);
+		expect(() => loadSecretStore(config(undefined, { otp: { seed: "GEZDGNBV" } }))).toThrow(/bad credential ref/);
+	});
 });
 
 describe("loadSecretStore (systemd-creds provider, the default)", () => {

@@ -30,6 +30,9 @@ import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 import { NPM_SCAFFOLD_SCHEMA } from "./verbs/npm_scaffold.ts";
 import { unavailableReason } from "./availability.ts";
 import { GHCR_CATALOG } from "./verbs/ghcr_push.ts";
+import { OTP_STATUS_DESCRIPTION, OTP_STATUS_SCHEMA } from "./verbs/otp_status.ts";
+import { OTP_ARG, OTP_STATUS, isGated, otpSettings } from "./otp/policy.ts";
+import { windowText } from "./otp/gate.ts";
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
@@ -102,7 +105,7 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 				tools.push({
 					name: "npm_scaffold",
 					description:
-						"Create a new npm package and register its GitHub Actions trusted publisher, so the repo's publish workflow can release it through OIDC from then on. Publishes a broker-built placeholder (0.0.0-stage, no code) and never publishes a version of an existing package. Every npm write needs its own one-time password from the user, so it takes two calls: the first publishes the placeholder and returns status needs_otp; ask the user for the next code and call again to add the trusted publisher. Ask for each code right before the call. A refused or expired code also returns needs_otp with the remaining steps. Checks first that the repo's package.json names the package and that the workflow file exists. Uses the broker's npm token (no 2FA bypass) and the read PAT.",
+						"Create a new npm package and register its GitHub Actions trusted publisher, so the repo's publish workflow can release it through OIDC from then on. Publishes a broker-built placeholder (0.0.0-stage, no code) and never publishes a version of an existing package. Every npm write needs its own one-time password from the user, passed as npm_otp, so it takes two calls: the first publishes the placeholder and returns status needs_otp; ask the user for the next npm code and call again with it in npm_otp to add the trusted publisher. Ask for each code right before the call. A refused or expired code also returns needs_otp with the remaining steps. Checks first that the repo's package.json names the package and that the workflow file exists. Uses the broker's npm token (no 2FA bypass) and the read PAT.",
 					inputSchema: NPM_SCAFFOLD_SCHEMA
 				});
 			} else if (rule.name === "report_unlabeled") {
@@ -154,6 +157,8 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 						"Report CI health for a PR, or every open PR in a repo, at a chosen verbosity: 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log. Detail beyond tier 0 is only fetched for runs that are actually failing. Runs on the read PAT.",
 					inputSchema: REPORT_CI_STATUS_SCHEMA
 				});
+			} else if (rule.name === OTP_STATUS) {
+				tools.push({ name: OTP_STATUS, description: OTP_STATUS_DESCRIPTION, inputSchema: OTP_STATUS_SCHEMA });
 			} else if (GHCR_CATALOG[rule.name]) {
 				tools.push({ name: rule.name, ...GHCR_CATALOG[rule.name]! });
 			}
@@ -219,5 +224,31 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 		}
 		tools.push(base);
 	}
-	return tools;
+	return withOtp(tools, config);
+}
+
+/**
+ * Gated tools take a required "otp" and say so in their description. The schema is
+ * copied, never mutated: it can be the upstream's object or a verb's shared constant.
+ */
+function withOtp(tools: Tool[], config: Config): Tool[] {
+	const gated = new Set(config.tools.filter(isGated).map((t) => t.name));
+	const window = windowText(otpSettings(config).windowSeconds);
+	return tools.map((tool) => {
+		if (!gated.has(tool.name)) return tool;
+		const schema = tool.inputSchema as { properties?: Record<string, unknown>; required?: string[]; [k: string]: unknown };
+		return {
+			...tool,
+			description: `${tool.description ?? ""} Needs a broker OTP (gh-broker): ask the user for a current code from their authenticator app and pass it as "${OTP_ARG}". One code works for every gated tool for ${window} after the first call that uses it.`.trim(),
+			inputSchema: {
+				...schema,
+				type: "object",
+				properties: {
+					...(schema.properties ?? {}),
+					[OTP_ARG]: { type: "string", description: "gh-broker: a current 6-digit code from the user's authenticator app, or the code that opened the current window" }
+				},
+				required: [...(schema.required ?? []).filter((r) => r !== OTP_ARG), OTP_ARG]
+			}
+		};
+	});
 }

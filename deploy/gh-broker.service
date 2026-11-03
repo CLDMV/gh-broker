@@ -15,8 +15,9 @@ Group=gh-broker
 # See secrets.ts / docs/deploy-architecture.md.
 
 # Socket dir /run/gh-broker (traversable), owned by the service user; the daemon
-# creates the socket there and sets it 0660 group=gh-broker-clients so the agent
-# user (a member of that group) can connect, while the token stays server-side.
+# creates one socket per agent under /run/gh-broker/agents, each 0660 with group
+# gh-broker-agent-<user>, so only that agent can connect and the broker knows who
+# is calling. The token stays server-side.
 RuntimeDirectory=gh-broker
 RuntimeDirectoryMode=0755
 
@@ -24,6 +25,8 @@ RuntimeDirectoryMode=0755
 # it at the chosen node and re-points it on a bump), so no node version is pinned
 # here and there is no nvm resolution at start. The symlink is the single source of
 # truth, so CLI node == service node by construction. See docs/deploy-architecture.md.
+# The audit log (stdout) and `gh-broker otp unlock` both log as gh-broker: journalctl -t gh-broker
+SyslogIdentifier=gh-broker
 ExecStart=/usr/local/bin/node /opt/gh-broker/dist/index.mjs --config /etc/gh-broker/config.json
 Restart=on-failure
 RestartSec=2
@@ -48,6 +51,10 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 ReadWritePaths=/run/gh-broker
+# OTP gate state (lock counters, hard lock): /var/lib/gh-broker, created 0700 gh-broker:gh-broker.
+# StateDirectory= makes it writable under ProtectSystem=strict; `sudo gh-broker otp unlock` edits it.
+StateDirectory=gh-broker
+StateDirectoryMode=0700
 UMask=0077
 # Optional egress lockdown once GitHub ranges are pinned:
 # IPAddressDeny=any

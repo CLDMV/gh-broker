@@ -72,27 +72,37 @@ export function requireUid(name) {
 export function ensureGroup(name) {
 	if (!groupExists(name)) run("groupadd", ["--system", name]);
 }
-export function addUserToGroup(user, group) {
-	run("usermod", ["--append", "--groups", group, user]);
-}
-
-/** Create the dedicated service user + its group + the socket bridge group (idempotent). */
-export function ensureServiceUser(svcUser, svcGroup, clientsGroup) {
+/** Create the dedicated service user + its group (idempotent). Agents get their own groups (ensureAgentGroup). */
+export function ensureServiceUser(svcUser, svcGroup) {
 	ensureGroup(svcGroup);
-	ensureGroup(clientsGroup);
 	if (!userExists(svcUser)) {
 		run("useradd", [
 			"--system",
 			"--gid", svcGroup,
-			"--groups", clientsGroup,
 			"--home-dir", "/nonexistent",
 			"--shell", "/usr/sbin/nologin",
 			"--comment", "CLDMV gh-broker service",
 			svcUser
 		]);
-	} else {
-		addUserToGroup(svcUser, clientsGroup);
 	}
+}
+
+/** Register an agent: its `gh-broker-agent-<user>` group with exactly the service user and the agent as members (idempotent). */
+export function ensureAgentGroup(user, svcUser = "gh-broker") {
+	const group = `gh-broker-agent-${user}`;
+	ensureGroup(group);
+	// Set the member list outright, so an extra member left in the group is removed.
+	run("gpasswd", ["--members", `${svcUser},${user}`, group]);
+}
+
+/**
+ * Unregister an agent: empty its group, which the broker then ignores. The group itself is kept,
+ * because processes the agent already has running keep its gid; deleting the group would free
+ * that gid for the next agent's group, and those processes could reach the new agent's socket.
+ */
+export function removeAgentGroup(user) {
+	const group = `gh-broker-agent-${user}`;
+	if (groupExists(group)) run("gpasswd", ["--members", "", group]);
 }
 
 /** Create a plain unprivileged agent user with a home + login shell, and no sudo. */
@@ -180,7 +190,8 @@ function mkdirp(path, mode, uid, gid) {
  * Create the GHCR drop directory: `2750 <agentUser>:<svcGroup>`. The agent (owner) writes
  * archives there; the setgid bit gives every new file the service group, so the broker can
  * read a group-readable archive while other users can't see in. A missing parent is created
- * `0755 root:root`; an existing parent is never chmod-ed. Refuses a symlink at the path.
+ * `0755 root:root`; an existing parent is never chmod-ed. Refuses a symlink at the path. An
+ * existing directory keeps its owner: `agentUser` only owns a directory created now.
  */
 export function ensureDropDir(path, agentUser, svcGroup) {
 	const parent = dirname(path);
@@ -194,8 +205,9 @@ export function ensureDropDir(path, agentUser, svcGroup) {
 	if (!st) mkdirSync(path, { mode: 0o750 });
 	else if (st.isSymbolicLink()) throw new Error(`gh-broker install: ${path} is a symlink — refusing to use it as the GHCR drop dir`);
 	else if (!st.isDirectory()) throw new Error(`gh-broker install: ${path} exists and is not a directory`);
-	chownSync(path, requireUid(agentUser), requireGid(svcGroup));
+	chownSync(path, st ? st.uid : requireUid(agentUser), requireGid(svcGroup));
 	chmodSync(path, 0o2750); // after chown: chown clears the setgid bit
+	return { created: !st };
 }
 
 /** Create /etc/gh-broker (0750 root:group) and /opt/gh-broker (0755 svcUser:group). */

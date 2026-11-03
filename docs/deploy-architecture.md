@@ -61,22 +61,34 @@ The symlink is the single indirection: the CLI (via `PATH`) and the service reso
 
 All install/deploy *logic* is Node (`deploy/install.mjs` + `deploy/lib/*.mjs`): config layering and validation (validation reuses the daemon's own loader via `node dist/index.mjs --check`), the interactive prompts, the privileged system operations (shelled out to `useradd` / `systemctl` / `rsync`), building `dist/`/`node_modules/` as the checkout's own owner via `sudo -u '#<uid>'` rather than leaving them root-owned, and the smoke test (a real MCP client over the socket). One language, testable with the repo's vitest suite.
 
-The only thing that can't be Node is bootstrapping node itself. So the entrypoint is **`sudo node deploy/install.mjs`** with node ≥20 as the one prerequisite — which runs on any platform node runs on. For zero-prerequisite convenience on Linux, an **optional** `deploy/install.sh` (~20 lines) sets up nvm + node + the symlink if node is absent, then `exec`s the Node installer. It is a convenience, not the real installer.
+The only thing that can't be Node is bootstrapping node itself. So the entrypoint is **`sudo gh-broker install`** (from the global npm install; `sudo node deploy/install.mjs` from a checkout) with node ≥20 as the one prerequisite — which runs on any platform node runs on. For zero-prerequisite convenience on Linux, an **optional** `deploy/install.sh` (~20 lines) sets up nvm + node + the symlink if node is absent, then `exec`s the Node installer. It is a convenience, not the real installer.
 
 ## The installer flow (install and upgrade are the same command)
 
-`sudo node deploy/install.mjs` is idempotent — first install and later upgrade are one command:
+`sudo gh-broker install` (the package bin `deploy/cli.mjs` hands `install` to `deploy/install.mjs`) is idempotent — first install and later upgrade are one command:
 
 1. detect platform + check prerequisites (`socat`, `rsync`, `systemctl`, `sudo`),
-2. **create or confirm the agent user** — hard stop if it can't (no silent warn-and-continue),
+2. **register the agents** — migrate members of the old `gh-broker-clients` group, add the user named on the command line (creating it if asked), give each a `gh-broker-agent-<user>` group — hard stop if it can't (no silent warn-and-continue),
 3. ensure node on a stable path + the `/usr/local/bin/node` symlink,
 4. **regenerate the config** by layering the example, the deployed config, `--config` and the flags (a first install with no owner asks for one),
 5. **choose the secret backend and store the PATs** — keep existing, migrate a legacy `systemd-creds` token, or take it from `--secrets-file` / env / a prompt (see the Secrets section),
 6. validate the config with the real loader (`node dist/index.mjs --check`),
-7. build + deploy (unit → `/usr/local/bin/node`, `dist/`, config, secrets),
-8. **smoke test** — MCP `initialize` + one real read over the socket → ✅/❌.
+7. build + deploy (unit → `/usr/local/bin/node`, `dist/` and a version marker in `/opt/gh-broker`, config, secrets), generating the OTP seed on the way if none is stored,
+8. write each agent's MCP config, then **smoke test** each agent's own socket — MCP `initialize` + one real read → ✅/❌.
 
 The same flow runs **fully unattended** via flags — `--agent-user`, `--secrets-provider`, `--secrets-file` / `GH_BROKER_SECRET_<NAME>`, `--create-agent-user`, `--non-interactive`, and the config flags (`--owner`, `--config`, ...); prompts are the default when flags are omitted. See [`../deploy/README.md`](../deploy/README.md) and `--help`.
+
+## The OTP gate's install side
+
+The TOTP seed is a credential like the PATs: `config.otp.seed` is a `cred:` ref, it is stored by the same backend code path (so `systemd-creds` delivers it through the unit drop-in, `file` keeps it in `secrets.json`), and the config stays token-free. The installer generates it only when none is stored and prints it once from the secrets step; `gh-broker otp rotate` is the only way to replace it afterwards.
+
+## Agents, sockets and the global install
+
+The daemon listens on one Unix socket per agent user (`listen` is `agents:/run/gh-broker/agents`), so the broker knows the caller from the socket the call arrived on; Node can't read `SO_PEERCRED`, so identity is structural. The registry is the set of Linux groups `gh-broker-agent-<user>` whose members are exactly `gh-broker` and `<user>`: there is no separate list to drift, and a group's mode and ownership on the socket is what keeps one agent out of another's. The installer migrates members of the old shared `gh-broker-clients` group into registered agents, replaces an old `unix:` `listen` and leaves `gh-broker-clients` alone.
+
+The package `bin` is one `gh-broker` command (`deploy/cli.mjs`) with subcommands: `install`, `agent add|remove|list|sync` and `otp status|list|unlock|rotate`. The documented install is a global one, `sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker`: `/usr/local` keeps the package and the `gh-broker` command independent of the Node version and on `sudo`'s PATH, and `--ignore-scripts` keeps install scripts from running as root on the box that holds the tokens. The service itself runs from `/opt/gh-broker`, deployed by `gh-broker install`, which also records the version there; `otp status` and `agent list` warn when the installed package and the deployed copy differ. If no global install is found, `install` prints the npm command (it still deploys), and it warns about a copy under an nvm version folder, which breaks on a Node upgrade.
+
+Each agent's Claude Code MCP config (`<home>/.claude.json`) is written by the broker: only the broker's `mcpServers` entry changes, the write is atomic and keeps the file's owner and mode, the previous copy is kept as `.claude.json.gh-broker.bak`, and the result is read back and checked. Because root does this inside a directory the agent owns, the file is read through an `O_NOFOLLOW` descriptor and must be a plain, singly linked file owned by the user, and the temp file is opened `O_EXCL|O_NOFOLLOW` under a random name with its mode and owner set on the descriptor. The pure parts (entry building, key choice, JSON edit, name validation, group-file parsing, state edits) are plain functions in `deploy/lib/`, tested against fixtures, never a real home directory.
 
 ## What is deliberately deferred
 

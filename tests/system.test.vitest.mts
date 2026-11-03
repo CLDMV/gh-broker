@@ -133,25 +133,42 @@ describe("account creation", () => {
 		expect(calls()).toContain("groupadd --system g");
 	});
 
-	it("addUserToGroup appends the group", () => {
-		route({});
-		sys.addUserToGroup("u", "g");
-		expect(calls()).toContain("usermod --append --groups g u");
-	});
-
 	it("ensureServiceUser creates a missing user", () => {
 		route({ getent: ok(), id: fail(1) });
-		sys.ensureServiceUser("svc", "svcg", "clients");
+		sys.ensureServiceUser("svc", "svcg");
 		const useradd = calls().find((c) => c.startsWith("useradd"))!;
-		expect(useradd).toContain("--system --gid svcg --groups clients");
+		expect(useradd).toContain("--system --gid svcg --home-dir");
+		expect(useradd).not.toContain("--groups");
 		expect(useradd.endsWith(" svc")).toBe(true);
 	});
 
-	it("ensureServiceUser only adds an existing user to the clients group", () => {
+	it("ensureServiceUser leaves an existing user alone", () => {
 		route({ getent: ok(), id: ok() });
-		sys.ensureServiceUser("svc", "svcg", "clients");
+		sys.ensureServiceUser("svc", "svcg");
 		expect(calls().some((c) => c.startsWith("useradd"))).toBe(false);
-		expect(calls()).toContain("usermod --append --groups clients svc");
+		expect(calls().some((c) => c.startsWith("usermod"))).toBe(false);
+	});
+
+	it("ensureAgentGroup creates the agent's group with exactly the service user and the agent", () => {
+		route({ getent: fail(2) });
+		sys.ensureAgentGroup("repo");
+		expect(calls()).toEqual(["getent group gh-broker-agent-repo", "groupadd --system gh-broker-agent-repo", "gpasswd --members gh-broker,repo gh-broker-agent-repo"]);
+		h.spawnSync.mockReset();
+		route({ getent: ok("x:x:1:") });
+		sys.ensureAgentGroup("repo", "svc");
+		expect(calls()).not.toContain("groupadd --system gh-broker-agent-repo");
+		expect(calls()).toContain("gpasswd --members svc,repo gh-broker-agent-repo");
+	});
+
+	it("removeAgentGroup empties the group (keeping its gid) only when it exists", () => {
+		route({ getent: ok("x:x:1:") });
+		sys.removeAgentGroup("repo");
+		expect(calls()).toContain("gpasswd --members  gh-broker-agent-repo");
+		expect(calls().some((c) => c.startsWith("groupdel"))).toBe(false);
+		h.spawnSync.mockReset();
+		route({ getent: fail(2) });
+		sys.removeAgentGroup("repo");
+		expect(calls().some((c) => c.startsWith("gpasswd"))).toBe(false);
 	});
 
 	it("createAgentUser creates a plain user", () => {
@@ -262,6 +279,7 @@ describe("node symlinks", () => {
 
 describe("ensureDropDir", () => {
 	const st = (kind: "dir" | "link" | "file") => ({
+		uid: 2002,
 		isSymbolicLink: () => kind === "link",
 		isDirectory: () => kind === "dir"
 	});
@@ -272,18 +290,19 @@ describe("ensureDropDir", () => {
 		f.lstatSync.mockImplementation(() => {
 			throw new Error("ENOENT");
 		});
-		sys.ensureDropDir("/var/lib/drop/in", "agent", "g");
+		expect(sys.ensureDropDir("/var/lib/drop/in", "agent", "g")).toEqual({ created: true });
 		expect(f.mkdirSync).toHaveBeenCalledWith("/var/lib/drop", { recursive: true, mode: 0o755 });
 		expect(f.mkdirSync).toHaveBeenCalledWith("/var/lib/drop/in", { mode: 0o750 });
 		expect(f.chownSync).toHaveBeenCalledWith("/var/lib/drop/in", 1001, 42);
 		expect(f.chmodSync).toHaveBeenCalledWith("/var/lib/drop/in", 0o2750);
 	});
 
-	it("reuses an existing parent and directory", () => {
+	it("reuses an existing parent and directory, keeping the directory's owner", () => {
 		f.existsSync.mockReturnValue(true);
 		f.lstatSync.mockReturnValue(st("dir"));
-		sys.ensureDropDir("/var/lib/drop/in", "agent", "g");
+		expect(sys.ensureDropDir("/var/lib/drop/in", "agent", "g")).toEqual({ created: false });
 		expect(f.mkdirSync).not.toHaveBeenCalled();
+		expect(f.chownSync).toHaveBeenCalledWith("/var/lib/drop/in", 2002, 42);
 		expect(f.chmodSync).toHaveBeenCalledWith("/var/lib/drop/in", 0o2750);
 	});
 
