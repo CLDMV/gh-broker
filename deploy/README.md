@@ -14,9 +14,9 @@ The installer maintains `/usr/local/bin/node` as the single node indirection (CL
 For each GitHub owner (user or org) the broker serves, `<org>`: GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate new token, **twice**. Resource owner: `<org>`. Repository access: **All repositories**.
 
 **`<org>-read`** — Issues: Read, Pull requests: Read, Contents: Read, Metadata: Read (auto).
-**`<org>-write`** — Issues: R/W, Pull requests: R/W, Contents: R/W, Metadata: Read (auto).
+**`<org>-write`** — Issues: R/W, Pull requests: R/W, Contents: R/W, Metadata: Read (auto). For the tools added in #146, also: Administration: R/W (`create_repository`, `fork_repository`), Actions: R/W (`actions_run_trigger`), Code scanning alerts: R/W, Dependabot alerts: R/W and Secret scanning alerts: R/W (`dismiss_alert`). Leave out the ones whose tools you don't list; GitHub then refuses those calls.
 
-No organization or admin permissions. If the org requires approval for fine-grained PATs, approve them in Org → Settings → Personal access tokens. The two-PAT split (read vs write) is a deliberate least-privilege control — see the design doc.
+No organization permissions. If the org requires approval for fine-grained PATs, approve them in Org → Settings → Personal access tokens. The two-PAT split (read vs write) is a deliberate least-privilege control — see the design doc.
 
 ### GHCR pushes: one classic PAT (`<org>-packages`)
 

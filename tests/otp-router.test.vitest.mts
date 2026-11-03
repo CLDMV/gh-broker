@@ -24,7 +24,10 @@ const TOOLS = [
 	{ name: "merge_pull_request", mode: "write", otp: true },
 	{ name: "create_pull_request", mode: "write" },
 	{ name: "npm_scaffold", mode: "write", custom: true, otp: true },
-	{ name: "otp_status", mode: "read", custom: true }
+	{ name: "otp_status", mode: "read", custom: true },
+	{ name: "create_repository", mode: "write" },
+	{ name: "fork_repository", mode: "write" },
+	{ name: "update_pull_request_branch", mode: "write" }
 ];
 
 function setup(opts: { otp?: Record<string, unknown> | null; seedStored?: boolean } = {}) {
@@ -67,6 +70,38 @@ afterAll(() => {
 });
 
 const lastAudit = () => JSON.parse(logs[logs.length - 1]!);
+
+describe("Router + OTP gate: new tools (#146)", () => {
+	it("gates create_repository by default and runs it on the write PAT of the org the repo lands in", async () => {
+		const h = setup();
+		await expect(h.call("create_repository", { name: "x", organization: "CLDMV", private: true })).rejects.toThrow(/OTP required for create_repository/);
+		expect(h.upstream.forward).not.toHaveBeenCalled();
+		await h.call("create_repository", { name: "x", organization: "CLDMV", private: false, otp: h.code() });
+		expect(h.upstream.forward).toHaveBeenCalledWith("create_repository", { name: "x", organization: "CLDMV", private: false }, "token:cred:cldmv-write");
+		expect(lastAudit()).toMatchObject({ tool: "create_repository", owner: "cldmv", repo: "cldmv", decision: "forward", ok: true, otp: "opened" });
+	});
+
+	it("refuses a repo with no organization or no explicit private before the gate, so no code is spent or counted", async () => {
+		const h = setup();
+		const c = h.code();
+		await expect(h.call("create_repository", { name: "x", private: true, otp: c })).rejects.toThrow(/"organization" is required .* personal account/);
+		await expect(h.call("create_repository", { name: "x", organization: "cldmv", otp: c })).rejects.toThrow(/"private" is required, true or false/);
+		await expect(h.call("fork_repository", { owner: "someone", repo: "y", otp: c })).rejects.toThrow(/"organization" is required/);
+		expect(lastAudit()).toMatchObject({ tool: "fork_repository", decision: "error" });
+		expect(lastAudit().otp).toBeUndefined();
+		expect(h.upstream.forward).not.toHaveBeenCalled();
+		// The code is still unspent: it opens a window now.
+		await h.call("fork_repository", { owner: "someone", repo: "y", organization: "CLDMV", otp: c });
+		expect(h.upstream.forward).toHaveBeenCalledWith("fork_repository", { owner: "someone", repo: "y", organization: "CLDMV" }, "token:cred:cldmv-write");
+		expect(lastAudit()).toMatchObject({ owner: "cldmv", repo: "cldmv/y", otp: "opened" });
+	});
+
+	it("leaves update_pull_request_branch ungated", async () => {
+		const h = setup();
+		await h.call("update_pull_request_branch", { owner: "cldmv", repo: "x", pullNumber: 3 });
+		expect(h.upstream.forward).toHaveBeenCalledWith("update_pull_request_branch", { owner: "cldmv", repo: "x", pullNumber: 3 }, "token:cred:cldmv-write");
+	});
+});
 
 describe("Router + OTP gate", () => {
 	it("runs a gated tool with a valid code, strips otp before forwarding, and audits the window, never the code", async () => {
@@ -128,12 +163,12 @@ describe("Router + OTP gate", () => {
 
 	it("hides and refuses gated tools while OTP isn't set up, but otp_status still answers", async () => {
 		for (const h of [setup({ otp: null }), setup({ seedStored: false })]) {
-			expect(h.router.advertisedTools().map((t) => t.name)).toEqual(["get_me", "create_pull_request", "otp_status"]);
+			expect(h.router.advertisedTools().map((t) => t.name)).toEqual(["get_me", "create_pull_request", "otp_status", "update_pull_request_branch"]);
 			await expect(h.call("merge_pull_request", { owner: "cldmv", otp: "123456" })).rejects.toThrow(
 				/tool "merge_pull_request" is not available on this broker: OTP is not set up on this broker.*re-run the installer/
 			);
 			const status = JSON.parse(((await h.call("otp_status", {})).content[0] as any).text);
-			expect(status).toMatchObject({ configured: false, gatedTools: ["merge_pull_request", "npm_scaffold"] });
+			expect(status).toMatchObject({ configured: false, gatedTools: ["merge_pull_request", "npm_scaffold", "create_repository", "fork_repository"] });
 		}
 	});
 

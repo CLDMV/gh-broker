@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T14:02:26-08:00 (1793570546)
+ *	@Last modified time: 2026-11-02T20:03:01-08:00 (1793678581)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -37,6 +37,9 @@ import { reportAlertStatus, type ReportAlertStatusInput } from "./verbs/report_a
 import { issueLabels, type IssueLabelsInput } from "./verbs/issue_labels.ts";
 import { reportCiStatus, ciStatusForHeadSha, ciStatusForHeads, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
 import { npmScaffold } from "./verbs/npm_scaffold.ts";
+import { minimizeComment, type MinimizeCommentInput } from "./verbs/minimize_comment.ts";
+import { deleteBranch, type DeleteBranchInput } from "./verbs/delete_branch.ts";
+import { dismissAlert, type DismissAlertInput } from "./verbs/dismiss_alert.ts";
 import { NpmRegistry } from "./verbs/npm-registry.ts";
 import { GhcrService } from "./verbs/ghcr_push.ts";
 import { OtpGate, type OtpAudit, type OtpRefusal } from "./otp/gate.ts";
@@ -113,6 +116,16 @@ export class Router {
 			audit({ tool, user, mode: rule.mode, decision: "custom", ok: true });
 			return { content: [{ type: "text", text: JSON.stringify(this.otp.status(user)) }] };
 		}
+		// Checked before the gate, so a call that can't run never asks for a code.
+		let createdIn: string | undefined;
+		if (REPO_CREATING.has(tool)) {
+			try {
+				createdIn = creationOwner(tool, args);
+			} catch (err) {
+				audit({ tool, user, decision: "error", detail: (err as Error).message });
+				throw err;
+			}
+		}
 		let otp: OtpAudit | undefined;
 		if (isGated(rule)) {
 			try {
@@ -128,7 +141,7 @@ export class Router {
 		// Owner-less reads (global advisory DB, get_me, notifications) fall back to
 		// the configured defaultOwner's READ PAT. Writes never fall back — a write
 		// must always name the owner it targets.
-		let owner = extractOwner(args);
+		let owner = createdIn ?? extractOwner(args);
 		if (!owner && rule.mode === "read" && this.config.defaultOwner && this.config.owners[this.config.defaultOwner]) {
 			owner = this.config.defaultOwner.toLowerCase();
 		}
@@ -254,6 +267,18 @@ export class Router {
 				const out = await npmScaffold(args, { octokit, registry, scopes: npm.scopes });
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
+			case "minimize_comment": {
+				const out = await minimizeComment(new Octokit({ auth: token }), args as unknown as MinimizeCommentInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "delete_branch": {
+				const out = await deleteBranch(new Octokit({ auth: token }), args as unknown as DeleteBranchInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
+			case "dismiss_alert": {
+				const out = await dismissAlert(new Octokit({ auth: token }), args as unknown as DismissAlertInput);
+				return { content: [{ type: "text", text: JSON.stringify(out) }] };
+			}
 			default:
 				throw new Error(`custom verb "${tool}" not implemented`);
 		}
@@ -368,6 +393,26 @@ export class Router {
 				return this.upstream.forward(tool, args, token);
 		}
 	}
+}
+
+/** Tools that create a repo, whose PAT is picked by the org the repo lands in. */
+const REPO_CREATING = new Set(["create_repository", "fork_repository"]);
+
+/**
+ * The owner a new repo lands in. Upstream creates it in the PAT user's own account when
+ * `organization` is left out, which no configured owner covers, so it's required here. For a
+ * fork, `owner` is the repo being forked and `organization` is where the fork goes, so the
+ * write PAT is the destination's. create_repository also needs `private` said explicitly:
+ * upstream defaults it to public.
+ */
+export function creationOwner(tool: string, args: Record<string, unknown>): string {
+	if (typeof args.organization !== "string" || !args.organization) {
+		throw new Error(`tool "${tool}": "organization" is required (the org the repo is created in); gh-broker doesn't create repos in a personal account`);
+	}
+	if (tool === "create_repository" && typeof args.private !== "boolean") {
+		throw new Error('tool "create_repository": "private" is required, true or false; a repo\'s visibility is never left to the default');
+	}
+	return args.organization.toLowerCase();
 }
 
 /** Derive the repo owner from a tool call's arguments, so we pick the right PAT. */

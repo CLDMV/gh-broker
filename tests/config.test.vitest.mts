@@ -149,6 +149,20 @@ describe("loadConfig — tools", () => {
 		]);
 	});
 
+	it("refuses a tool on the built-in deny list, even gated, and names why", () => {
+		const c = baseConfig();
+		c.tools = [{ name: "get_me", mode: "read" }, { name: "push_files", mode: "write", otp: true }];
+		expect(() => loadConfig(writeConfig(c))).toThrow('config.tools[1] ("push_files"): never allowed in gh-broker (file writes go through git); remove it from config.tools');
+		c.tools = [{ name: "delete_repository", mode: "write" }];
+		expect(() => loadConfig(writeConfig(c))).toThrow(/never allowed in gh-broker \(deleting a repo stays a manual step in GitHub\)/);
+	});
+
+	it("loads the shipped config.example.json tool list", () => {
+		const c = baseConfig();
+		c.tools = JSON.parse(readFileSync("config.example.json", "utf8")).tools;
+		expect(loadConfig(writeConfig(c)).tools).toHaveLength(84);
+	});
+
 	it("rejects a tool marked both custom and augment", () => {
 		const c = baseConfig();
 		c.tools = [{ name: "weird", mode: "read", custom: true, augment: true }];

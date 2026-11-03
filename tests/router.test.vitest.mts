@@ -41,7 +41,10 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "report_dependents", mode: "read", custom: true },
 			{ name: "report_ci_status", mode: "read", custom: true },
 			{ name: "pull_request_read", mode: "read", augment: true },
-			{ name: "list_pull_requests", mode: "read", augment: true }
+			{ name: "list_pull_requests", mode: "read", augment: true },
+			{ name: "minimize_comment", mode: "write", custom: true },
+			{ name: "delete_branch", mode: "write", custom: true, otp: false },
+			{ name: "dismiss_alert", mode: "write", custom: true, otp: false }
 		],
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
 		...overrides
@@ -158,6 +161,26 @@ describe("Router.call", () => {
 				/custom verb "link_issue" not implemented/
 			);
 			expect(upstream.forward).not.toHaveBeenCalled();
+		});
+
+		it("minimize_comment, delete_branch and dismiss_alert run on a write-PAT Octokit and return JSON", async () => {
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			graphqlMock.mockResolvedValue({ minimizeComment: { minimizedComment: { isMinimized: true, minimizedReason: "resolved" } } });
+			const hid = await r.call("minimize_comment", { owner: "cldmv", commentId: "IC_1" });
+			expect(JSON.parse((hid.content[0] as any).text)).toEqual({ commentId: "IC_1", isMinimized: true, minimizedReason: "resolved" });
+			expect(Octokit).toHaveBeenLastCalledWith({ auth: "token:cred:cldmv-write" });
+
+			requestMock.mockImplementation(async (route: string) => {
+				if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "master" } };
+				if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
+				if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { data: { object: { sha: "abc" } } };
+				return { data: { number: 5, state: "dismissed", dismissed_reason: "not_used" } };
+			});
+			const del = await r.call("delete_branch", { owner: "cldmv", repo: "x", branch: "feat/y" });
+			expect(JSON.parse((del.content[0] as any).text)).toMatchObject({ deleted: "feat/y", sha: "abc" });
+			const dis = await r.call("dismiss_alert", { owner: "cldmv", repo: "x", kind: "dependabot", alertNumber: 5, reason: "not_used" });
+			expect(JSON.parse((dis.content[0] as any).text)).toEqual({ kind: "dependabot", number: 5, state: "dismissed", reason: "not_used", url: null });
+			expect(Octokit).toHaveBeenLastCalledWith({ auth: "token:cred:cldmv-write" });
 		});
 
 		it("resolve_review_thread runs on a write-PAT Octokit", async () => {

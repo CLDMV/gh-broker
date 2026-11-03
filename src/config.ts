@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T11:23:22-07:00 (1793471002)
+ *	@Last modified time: 2026-11-02T20:03:00-08:00 (1793678580)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,6 +19,7 @@ import type { Config, Mode, OtpConfig, ToolRule } from "./types.ts";
 import { parseGhcrConfig } from "./verbs/ghcr/config.ts";
 import { OTP_STATUS } from "./otp/policy.ts";
 import { agentsDir } from "./agents.ts";
+import { deniedReason } from "./denylist.ts";
 
 const MODES: readonly Mode[] = ["read", "write"];
 
@@ -52,6 +53,8 @@ export function loadConfig(path: string): Config {
 		if (typeof o.name !== "string" || !o.name) throw new Error(`config.tools[${i}].name: required`);
 		if (!MODES.includes(o.mode as Mode)) throw new Error(`config.tools[${i}].mode: must be read|write`);
 		if (seen.has(o.name)) throw new Error(`config.tools: duplicate tool "${o.name}"`);
+		const denied = deniedReason(o.name);
+		if (denied) throw new Error(`config.tools[${i}] ("${o.name}"): never allowed in gh-broker (${denied}); remove it from config.tools`);
 		seen.add(o.name);
 		const custom = o.custom === true;
 		const augment = o.augment === true;

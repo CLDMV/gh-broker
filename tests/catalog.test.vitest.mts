@@ -284,6 +284,49 @@ describe("buildCatalog", () => {
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/no GHCR credential is stored \("cldmv-packages"; re-run the installer/));
 	});
 
+	it("advertises the #146 custom verbs with their local schemas", async () => {
+		upstream.listToolsFor.mockResolvedValue([]);
+		const config = makeConfig([
+			{ name: "minimize_comment", mode: "write", custom: true },
+			{ name: "delete_branch", mode: "write", custom: true, otp: false },
+			{ name: "dismiss_alert", mode: "write", custom: true, otp: false }
+		]);
+		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		expect(catalog.map((t) => [t.name, (t.inputSchema as any).required])).toEqual([
+			["minimize_comment", ["owner"]],
+			["delete_branch", ["owner", "repo", "branch"]],
+			["dismiss_alert", ["owner", "repo", "kind", "alertNumber"]]
+		]);
+		expect(catalog[0]!.description).toMatch(/^Hide a comment/);
+		expect(catalog[1]!.description).toMatch(/^Delete one branch/);
+		expect(catalog[2]!.description).toMatch(/^Dismiss one code scanning/);
+	});
+
+	it("marks organization (and private, for create_repository) required on the repo-creating tools", async () => {
+		const createSchema = { type: "object", properties: { name: {}, organization: {}, private: {} }, required: ["name"] };
+		upstream.listToolsFor.mockResolvedValue([
+			{ name: "create_repository", description: "Create a repo.", inputSchema: createSchema },
+			{ name: "fork_repository", inputSchema: { type: "object", properties: {} } }
+		]);
+		const config = makeConfig([
+			{ name: "create_repository", mode: "write", otp: false },
+			{ name: "fork_repository", mode: "write", otp: false }
+		]);
+		const [create, fork] = await buildCatalog(config, secrets as any, upstream as any);
+		expect((create!.inputSchema as any).required).toEqual(["name", "organization", "private"]);
+		expect(create!.description).toBe('Create a repo. gh-broker: "organization" and "private" are required; the repo is never created in a personal account or left public by default.');
+		expect((fork!.inputSchema as any).required).toEqual(["organization"]);
+		expect(fork!.description).toMatch(/^gh-broker: "organization" \(where the fork goes\) is required/);
+		expect(createSchema.required).toEqual(["name"]);
+	});
+
+	it("hides default-gated tools while OTP isn't set up", async () => {
+		upstream.listToolsFor.mockResolvedValue([{ name: "merge_pull_request", inputSchema: { type: "object" } }]);
+		const catalog = await buildCatalog(makeConfig([{ name: "merge_pull_request", mode: "write" }, { name: "delete_branch", mode: "write", custom: true }]), secrets as any, upstream as any);
+		expect(catalog).toEqual([]);
+		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"merge_pull_request" is not exposed: OTP is not set up/));
+	});
+
 	describe("OTP gate", () => {
 		const seedSecrets = () => ({ resolve: vi.fn((ref: string) => (ref === "cred:otp-seed" ? "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" : "tok")), has: vi.fn(() => true) });
 		const otpConfig = (rules: any[], otp: Record<string, unknown> = {}) => ({ ...makeConfig(rules), otp: { seed: "cred:otp-seed", ...otp } });
