@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T14:02:26-08:00 (1793570546)
+ *	@Last modified time: 2026-11-02T20:12:05-08:00 (1793679125)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -30,6 +30,12 @@ import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
 import { NPM_SCAFFOLD_SCHEMA } from "./verbs/npm_scaffold.ts";
 import { unavailableReason } from "./availability.ts";
 import { GHCR_CATALOG } from "./verbs/ghcr_push.ts";
+import { OTP_STATUS_DESCRIPTION, OTP_STATUS_SCHEMA } from "./verbs/otp_status.ts";
+import { MINIMIZE_COMMENT_DESCRIPTION, MINIMIZE_COMMENT_SCHEMA } from "./verbs/minimize_comment.ts";
+import { DELETE_BRANCH_DESCRIPTION, DELETE_BRANCH_SCHEMA } from "./verbs/delete_branch.ts";
+import { DISMISS_ALERT_DESCRIPTION, DISMISS_ALERT_SCHEMA } from "./verbs/dismiss_alert.ts";
+import { OTP_ARG, OTP_STATUS, isGated, otpSettings } from "./otp/policy.ts";
+import { windowText } from "./otp/gate.ts";
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
@@ -102,7 +108,7 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 				tools.push({
 					name: "npm_scaffold",
 					description:
-						"Create a new npm package and register its GitHub Actions trusted publisher, so the repo's publish workflow can release it through OIDC from then on. Publishes a broker-built placeholder (0.0.0-stage, no code) and never publishes a version of an existing package. Every npm write needs its own one-time password from the user, so it takes two calls: the first publishes the placeholder and returns status needs_otp; ask the user for the next code and call again to add the trusted publisher. Ask for each code right before the call. A refused or expired code also returns needs_otp with the remaining steps. Checks first that the repo's package.json names the package and that the workflow file exists. Uses the broker's npm token (no 2FA bypass) and the read PAT.",
+						"Create a new npm package and register its GitHub Actions trusted publisher, so the repo's publish workflow can release it through OIDC from then on. Publishes a broker-built placeholder (0.0.0-stage, no code) and never publishes a version of an existing package. Every npm write needs its own one-time password from the user, passed as npm_otp, so it takes two calls: the first publishes the placeholder and returns status needs_otp; ask the user for the next npm code and call again with it in npm_otp to add the trusted publisher. Ask for each code right before the call. A refused or expired code also returns needs_otp with the remaining steps. Checks first that the repo's package.json names the package and that the workflow file exists. Uses the broker's npm token (no 2FA bypass) and the read PAT.",
 					inputSchema: NPM_SCAFFOLD_SCHEMA
 				});
 			} else if (rule.name === "report_unlabeled") {
@@ -154,6 +160,14 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 						"Report CI health for a PR, or every open PR in a repo, at a chosen verbosity: 0 counts only, 1 adds which run/job failed, 2 adds which step failed, 3 adds a tail of the failing job's log. Detail beyond tier 0 is only fetched for runs that are actually failing. Runs on the read PAT.",
 					inputSchema: REPORT_CI_STATUS_SCHEMA
 				});
+			} else if (rule.name === "minimize_comment") {
+				tools.push({ name: "minimize_comment", description: MINIMIZE_COMMENT_DESCRIPTION, inputSchema: MINIMIZE_COMMENT_SCHEMA });
+			} else if (rule.name === "delete_branch") {
+				tools.push({ name: "delete_branch", description: DELETE_BRANCH_DESCRIPTION, inputSchema: DELETE_BRANCH_SCHEMA });
+			} else if (rule.name === "dismiss_alert") {
+				tools.push({ name: "dismiss_alert", description: DISMISS_ALERT_DESCRIPTION, inputSchema: DISMISS_ALERT_SCHEMA });
+			} else if (rule.name === OTP_STATUS) {
+				tools.push({ name: OTP_STATUS, description: OTP_STATUS_DESCRIPTION, inputSchema: OTP_STATUS_SCHEMA });
 			} else if (GHCR_CATALOG[rule.name]) {
 				tools.push({ name: rule.name, ...GHCR_CATALOG[rule.name]! });
 			}
@@ -204,6 +218,26 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 			});
 			continue;
 		}
+		if (rule.name === "create_repository" || rule.name === "fork_repository") {
+			// The router refuses these without an organization (and create_repository without an
+			// explicit private), so the schema says the same.
+			const schema = base.inputSchema as { properties?: Record<string, unknown>; required?: string[]; [k: string]: unknown };
+			const needed = rule.name === "create_repository" ? ["organization", "private"] : ["organization"];
+			const note =
+				rule.name === "create_repository"
+					? ' gh-broker: "organization" and "private" are required; the repo is never created in a personal account or left public by default.'
+					: ' gh-broker: "organization" (where the fork goes) is required; forks are never created in a personal account.';
+			tools.push({
+				...base,
+				description: `${base.description ?? ""}${note}`.trim(),
+				inputSchema: { ...schema, type: "object", required: [...new Set([...(schema.required ?? []), ...needed])] } as Tool["inputSchema"]
+			});
+			continue;
+		}
+		if (rule.name === "actions_run_trigger") {
+			tools.push({ ...base, description: `${base.description ?? ""} gh-broker: method "delete_workflow_run_logs" is refused; a run's logs are kept.`.trim() });
+			continue;
+		}
 		if (rule.name === "issue_write") {
 			// issue_write's `labels` REPLACES the issue's whole label set — the trap behind
 			// CLDMV/gh-broker#117. Say so where the agent reads the tool, and point at the verb
@@ -219,5 +253,31 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 		}
 		tools.push(base);
 	}
-	return tools;
+	return withOtp(tools, config);
+}
+
+/**
+ * Gated tools take a required "otp" and say so in their description. The schema is
+ * copied, never mutated: it can be the upstream's object or a verb's shared constant.
+ */
+function withOtp(tools: Tool[], config: Config): Tool[] {
+	const gated = new Set(config.tools.filter(isGated).map((t) => t.name));
+	const window = windowText(otpSettings(config).windowSeconds);
+	return tools.map((tool) => {
+		if (!gated.has(tool.name)) return tool;
+		const schema = tool.inputSchema as { properties?: Record<string, unknown>; required?: string[]; [k: string]: unknown };
+		return {
+			...tool,
+			description: `${tool.description ?? ""} Needs a broker OTP (gh-broker): ask the user for a current code from their authenticator app and pass it as "${OTP_ARG}". One code works for every gated tool for ${window} after the first call that uses it.`.trim(),
+			inputSchema: {
+				...schema,
+				type: "object",
+				properties: {
+					...(schema.properties ?? {}),
+					[OTP_ARG]: { type: "string", description: "gh-broker: a current 6-digit code from the user's authenticator app, or the code that opened the current window" }
+				},
+				required: [...(schema.required ?? []).filter((r) => r !== OTP_ARG), OTP_ARG]
+			}
+		};
+	});
 }

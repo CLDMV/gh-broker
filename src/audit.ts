@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-11-02T20:12:05-08:00 (1793679125)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -15,17 +15,27 @@
 
 /**
  * Structured audit log. One JSON line per decision/call to stdout (journald
- * captures it). NEVER include token values — only tool, owner, mode, repo, result.
+ * captures it). NEVER include token values or OTP codes — only tool, owner, mode, repo, result.
  */
 
 export interface AuditEntry {
 	tool: string;
+	/** The agent user whose socket the call came in on. */
+	user?: string;
 	owner?: string;
 	mode?: "read" | "write";
 	repo?: string;
+	/** fork_repository only: the repo that was forked (owner/repo are the new copy). */
+	source?: string;
 	decision: "forward" | "custom" | "augment" | "deny" | "error";
 	ok?: boolean;
 	detail?: string;
+	/** OTP gate outcome, on gated and hard-locked calls (src/otp/gate.ts). */
+	otp?: "window" | "opened" | "refused" | "locked" | "hard-locked" | "lockout" | "hard-lock";
+	/** When a window opened by this call closes, or when a short lockout started by it ends. */
+	until?: string;
+	/** Window id (an HMAC of the code under a per-process key), for window/opened. Never the code. */
+	window?: string;
 }
 
 export function audit(entry: AuditEntry): void {

@@ -92,6 +92,7 @@ export function referencedCredNames(config) {
 	}
 	if (config.app) add(config.app.privateKey);
 	if (config.npm) add(config.npm.token);
+	if (config.otp) add(config.otp.seed);
 	for (const owner of Object.values(config.ghcr?.owners ?? {})) add(owner.credential);
 	return [...names];
 }

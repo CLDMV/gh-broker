@@ -13,7 +13,14 @@ vi.mock("@octokit/core", () => ({
 }));
 
 import { Octokit } from "@octokit/core";
-import { Router, extractOwner } from "../src/router.ts";
+import { Router as RealRouter, extractOwner } from "../src/router.ts";
+
+// Every call in this file comes from one agent user; the per-user behaviour is covered in otp-router.
+class Router extends RealRouter {
+	override call(tool: string, args: Record<string, unknown>, caller = { user: "tester" }) {
+		return super.call(tool, args, caller);
+	}
+}
 
 function makeConfig(overrides: Record<string, unknown> = {}): any {
 	return {
@@ -34,7 +41,10 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "report_dependents", mode: "read", custom: true },
 			{ name: "report_ci_status", mode: "read", custom: true },
 			{ name: "pull_request_read", mode: "read", augment: true },
-			{ name: "list_pull_requests", mode: "read", augment: true }
+			{ name: "list_pull_requests", mode: "read", augment: true },
+			{ name: "minimize_comment", mode: "write", custom: true },
+			{ name: "delete_branch", mode: "write", custom: true, otp: false },
+			{ name: "dismiss_alert", mode: "write", custom: true, otp: false }
 		],
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
 		...overrides
@@ -153,6 +163,26 @@ describe("Router.call", () => {
 			expect(upstream.forward).not.toHaveBeenCalled();
 		});
 
+		it("minimize_comment, delete_branch and dismiss_alert run on a write-PAT Octokit and return JSON", async () => {
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			graphqlMock.mockResolvedValue({ minimizeComment: { minimizedComment: { isMinimized: true, minimizedReason: "resolved" } } });
+			const hid = await r.call("minimize_comment", { owner: "cldmv", commentId: "IC_1" });
+			expect(JSON.parse((hid.content[0] as any).text)).toEqual({ commentId: "IC_1", isMinimized: true, minimizedReason: "resolved" });
+			expect(Octokit).toHaveBeenLastCalledWith({ auth: "token:cred:cldmv-write" });
+
+			requestMock.mockImplementation(async (route: string) => {
+				if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "master" } };
+				if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
+				if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { data: { object: { sha: "abc" } } };
+				return { data: { number: 5, state: "dismissed", dismissed_reason: "not_used" } };
+			});
+			const del = await r.call("delete_branch", { owner: "cldmv", repo: "x", branch: "feat/y" });
+			expect(JSON.parse((del.content[0] as any).text)).toMatchObject({ deleted: "feat/y", sha: "abc" });
+			const dis = await r.call("dismiss_alert", { owner: "cldmv", repo: "x", kind: "dependabot", alertNumber: 5, reason: "not_used" });
+			expect(JSON.parse((dis.content[0] as any).text)).toEqual({ kind: "dependabot", number: 5, state: "dismissed", reason: "not_used", url: null });
+			expect(Octokit).toHaveBeenLastCalledWith({ auth: "token:cred:cldmv-write" });
+		});
+
 		it("resolve_review_thread runs on a write-PAT Octokit", async () => {
 			graphqlMock.mockResolvedValue({ resolveReviewThread: { thread: { id: "PRRT_1", isResolved: true } } });
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
@@ -163,7 +193,7 @@ describe("Router.call", () => {
 
 		it("npm_scaffold is unavailable without an npm block, before any credential is read", async () => {
 			const r = new Router(makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }] }), secrets as any, upstream as any);
-			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" })).rejects.toThrow(
 				/tool "npm_scaffold" is not available on this broker: the npm integration is not configured/
 			);
 			expect(secrets.resolve).not.toHaveBeenCalled();
@@ -173,7 +203,7 @@ describe("Router.call", () => {
 			secrets.has.mockImplementation((ref: string) => ref !== "cred:npm-token");
 			const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } });
 			const r = new Router(cfg, secrets as any, upstream as any);
-			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(/its credential "npm-token" is not stored/);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" })).rejects.toThrow(/its credential "npm-token" is not stored/);
 			expect(secrets.resolve).not.toHaveBeenCalled();
 		});
 
@@ -181,7 +211,7 @@ describe("Router.call", () => {
 			requestMock.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
 			const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } });
 			const r = new Router(cfg, secrets as any, upstream as any);
-			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" })).rejects.toThrow(/repository cldmv\/x not found/);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" })).rejects.toThrow(/repository cldmv\/x not found/);
 			expect(Octokit).toHaveBeenLastCalledWith({ auth: "token:cred:cldmv-read" });
 			expect(secrets.resolve).toHaveBeenCalledWith("cred:npm-token");
 		});
@@ -202,7 +232,7 @@ describe("Router.call", () => {
 			try {
 				const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://npm.example.test" } });
 				const r = new Router(cfg, secrets as any, upstream as any);
-				const out = await r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", otp: "123456" });
+				const out = await r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" });
 				expect(JSON.parse((out.content[0] as any).text)).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"] });
 				expect(urls).toEqual(["GET https://npm.example.test/@cldmv%2fx?write=true", "PUT https://npm.example.test/@cldmv%2fx"]);
 				expect(fetchMock.mock.calls[1]![1].headers.authorization).toBe("Bearer token:cred:npm-token");

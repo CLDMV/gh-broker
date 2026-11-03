@@ -1,15 +1,9 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, afterAll } from "vitest";
 import { connect, type Socket } from "node:net";
-import { mkdirSync, rmSync, statSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { startServer } from "../src/server.ts";
-
-// Real node:fs, except readFileSync is a spy so the /etc/group lookup can be forced to fail.
-vi.mock("node:fs", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("node:fs")>();
-	return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
-});
 
 // Real node:net, except createServer remembers the server-side sockets so a test can inject events on them.
 const seen = vi.hoisted(() => ({ sockets: [] as any[] }));
@@ -25,16 +19,41 @@ vi.mock("node:net", async (importOriginal) => {
 	};
 });
 
+// Real node:fs, except chmodSync on a socket can be made to fail for one test.
+const fsFail = vi.hoisted(() => ({ chmod: false }));
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		chmodSync: (...args: Parameters<typeof actual.chmodSync>) => {
+			if (fsFail.chmod && String(args[0]).endsWith(".sock")) throw Object.assign(new Error("ENOENT: no such file or directory, chmod"), { code: "ENOENT" });
+			return actual.chmodSync(...args);
+		}
+	};
+});
+
 const root = join(process.cwd(), "tmp", "tests", "server");
-const fakeRouter: any = { call: vi.fn(async (name: string, args: unknown) => ({ content: [{ type: "text", text: `${name}:${JSON.stringify(args)}` }] })) };
+const fakeRouter: any = {
+	call: vi.fn(async (name: string, args: unknown, caller: { user: string }) => ({ content: [{ type: "text", text: `${caller.user}:${name}:${JSON.stringify(args)}` }] }))
+};
 const catalog: any[] = [{ name: "get_me", description: "me", inputSchema: { type: "object" } }];
 const sockets: Socket[] = [];
+// The test process can always hand a socket to its own primary group.
+const GID = process.getgid!();
+let n = 0;
 
-function sockPath(name: string): string {
-	mkdirSync(root, { recursive: true });
-	rmSync(join(root, name), { force: true }); // a socket left behind by an earlier run
-	return join(root, name);
+/** A fresh case directory holding a group file and the agents dir (not yet created). */
+function setup(groupLines: string[]) {
+	const caseDir = join(root, `c${n++}`);
+	rmSync(caseDir, { recursive: true, force: true });
+	mkdirSync(caseDir, { recursive: true });
+	const groupFile = join(caseDir, "group");
+	writeFileSync(groupFile, groupLines.join("\n") + "\n");
+	const dir = join(caseDir, "agents");
+	return { caseDir, groupFile, dir, config: { listen: `agents:${dir}` } as any };
 }
+
+const agentLine = (user: string, gid = GID) => `gh-broker-agent-${user}:x:${gid}:gh-broker,${user}`;
 
 /** Open a client connection and return a request/response helper over newline-delimited JSON-RPC. */
 async function client(path: string) {
@@ -69,82 +88,114 @@ async function client(path: string) {
 afterEach(() => {
 	vi.restoreAllMocks();
 	for (const s of sockets.splice(0)) s.destroy();
-	delete process.env.GH_BROKER_SOCKET_GROUP;
-	vi.mocked(readFileSync).mockClear();
+});
+
+afterAll(() => {
+	rmSync(root, { recursive: true, force: true });
 });
 
 describe("startServer", () => {
-	it("throws synchronously for a non-unix listen scheme", () => {
-		expect(() => startServer({ listen: "tcp:0.0.0.0:9000" } as any, fakeRouter, catalog)).toThrow(/unsupported listen/);
+	it("rejects a listen value that isn't agents:<abs dir>", async () => {
+		await expect(startServer({ listen: "unix:/run/x.sock" } as any, fakeRouter, catalog)).rejects.toThrow('server: unsupported listen "unix:/run/x.sock" (expected "agents:<absolute dir>")');
 	});
 
-	it("rejects when the socket cannot be bound", async () => {
-		const config: any = { listen: "unix:/no/such/dir/gh-broker.sock" };
-		await expect(startServer(config, fakeRouter, catalog)).rejects.toBeTruthy();
-	});
+	it("listens on one socket per agent, 0660 in the agent's group, and tags each call with that agent", async () => {
+		const h = setup(["root:x:0:", agentLine("repo"), agentLine("glmtest")]);
+		const users = await startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile });
+		expect(users).toEqual(["repo", "glmtest"]);
+		expect(statSync(h.dir).mode & 0o777).toBe(0o755);
+		for (const u of users) {
+			const st = statSync(join(h.dir, `${u}.sock`));
+			expect(st.mode & 0o777).toBe(0o660);
+			expect(st.gid).toBe(GID);
+		}
 
-	it("serves tools/list and tools/call over the socket, then drops the connection cleanly", async () => {
-		const path = sockPath("serve.sock");
-		await startServer({ listen: `unix:${path}` } as any, fakeRouter, catalog);
-		expect(statSync(path).mode & 0o777).toBe(0o660);
-
-		const c = await client(path);
-		const init = await c.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "1" } });
+		const repo = await client(join(h.dir, "repo.sock"));
+		const init = await repo.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "1" } });
 		expect(init.result.serverInfo.name).toBe("gh-broker");
-		const listed = await c.request("tools/list", {});
-		expect(listed.result.tools).toEqual(catalog);
-		const called = await c.request("tools/call", { name: "get_me", arguments: { a: 1 } });
-		expect(called.result.content[0].text).toBe('get_me:{"a":1}');
+		expect((await repo.request("tools/list", {})).result.tools).toEqual(catalog);
+		expect((await repo.request("tools/call", { name: "get_me", arguments: { a: 1 } })).result.content[0].text).toBe('repo:get_me:{"a":1}');
 		// arguments omitted → router receives {}
-		const noArgs = await c.request("tools/call", { name: "get_me" });
-		expect(noArgs.result.content[0].text).toBe("get_me:{}");
+		expect((await repo.request("tools/call", { name: "get_me" })).result.content[0].text).toBe("repo:get_me:{}");
 
-		c.sock.destroy();
+		const glm = await client(join(h.dir, "glmtest.sock"));
+		expect((await glm.request("tools/call", { name: "get_me", arguments: {} })).result.content[0].text).toBe("glmtest:get_me:{}");
+		repo.sock.destroy();
 		await new Promise((r) => setTimeout(r, 50));
 	});
 
-	it("replaces a stale socket file left by a previous run", async () => {
-		const path = sockPath("stale.sock");
-		writeFileSync(path, "");
-		await startServer({ listen: `unix:${path}` } as any, fakeRouter, catalog);
-		const c = await client(path);
+	it("keeps an existing directory's mode, replaces a stale socket and removes sockets of unregistered agents", async () => {
+		const h = setup([agentLine("repo")]);
+		mkdirSync(h.dir, { mode: 0o750 });
+		writeFileSync(join(h.dir, "repo.sock"), "");
+		writeFileSync(join(h.dir, "gone.sock"), "");
+		writeFileSync(join(h.dir, "notes.txt"), "");
+		await startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile });
+		expect(readdirSync(h.dir).sort()).toEqual(["notes.txt", "repo.sock"]);
+		expect(statSync(h.dir).mode & 0o777).toBe(0o750);
+		const c = await client(join(h.dir, "repo.sock"));
 		expect((await c.request("tools/list", {})).result.tools).toEqual(catalog);
 	});
 
-	it("applies the configured socket group when it resolves", async () => {
-		const path = sockPath("group.sock");
-		// the process's own primary group always resolves and is chown-able by the owner
-		const gid = process.getgid!();
-		const groupLine = `testgrp:x:${gid}:\n`;
-		vi.mocked(readFileSync).mockImplementationOnce(((p: any, ...rest: any[]) => (p === "/etc/group" ? groupLine : undefined)) as any);
-		process.env.GH_BROKER_SOCKET_GROUP = "testgrp";
-		await startServer({ listen: `unix:${path}` } as any, fakeRouter, catalog);
-		expect(statSync(path).gid).toBe(gid);
+	it("serves nothing, without failing, when no agent is registered", async () => {
+		const h = setup(["root:x:0:", "gh-broker-clients:x:991:gh-broker,repo", "gh-broker-agent-bad:x:5:bad"]);
+		const err = vi.spyOn(console, "error").mockImplementation(() => {});
+		expect(await startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile })).toEqual([]);
+		expect(readdirSync(h.dir)).toEqual([]);
+		expect(err).toHaveBeenCalledWith("gh-broker: ignoring agent group gh-broker-agent-bad: members must be exactly gh-broker and bad");
+		expect(err).toHaveBeenCalledWith(
+			"gh-broker: no agents registered (no gh-broker-agent-<user> group with members gh-broker and <user>); serving nothing. Add one with: sudo gh-broker agent add <user>"
+		);
 	});
 
-	it("still listens when the group is unknown or /etc/group is unreadable", async () => {
-		process.env.GH_BROKER_SOCKET_GROUP = "no-such-group-xyz";
-		await startServer({ listen: `unix:${sockPath("nogroup.sock")}` } as any, fakeRouter, catalog);
-
-		vi.mocked(readFileSync).mockImplementationOnce((() => {
-			throw new Error("EACCES");
-		}) as any);
-		await startServer({ listen: `unix:${sockPath("unreadable.sock")}` } as any, fakeRouter, catalog);
+	it("serves nothing when the group file can't be read", async () => {
+		const h = setup([]);
+		const err = vi.spyOn(console, "error").mockImplementation(() => {});
+		expect(await startServer(h.config, fakeRouter, catalog, { groupFile: join(h.caseDir, "missing") })).toEqual([]);
+		expect(err).toHaveBeenCalledWith(expect.stringMatching(/^gh-broker: cannot read .*missing \(.*\); serving no agents$/));
 	});
 
-	it("tolerates a failed chown (group the process cannot assign)", async () => {
-		const path = sockPath("chownfail.sock");
-		// gid 0 (root) is not assignable by an unprivileged owner → chownSync throws, which is swallowed
-		vi.mocked(readFileSync).mockImplementationOnce((() => "rootish:x:0:\n") as any);
-		process.env.GH_BROKER_SOCKET_GROUP = "rootish";
-		await startServer({ listen: `unix:${path}` } as any, fakeRouter, catalog);
-		const c = await client(path);
-		expect((await c.request("tools/list", {})).result.tools).toEqual(catalog);
+	it("reads /etc/group by default", async () => {
+		const h = setup([]);
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		// The build host's real group file has no agent groups (or the test would see them): either way it resolves.
+		await expect(startServer(h.config, fakeRouter, catalog)).resolves.toBeInstanceOf(Array);
+	});
+
+	it.skipIf(process.getuid?.() === 0)("fails closed and says so when the socket can't be given to the agent's group", async () => {
+		// gid 0 (root) is not assignable by an unprivileged owner, so the socket keeps the service's own group.
+		const h = setup([agentLine("repo", 0)]);
+		const err = vi.spyOn(console, "error").mockImplementation(() => {});
+		await startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile });
+		const st = statSync(join(h.dir, "repo.sock"));
+		expect(st.mode & 0o777).toBe(0o660);
+		expect(st.gid).not.toBe(0);
+		expect(err).toHaveBeenCalledWith(expect.stringMatching(/cannot give .*repo\.sock to group gh-broker-agent-repo \(.*\); repo can't connect/));
+	});
+
+	it("rejects, and stops listening, when the socket can't be set to 0660", async () => {
+		const h = setup([agentLine("repo")]);
+		fsFail.chmod = true;
+		try {
+			await expect(startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile })).rejects.toThrow(/ENOENT/);
+		} finally {
+			fsFail.chmod = false;
+		}
+		await expect(client(join(h.dir, "repo.sock"))).rejects.toBeTruthy();
+	});
+
+	it("rejects when a socket cannot be bound", async () => {
+		const h = setup([agentLine("repo")]);
+		// A socket path longer than sun_path (108 bytes) can't be bound.
+		const deep = join(h.caseDir, "x".repeat(120));
+		await expect(startServer({ listen: `agents:${deep}` } as any, fakeRouter, catalog, { groupFile: h.groupFile })).rejects.toBeTruthy();
+		expect(existsSync(deep)).toBe(true);
 	});
 
 	it("survives garbage from a client without taking the server down", async () => {
-		const path = sockPath("garbage.sock");
-		await startServer({ listen: `unix:${path}` } as any, fakeRouter, catalog);
+		const h = setup([agentLine("repo")]);
+		await startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile });
+		const path = join(h.dir, "repo.sock");
 		const bad = await client(path);
 		bad.sock.write("not json\n");
 		await new Promise((r) => setTimeout(r, 50));
@@ -154,9 +205,9 @@ describe("startServer", () => {
 	});
 
 	it("ignores an error on a client socket", async () => {
-		const path = sockPath("hangup.sock");
-		await startServer({ listen: `unix:${path}` } as any, fakeRouter, catalog);
-		const c = await client(path);
+		const h = setup([agentLine("repo")]);
+		await startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile });
+		const c = await client(join(h.dir, "repo.sock"));
 		await c.request("tools/list", {});
 		const serverSide = seen.sockets.at(-1);
 		expect(() => serverSide.emit("error", new Error("ECONNRESET"))).not.toThrow();
@@ -164,37 +215,34 @@ describe("startServer", () => {
 	});
 
 	it("tolerates a failing MCP close when the client goes away", async () => {
-		const path = sockPath("closefail.sock");
-		await startServer({ listen: `unix:${path}` } as any, fakeRouter, catalog);
+		const h = setup([agentLine("repo")]);
+		await startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile });
 		const close = vi.spyOn(McpServer.prototype, "close").mockRejectedValue(new Error("close failed"));
-		const c = await client(path);
+		const c = await client(join(h.dir, "repo.sock"));
 		await c.request("tools/list", {});
 		c.sock.destroy();
 		await vi.waitFor(() => expect(close).toHaveBeenCalled());
 	});
 
 	it("logs and drops a connection whose MCP transport fails to start", async () => {
-		const path = sockPath("connectfail.sock");
-		await startServer({ listen: `unix:${path}` } as any, fakeRouter, catalog);
+		const h = setup([agentLine("repo")]);
+		await startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile });
 		vi.spyOn(McpServer.prototype, "connect").mockRejectedValue(new Error("transport broke"));
 		const err = vi.spyOn(console, "error").mockImplementation(() => {});
-		const c = await client(path);
+		const c = await client(join(h.dir, "repo.sock"));
 		await new Promise<void>((resolve) => c.sock.once("close", () => resolve()));
 		expect(err).toHaveBeenCalledWith("gh-broker: connection error: transport broke");
 	});
 
 	it("chowns with uid -1 when process.getuid is unavailable", async () => {
 		const orig = process.getuid;
-		const path = sockPath("nouid.sock");
-		const gid = process.getgid!();
-		vi.mocked(readFileSync).mockImplementationOnce(((p: any) => (p === "/etc/group" ? `testgrp:x:${gid}:\n` : undefined)) as any);
-		process.env.GH_BROKER_SOCKET_GROUP = "testgrp";
+		const h = setup([agentLine("repo")]);
 		(process as any).getuid = undefined;
 		try {
-			await startServer({ listen: `unix:${path}` } as any, fakeRouter, catalog);
+			await startServer(h.config, fakeRouter, catalog, { groupFile: h.groupFile });
 		} finally {
 			process.getuid = orig;
 		}
-		expect(statSync(path).mode & 0o777).toBe(0o660);
+		expect(statSync(join(h.dir, "repo.sock")).gid).toBe(GID);
 	});
 });

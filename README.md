@@ -19,19 +19,19 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.9.0 (November 2026)
+### Latest: v0.10.0 (November 2026)
 
-- **Three report verbs for the release and fleet skills.** `report_alert_status` buckets each open Dependabot alert by where its fix stands (released but still open, fixed on `next`, open PR, closed PR, nothing). `report_release_changes` returns the PRs a release actually ships, grouped by changelog section, with the net `package.json` and dependency deltas. `report_dependents` finds every repo that declares an npm package, including dev-trunk repos on `dev`, and skips a `dev` that has fallen behind the default branch.
-- **`ciVerbosity` on `list_pull_requests`.** The same opt-in CI detail as `pull_request_read`, across a whole PR list with one shared call budget.
-- **Install from npm.** `sudo npx @cldmv/gh-broker <agent-user>` runs the installer from the prebuilt package. The tarball now ships only runtime files.
-- [View full v0.9.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.9.0.md)
+- **OTP gate for risky write tools.** Gated tools need a current code from an authenticator app, so the agent has to ask you. The first good code opens a five-minute window for that agent, and bad codes lock it out, then hard-lock it until `sudo gh-broker otp unlock <user>`.
+- **One socket per agent and the `gh-broker` command.** Each agent user gets its own socket, and `gh-broker agent add|remove|list|sync` writes its MCP config. `gh-broker otp status|list|unlock|rotate` manages the gate, and `gh-broker install` runs the installer.
+- **Eleven new write tools and a deny list.** These include merging, branch updates, repo create and fork, `delete_branch`, `dismiss_alert` and `minimize_comment`, with the risky ones gated by default and the Copilot coding-agent tools disabled. A built-in deny list refuses file writes, repo deletion and repo settings at config load. Breaking: the socket path, the `bin` and `npm_scaffold`'s `npm_otp`; see the upgrade notes.
+- [View full v0.10.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.0.md)
 
 ### Recent Releases
 
+- **v0.9.0** (November 2026) — `report_alert_status`, `report_release_changes` and `report_dependents` for the release and fleet skills, `ciVerbosity` on `list_pull_requests`, and install from npm ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.9.0.md))
 - **v0.8.0** (November 2026) — `npm_scaffold` creates an npm package and its trusted publisher, `ghcr_push` pushes images without an agent-held token, and optional credentials hide their tools ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.8.0.md))
 - **v0.7.0** (October 2026) — `issue_labels` adds, removes or swaps single labels without replacing the set, and `issue_write` warns that its `labels` does ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.7.0.md))
 - **v0.6.1** (October 2026) — MCP SDK 1.32.0 (same-origin redirects only) and a refreshed vitest toolchain; no broker source changes ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.1.md))
-- **v0.6.0** (October 2026) — Compact per-repo roll-up, filters and flow tier for `report_security_alerts`, and release-readiness analysis for `report_release_prs` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.6.0.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
@@ -133,7 +133,7 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ### 📦 **One-Command Install & Upgrade**
 
-`sudo node deploy/install.mjs` handles first install and every upgrade: builds under the checkout's own owner (no `chown`, ever), merges shipped config defaults over the deployed config, lets you choose how PATs are stored at rest, and runs a post-deploy smoke test.
+`sudo gh-broker install` (or `sudo node deploy/install.mjs` from a checkout) handles first install and every upgrade: builds under the checkout's own owner (no `chown`, ever), merges shipped config defaults over the deployed config, lets you choose how PATs are stored at rest, and runs a post-deploy smoke test.
 
 📦 **Full prerequisites, PAT scopes, and flags: [deploy/README.md](deploy/README.md)**
 
@@ -152,10 +152,11 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 gh-broker is a system service, not a library. The installer handles both the first install and every upgrade, and you can run it from npm or from a checkout.
 
-From npm ([`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker)), with the prebuilt bundle:
+From npm ([`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker)), with the prebuilt bundle, as a global install (upgrade with the same command, then `gh-broker install` again):
 
 ```sh
-sudo npx @cldmv/gh-broker <agent-user>
+sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker
+sudo gh-broker install <agent-user>
 ```
 
 From a checkout:
@@ -166,13 +167,13 @@ cd gh-broker
 sudo node deploy/install.mjs <agent-user>
 ```
 
-Both take the same flags. The installer creates the service user and the socket group, builds as the checkout's owner when there's no bundle yet, merges the shipped defaults with the deployed config, stores the PATs in the backend you pick, installs the unit and runs a smoke test. Prerequisites, PAT scopes, unattended installs and every flag: [deploy/README.md](deploy/README.md).
+Both take the same flags. The installer creates the service user, registers each agent user (its own group, socket and MCP config; see `gh-broker agent`), builds as the checkout's owner when there's no bundle yet, merges the shipped defaults with the deployed config, stores the PATs in the backend you pick, installs the unit and runs a smoke test. Prerequisites, PAT scopes, unattended installs and every flag: [deploy/README.md](deploy/README.md).
 
 ---
 
 ## 🚀 Quick Start
 
-Point the agent's MCP client at the socket ([deploy/README.md § 3](deploy/README.md#3-point-claude-at-the-broker)). From then on the client sees an ordinary `tools/call`, and the broker resolves the credential, routes it, and (for custom/augmented tools) does the extra work in between:
+The installer writes each agent's MCP config for its own socket ([deploy/README.md § 3](deploy/README.md#3-agents-one-socket-and-one-mcp-config-each)). From then on the client sees an ordinary `tools/call`, and the broker resolves the credential, routes it, and (for custom/augmented tools) does the extra work in between:
 
 ```json
 // tools/call
@@ -201,6 +202,7 @@ src/
   catalog.ts        build the advertised tool list (real upstream schemas + custom + augmented)
   server.ts         Unix-socket MCP server toward the agent (StdioServerTransport)
   audit.ts          structured audit log (never tokens)
+  denylist.ts       tools refused at config load, gated or not (file writes, repo deletion, repo configuration)
   verbs/
     report_unlabeled.ts  issues/PRs with no labels, one repo or org-wide
     report_security_alerts.ts  open Dependabot/CodeQL/secret alerts, one repo or org-wide
@@ -216,6 +218,9 @@ src/
     npm-registry.ts      the npm registry requests npm_scaffold makes
     npm-tarball.ts       minimal npm tarball builder for the placeholder
     review_thread.ts     resolve/reply PR review threads (write PAT)
+    minimize_comment.ts  hide or show a comment (write PAT)
+    delete_branch.ts     delete a branch, refusing flow branches and open-PR heads/bases (write PAT, gated)
+    dismiss_alert.ts     dismiss or reopen a code scanning, Dependabot or secret scanning alert (write PAT, gated)
     ghcr_push.ts         ghcr_push / ghcr_push_status / ghcr_tags (GHCR classic PAT)
     ghcr/                config policy, tar + image-archive reader, OCI registry client, push, job queue
     link_issue.ts         addClosingIssueReference (App token) — DEFERRED, not wired in
@@ -238,7 +243,7 @@ config.sample.json   a full config with placeholder values, for reference only
 
 ## 📚 Documentation
 
-- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_release_changes`, `report_dependents`, `report_ci_status`, the `pull_request_read` and `list_pull_requests` `ciVerbosity` extensions, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, and how to add a new one
+- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_release_changes`, `report_dependents`, `report_ci_status`, the `pull_request_read` and `list_pull_requests` `ciVerbosity` extensions, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `minimize_comment`, `delete_branch`, `dismiss_alert`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, `otp_status`, the OTP gate and the deny list, and how to add a new one
 - **[Agent-as-Separate-User Model](docs/agent-user-model.md)** — the isolation model behind "use ≠ possession": users, groups, filesystem permissions, verified against a real host
 - **[Deploy Architecture](docs/deploy-architecture.md)** — config merge, secret store backends, node handling, the installer's full flow
 - **[Install Guide](deploy/README.md)** — prerequisites, PAT scopes, install/upgrade command, flags

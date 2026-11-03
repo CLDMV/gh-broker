@@ -5,12 +5,136 @@ Every tool the broker advertises falls into one of three categories, set per ent
 | Category | Config flag | What happens | Example |
 |---|---|---|---|
 | **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_dependents`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
+| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_dependents`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `minimize_comment`, `delete_branch`, `dismiss_alert`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags`, `otp_status` |
 | **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s and `list_pull_requests`'s `ciVerbosity` extension |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
 
 This document covers the **custom** and **augmented** tools — the ones that don't exist in the hosted MCP at all, or that gh-broker extends beyond what it offers. For everything else, see the hosted GitHub MCP's own tool documentation; gh-broker just routes the credential.
+
+Any tool can additionally be put behind the broker's OTP gate with `"otp": true`; see [OTP gate and `otp_status`](#otp-gate-and-otp_status).
+
+---
+
+## OTP gate and `otp_status`
+
+Some tools should only run after the user has approved them. A tool marked `"otp": true` in `config.tools` (or gated by the built-in default, see [Gated by default](#gated-by-default)) needs a code from the user's authenticator app. The agent can't produce one: it asks the user, and passes the code it's given as the `otp` argument. `"otp": false` turns a default-gated tool off again. Set it on the tool's entry in `/etc/gh-broker/config.json`; `gh-broker install` replaces the tool list with the shipped one on every run but keeps each tool's `otp` and `enabled` settings. Every tool that isn't gated behaves exactly as before.
+
+```json
+{ "owner": "cldmv", "repo": "gh-broker", "pullNumber": 12, "otp": "123456" }
+```
+
+**Windows.** Each call comes from a known agent user: every registered agent has its own socket (see [Callers](#callers-one-socket-per-agent) below). The first gated call with a valid TOTP code (RFC 6238, SHA1, 6 digits, 30 s step, ±1 step accepted) that is newer than the last accepted one opens a window for that user. For `windowSeconds` (default 300) every gated tool runs for that user when the call carries the same code; the window is fixed, with no renewal. A window only serves the user who opened it: another agent sending the same code is refused. A code can open only one window, ever, for anyone: there is one seed, and the last accepted TOTP step is stored, so a code can't reopen a window after it closes or after a restart. A user can have several windows open at once, one per code. Windows are held in memory, so a restart closes them.
+
+**Refusals.** A missing, wrong, expired or reused code gets the same answer, and nothing runs:
+
+```
+OTP required for <tool>: ask the user for a current code from their authenticator app and pass it as "otp". Nothing was run.
+```
+
+The `otp` argument is the broker's own: it is removed from the arguments of every call, gated or not, before anything is forwarded upstream or handed to a verb.
+
+**Guessing.** A missing code doesn't count, and neither does a real code whose time step is already spent (reused, or spent by an unlock): it is refused but isn't a guess. Each wrong or expired code does count: after `maxFailures` (default 5) the gated tools are refused for that user for `lockoutSeconds` (default 600) without any code being checked (`OTP is locked for <n> more minute(s) after too many bad codes. Nothing was run.`). After `maxLockouts` (default 3) of those short lockouts in a rolling 24 hours, that user is hard-locked: every tool except `otp_status` is refused for them, ungated ones included, until root clears it. Other agents are not affected.
+
+```
+gh-broker is locked for <user> after repeated bad OTP codes (since <ISO>). Ask the user to run "sudo gh-broker otp unlock <user>" on <host>. Nothing was run.
+```
+
+Bad-code counts, short lockouts and hard locks are kept per agent user. A short lockout and a hard lock each get their own audit entry (`otp: "lockout"` with `until`, or `otp: "hard-lock"`), and a call that opens a window logs `otp: "opened"` with the window's `until`. If a bad code can't be saved to the state file (a full disk, say), that user's gated calls are refused until it can, so a restart can't wipe a count that was never written. A code sent as a JSON number is read as six digits (so `12345` is `012345`); any other non-string `otp` is refused without counting as a bad code.
+
+**Setup.** The gate needs `config.otp` and its seed credential (base32, generated and shown once by the installer, stored with the PATs). Without either, every gated tool is hidden and refused with the reason, and the rest of the broker runs normally.
+
+```json
+"otp": {
+	"seed": "cred:otp-seed",
+	"windowSeconds": 300,
+	"maxFailures": 5,
+	"lockoutSeconds": 600,
+	"maxLockouts": 3,
+	"statePath": "/var/lib/gh-broker/otp-state.json"
+}
+```
+
+Only `seed` is required. A gated tool's advertised schema gains a required `otp` string, and its description says it needs a code and how long one lasts.
+
+**State file.** `statePath` holds the last accepted step (global) and, per agent user, the bad-code count, the short lockout, the lockout times of the last 24 hours and the hard lock:
+
+```json
+{
+	"version": 1,
+	"lastAcceptedStep": 0,
+	"users": {
+		"repo": { "failures": 0, "lockedUntil": null, "lockouts": [], "hardLock": null }
+	}
+}
+```
+
+A user with no entry has nothing recorded, and the broker drops entries that have gone back to all zero/null when it writes. It writes the file atomically (temp file in the same directory, mode 0600, fsync, rename) and re-reads it whenever its inode, mtime or size changes, so `sudo gh-broker otp unlock <user>` applies on the next call. A missing file is a clean state. A file that can't be read or parsed, or has the wrong shape (including a user key that isn't a valid agent name), fails closed: every user counts as hard-locked (the refusal and `otp_status` name `sudo gh-broker otp unlock --all`, the command that rewrites it), and the broker never overwrites it.
+
+**Audit.** Every audit line carries `user`, the agent the call came from. Gated calls log `otp: "window" | "opened" | "refused" | "locked"`, and hard-locked refusals `otp: "hard-locked"`. Window and opened calls add `window`, an HMAC of the code under a key that exists only in the running process, so lines from one run can be correlated and nothing can be derived from it. Codes and the seed are never logged.
+
+### Gated by default
+
+These need a code unless their entry says `"otp": false`, because each can publish, merge, release or undo something under the user's name:
+
+| Tool | Why |
+|---|---|
+| `create_repository` | A new repo, private or public. |
+| `fork_repository` | A new repo in the org. |
+| `merge_pull_request` | Ships code into the base branch. |
+| `pull_request_review_write` | An approval counts toward required reviews. |
+| `actions_run_trigger` | Dispatches a workflow, re-runs or cancels a run. A re-run of a release or publish job releases again; some manual workflows (`v4-bootstrap`, org onboarding) change settings, rulesets, tags and releases. Its `delete_workflow_run_logs` method is refused outright, gated or not: a run's logs are the record of what it did. |
+| `label_write` | Renaming or deleting a repo label changes every issue and PR carrying it, and the release and status workflows match label names exactly. |
+| `delete_branch` | See [`delete_branch`](#delete_branch). |
+| `dismiss_alert` | See [`dismiss_alert`](#dismiss_alert). |
+
+The Copilot coding-agent tools are on this list too, and are also [disabled by default](#disabled-by-default).
+
+Everything else defaults to ungated, including `update_pull_request_branch` (merges the base into the PR branch; GitHub makes that commit, signed by GitHub), `request_copilot_review` and [`minimize_comment`](#minimize_comment).
+
+### Disabled by default
+
+`create_pull_request_with_copilot`, `assign_copilot_to_issue` and `assign_copilot_to_issue_with_intent` ship in the tool list but are off: hidden from the tool list and refused with the reason, like a tool whose integration isn't set up. They hand work to Copilot's coding agent, which then writes code into the repo outside `git`. Turn one on with `"enabled": true` on its entry in `/etc/gh-broker/config.json`; it is then gated by default, like the tools above, and `"otp": false` ungates it. `"enabled": false` turns off any other tool the same way (`otp_status` can't be turned off). Their calls need the account's Copilot coding agent to be available on the repo.
+
+### Never allowed
+
+Some tools are out of scope whatever the config says: file writes (`create_or_update_file`, `push_files`, `delete_file`, and git-data writes of commits, trees, blobs and refs; code changes go through `git`), deleting a repo (`delete_repository`), and repo configuration (rulesets, branch protection, repo settings and visibility, custom properties, Actions variables and secrets, workflow permissions, turning workflows on or off, security and analysis settings, topics, webhooks, deploy keys, collaborators, environments), which org bootstrap manages. Bulk close and locking aren't offered either. No verb is written for any of them and the shipped config lists none, so default-deny already keeps them out. As a backup, `src/denylist.ts` holds their names and name patterns for the same kinds of tool (a write verb plus the subject, in either order, so `get_branch_protection` stays allowed and `repository_rulesets_write` doesn't), and a config that lists one fails to load:
+
+```text
+config.tools[12] ("push_files"): never allowed in gh-broker (file writes go through git); remove it from config.tools
+```
+
+`"otp": true` doesn't change that.
+
+### `otp_status`
+
+The gate's state for the calling agent user, plus every hard-locked user. Read, `mode: "read"`, `custom: true`, no arguments, no owner or PAT. It is never gated (`"otp": true` on it is a config error) and never blocked by a lock, so a locked-out agent can still tell the user what happened.
+
+```json
+{
+	"configured": true,
+	"user": "repo",
+	"gatedTools": ["create_repository", "fork_repository", "merge_pull_request", "pull_request_review_write", "actions_run_trigger", "label_write", "delete_branch", "dismiss_alert"],
+	"windowSeconds": 300,
+	"openWindows": 1,
+	"nextWindowExpiresAt": "2026-11-01T12:05:00.000Z",
+	"failures": 0,
+	"maxFailures": 5,
+	"lockedUntil": null,
+	"lockoutsLast24h": 0,
+	"maxLockouts": 3,
+	"hardLock": null,
+	"unlockCommand": "sudo gh-broker otp unlock repo",
+	"lockedUsers": [{ "user": "glmtest", "since": "2026-11-01T11:00:00.000Z", "lockouts": 3, "unlockCommand": "sudo gh-broker otp unlock glmtest" }],
+	"host": "broker-host"
+}
+```
+
+Windows, counts and `hardLock` are the caller's own. `hardLock` is `{ "since", "lockouts" }` while the caller is hard-locked. When the state file is unusable, everyone is locked; the caller's `hardLock` then has `lockouts: 0` and `lockedUsers` lists only the caller, since the file can't say who else there is. It never contains a code, the seed or anything derived from them.
+
+### Callers: one socket per agent
+
+`listen` is `"agents:<dir>"` (the installer sets `"agents:/run/gh-broker/agents"`). An agent user `<user>` is registered when the group `gh-broker-agent-<user>` exists with exactly two members, `gh-broker` and `<user>`; names must match `^[a-z_][a-z0-9_-]{0,15}$`. At start the broker reads `/etc/group`, creates `<dir>` (0755) if needed, and listens on `<dir>/<user>.sock` for each agent, owned by that agent's group with mode 0660, so only that user can connect. Sockets in `<dir>` for agents that are no longer registered are removed. With no agents it logs that and serves nothing. Agents added later take effect on restart (`sudo gh-broker agent add <user>` restarts it). The old shared `unix:` socket is gone; a config still using it fails to load and says to re-run the installer.
 
 ---
 
@@ -559,10 +683,10 @@ A failure before the first write (the read of the issue's labels, or a label loo
 
 Create a new npm package and register its GitHub Actions trusted publisher, so the repo's own publish workflow can release it through OIDC from then on. Write, `mode: "write"`, `custom: true`. It needs the optional `npm` integration (set up by the installer, see [deploy/README.md](../deploy/README.md#npm-integration-npm_scaffold)); without it, or while its token is not stored, the broker does not expose the tool at all (it is left out of the tool list, a call is refused like an unlisted tool, and startup logs the reason).
 
-npm only accepts a trusted publisher on a package that already exists, and that first publish needs a human's 2FA. The broker holds an npm granular access token created **without** 2FA bypass, and each call carries a one-time password the user reads from their authenticator. The token alone cannot write anything; the OTP is the human's approval for that one call. Ask the user for each code right before the call that uses it, since codes expire in about 30 seconds.
+npm only accepts a trusted publisher on a package that already exists, and that first publish needs a human's 2FA. The broker holds an npm granular access token created **without** 2FA bypass, and each call carries a one-time password the user reads from their authenticator, in `npm_otp`. The token alone cannot write anything; the OTP is the human's approval for that one call. Ask the user for each code right before the call that uses it, since codes expire in about 30 seconds.
 
 ```json
-{ "owner": "cldmv", "repo": "new-thing", "package": "@cldmv/new-thing", "otp": "123456" }
+{ "owner": "cldmv", "repo": "new-thing", "package": "@cldmv/new-thing", "npm_otp": "123456" }
 ```
 
 | Param | Type | Default | Notes |
@@ -570,7 +694,7 @@ npm only accepts a trusted publisher on a package that already exists, and that 
 | `owner` | string | — (required) | A configured owner. Its **read** PAT does the GitHub reads; the verb never writes to GitHub. |
 | `repo` | string | — (required) | The repo whose `package.json` names the package. |
 | `package` | string | — (required) | Lowercase scoped name, e.g. `@cldmv/new-thing`. Must be under a scope in `config.npm.scopes`. |
-| `otp` | string | — (required) | 6–8 digit one-time password. Never logged or returned. |
+| `npm_otp` | string | — (required) | 6–8 digit npm one-time password. Never logged or returned. (Named `npm_otp` because `otp` is the broker's own gate code, see [OTP gate](#otp-gate-and-otp_status); a gated `npm_scaffold` call carries both.) |
 | `workflow` | string | `publish.yml` | The repo's publish workflow file in `.github/workflows`; the trusted publisher names it. |
 
 **Guardrails, checked before any npm write.**
@@ -619,6 +743,59 @@ Resolve/unresolve, or reply inside, a pull-request review thread (e.g. addressin
 ```
 
 `threadId` is the review-thread **node id**, taken verbatim from `pull_request_read`'s `get_review_comments` method (each returned thread carries it as `id`). `resolve_review_thread` defaults to resolving; pass `resolve: false` to unresolve. `reply_review_thread` takes the same `threadId` plus a `body` (Markdown).
+
+---
+
+## `minimize_comment`
+
+Hide a comment on an issue or PR, the way GitHub's "Hide → Resolved" does, or show it again. Meant for folding away bot review comments once they're addressed. Write, `mode: "write"`, `custom: true`, ungated. Runs the `minimizeComment` / `unminimizeComment` GraphQL mutations on the write PAT (`Issues` or `Pull requests: write`).
+
+```json
+{ "owner": "cldmv", "commentId": "PRRC_kwDO…" }
+{ "owner": "cldmv", "repo": "gh-broker", "commentNumber": 2471, "type": "issue", "classifier": "OUTDATED" }
+```
+
+Name the comment by node id (`commentId`), or by REST id (`commentNumber`) with `type` (`issue` for an issue or PR conversation comment, `review` for a PR review comment) and `repo`; the node id is then looked up first. `classifier` defaults to `RESOLVED` (also `OUTDATED`, `DUPLICATE`, `OFF_TOPIC`, `SPAM`, `ABUSE`); `unhide: true` shows the comment again. Returns `{ commentId, isMinimized, minimizedReason }`.
+
+---
+
+## `delete_branch`
+
+Delete one branch. Write, `mode: "write"`, `custom: true`, gated by default. Runs on the write PAT (`Contents: write`).
+
+```json
+{ "owner": "cldmv", "repo": "gh-broker", "branch": "feat/otp-gate" }
+```
+
+It refuses, before deleting anything, the repo's default branch, the release-flow and bot branches (`master`, `main`, `next`, `hotfixes`, `dev`, `badges`, `gh-pages`), and a branch that is the head or the base of an open PR in the repo, or, in a fork, the head of an open PR into the parent repo or the root of the fork network, since deleting it would close the PR. Rulesets still apply on top. Returns `{ deleted, sha, restore }`, where `restore` is the `git push` that puts the branch back at the same commit.
+
+**Calls.** One repo read, two open-PR lookups (by head and by base, plus one each in the parent and the root for a fork), one ref read, then the delete.
+
+---
+
+## `dismiss_alert`
+
+Dismiss one code scanning, Dependabot or secret scanning alert, or reopen it. Write, `mode: "write"`, `custom: true`, gated by default. Runs on the write PAT (`Code scanning alerts`, `Dependabot alerts` or `Secret scanning alerts: write`).
+
+```json
+{ "owner": "cldmv", "repo": "gh-broker", "kind": "dependabot", "alertNumber": 41, "reason": "not_used", "comment": "dev-only transitive" }
+```
+
+A dismissal needs a `reason`, spelled the way GitHub's API takes it for that kind:
+
+| `kind` | Reasons |
+|---|---|
+| `code_scanning` | `false positive`, `won't fix`, `used in tests` |
+| `dependabot` | `fix_started`, `inaccurate`, `no_bandwidth`, `not_used`, `tolerable_risk` |
+| `secret_scanning` | `false_positive`, `wont_fix`, `revoked`, `used_in_tests` (the alert is marked resolved) |
+
+`reopen: true` (no reason) sets the alert back to open. `comment` is optional; on a reopen only secret scanning stores one, so it's refused for the other two kinds. The answer is `{ kind, number, state, reason, url }` and nothing else: a secret scanning alert's API response carries the secret, which is never returned.
+
+---
+
+## `create_repository` / `fork_repository`
+
+Both are proxied and gated by default, with two rules on top. `organization` is required and must be a configured owner: upstream creates the repo in the token owner's personal account when it's left out. Repos are only created in orgs: a configured user-owner passes this check but GitHub then refuses the call, since upstream sends the name to the org endpoint. `organization` also picks the write PAT, so for a fork the PAT is the destination org's, not the source repo owner's, and the audit line adds `source` for the repo that was forked. `create_repository` also needs `private` given as `true` or `false`, so a repo's visibility is never left to a default. These checks run before the OTP gate, so a call that fails them never asks for a code. The advertised schemas mark these fields required.
 
 ---
 

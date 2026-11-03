@@ -127,7 +127,7 @@ function fakeGitHub(o: RepoOpts = {}) {
 	return { octokit: { request } as any, request };
 }
 
-const args = (extra: Record<string, unknown> = {}) => ({ owner: "cldmv", repo: "new-thing", package: PKG, otp: OTP, ...extra });
+const args = (extra: Record<string, unknown> = {}) => ({ owner: "cldmv", repo: "new-thing", package: PKG, npm_otp: OTP, ...extra });
 const deps = (gh: ReturnType<typeof fakeGitHub>, reg: ReturnType<typeof fakeRegistry>, scopes = ["@cldmv"]) => ({ octokit: gh.octokit, registry: reg.registry, scopes });
 
 describe("buildTarball", () => {
@@ -186,7 +186,7 @@ describe("placeholderDocument", () => {
 
 describe("npm_scaffold", () => {
 	it("advertises a strict schema", () => {
-		expect(NPM_SCAFFOLD_SCHEMA.required).toEqual(["owner", "repo", "package", "otp"]);
+		expect(NPM_SCAFFOLD_SCHEMA.required).toEqual(["owner", "repo", "package", "npm_otp"]);
 		expect(NPM_SCAFFOLD_SCHEMA.additionalProperties).toBe(false);
 	});
 
@@ -201,7 +201,7 @@ describe("npm_scaffold", () => {
 		expect(put.headers["npm-otp"]).toBe(OTP);
 		expect(put.body.access).toBe("public");
 
-		const second = await npmScaffold(args({ otp: OTP2 }), deps(fakeGitHub(), reg));
+		const second = await npmScaffold(args({ npm_otp: OTP2 }), deps(fakeGitHub(), reg));
 		expect(second).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"], workflow: "publish.yml", trustId: "trust-1" });
 		expect(second.url).toBe(`https://www.npmjs.com/package/${PKG}`);
 		expect(reg.trust).toEqual([{ type: "github", claims: { repository: "CLDMV/new-thing", workflow_ref: { file: "publish.yml" } }, permissions: ["createPackage"] }]);
@@ -219,10 +219,10 @@ describe("npm_scaffold", () => {
 	it("returns needs_otp when the trust code is refused, and finishes with a new one", async () => {
 		const reg = fakeRegistry({ otps: [OTP, OTP2] });
 		await npmScaffold(args(), deps(fakeGitHub(), reg));
-		const refused = await npmScaffold(args({ otp: "999999" }), deps(fakeGitHub(), reg));
+		const refused = await npmScaffold(args({ npm_otp: "999999" }), deps(fakeGitHub(), reg));
 		expect(refused).toMatchObject({ status: "needs_otp", done: [], skipped: ["publish"], remaining: ["trust"] });
 		expect(refused.message).toMatch(/refused the one-time password for the trusted publisher/);
-		const done = await npmScaffold(args({ otp: OTP2 }), deps(fakeGitHub(), reg));
+		const done = await npmScaffold(args({ npm_otp: OTP2 }), deps(fakeGitHub(), reg));
 		expect(done).toMatchObject({ status: "done", done: ["trust"] });
 	});
 
@@ -361,7 +361,7 @@ describe("npm_scaffold", () => {
 	it("honours a custom workflow file name", async () => {
 		const reg = fakeRegistry({ otps: [OTP, OTP2] });
 		await npmScaffold(args({ workflow: "release.yaml" }), deps(fakeGitHub(), reg));
-		const out = await npmScaffold(args({ workflow: "release.yaml", otp: OTP2 }), deps(fakeGitHub(), reg));
+		const out = await npmScaffold(args({ workflow: "release.yaml", npm_otp: OTP2 }), deps(fakeGitHub(), reg));
 		expect(out.workflow).toBe("release.yaml");
 		expect(reg.trust[0].claims.workflow_ref.file).toBe("release.yaml");
 	});
@@ -373,8 +373,8 @@ describe("npm_scaffold", () => {
 		[{ ...args(), repo: "../x" }, /"repo"/],
 		[{ ...args(), package: "unscoped" }, /"package"/],
 		[{ ...args(), package: "@CLDMV/Upper" }, /"package"/],
-		[{ ...args(), otp: "12ab56" }, /"otp"/],
-		[{ ...args(), otp: 123456 }, /"otp"/],
+		[{ ...args(), npm_otp: "12ab56" }, /"npm_otp"/],
+		[{ ...args(), npm_otp: 123456 }, /"npm_otp"/],
 		[{ ...args(), workflow: "../publish.yml" }, /"workflow"/],
 		[{ ...args(), workflow: "publish.sh" }, /"workflow"/]
 	] as Array<[unknown, RegExp]>)("validates arguments strictly (%#)", async (input, msg) => {
@@ -390,7 +390,7 @@ describe("npm_scaffold", () => {
 		for (const reg of [fakeRegistry({ publishStatus: 403 }), fakeRegistry({ lookupStatus: 500 })]) {
 			await npmScaffold(args(), deps(fakeGitHub(), reg)).catch((e: Error) => errors.push(e.message));
 		}
-		await npmScaffold({ ...args(), otp: "12345x" }, deps(fakeGitHub(), fakeRegistry())).catch((e: Error) => errors.push(e.message));
+		await npmScaffold({ ...args(), npm_otp: "12345x" }, deps(fakeGitHub(), fakeRegistry())).catch((e: Error) => errors.push(e.message));
 		expect(errors).toHaveLength(3);
 		for (const text of [JSON.stringify(ok), JSON.stringify(needs), ...errors]) {
 			expect(text).not.toContain(OTP);
@@ -415,7 +415,7 @@ describe("npm_scaffold", () => {
 	it("passes a trust failure that is not an OTP refusal through, after the publish", async () => {
 		const reg = fakeRegistry({ otps: [OTP, OTP2], trustStatus: 400 });
 		await npmScaffold(args(), deps(fakeGitHub(), reg));
-		await expect(npmScaffold(args({ otp: OTP2 }), deps(fakeGitHub(), reg))).rejects.toThrow(/trusted publisher setup failed \(HTTP 400\)/);
+		await expect(npmScaffold(args({ npm_otp: OTP2 }), deps(fakeGitHub(), reg))).rejects.toThrow(/trusted publisher setup failed \(HTTP 400\)/);
 		expect(reg.packages.has(PKG)).toBe(true);
 	});
 

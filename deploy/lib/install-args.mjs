@@ -32,7 +32,7 @@ const IMAGE_GLOB = /^[a-z0-9*](?:[a-z0-9._*-]*[a-z0-9*])?(?:\/[a-z0-9*](?:[a-z0-
 export const envSecretKey = (name) => "GH_BROKER_SECRET_" + name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 
 export function parseArgs(argv) {
-	const o = { positional: [], nonInteractive: false, createAgentUser: false, npm: false, npmScopes: [], npmOrgs: [], cliSecrets: {} };
+	const o = { positional: [], nonInteractive: false, createAgentUser: false, noMcpConfig: false, npm: false, npmScopes: [], npmOrgs: [], cliSecrets: {} };
 	// Consume the value after a value-taking flag, failing if it's missing or is
 	// itself a flag — so `--agent-user --secrets-provider file` can't silently take
 	// "--secrets-provider" as the username and proceed with an unintended user.
@@ -46,6 +46,7 @@ export function parseArgs(argv) {
 		if (a === "-h" || a === "--help") o.help = true;
 		else if (a === "-y" || a === "--non-interactive") o.nonInteractive = true;
 		else if (a === "--create-agent-user") o.createAgentUser = true;
+		else if (a === "--no-mcp-config") o.noMcpConfig = true;
 		else if (a === "--agent-user") o.agentUser = value(++i, a);
 		else if (a === "--secrets-provider") o.provider = value(++i, a);
 		else if (a === "--secrets-file") o.secretsFile = value(++i, a);
@@ -85,7 +86,7 @@ export function parseArgs(argv) {
 			o.defaultOwner = org;
 		} else if (a === "--listen") {
 			const addr = value(++i, a);
-			if (!/^unix:\/.+/.test(addr)) throw new Error(`--listen must be a "unix:<absolute path>" address, got "${addr}"`);
+			if (!/^agents:\/.+/.test(addr)) throw new Error(`--listen must be an "agents:<absolute directory>" address, got "${addr}"`);
 			o.listen = addr;
 		} else if (a === "--upstream") {
 			const url = value(++i, a);

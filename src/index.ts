@@ -88,12 +88,13 @@ async function main(): Promise<void> {
 
 	const router = new Router(config, secrets, upstream, appAuth);
 	const catalog = await buildCatalog(config, secrets, upstream);
-	await startServer(config, router, catalog);
+	const agents = await startServer(config, router, catalog);
 	console.log(
 		JSON.stringify({
 			ts: new Date().toISOString(),
 			event: "listening",
 			listen: config.listen,
+			agents,
 			owners: Object.keys(config.owners),
 			app: appAuth ? "enabled" : "none",
 			tools: catalog.map((t) => t.name)

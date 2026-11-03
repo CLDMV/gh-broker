@@ -1,11 +1,11 @@
 {
 	"name": "@cldmv/gh-broker",
-	"version": "0.9.0",
+	"version": "0.10.0",
 	"description": "Local credential-routing MCP proxy: holds per-org GitHub PATs out of the agent's reach, routes by repo owner, exposes a config-driven default-deny toolset in front of GitHub's hosted MCP.",
 	"type": "module",
 	"license": "Apache-2.0",
 	"bin": {
-		"gh-broker": "./deploy/install.mjs"
+		"gh-broker": "./deploy/cli.mjs"
 	},
 	"main": "./dist/index.mjs",
 	"files": [
@@ -67,7 +67,8 @@
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.32.2",
 		"@octokit/auth-app": "^8.3.1",
-		"@octokit/core": "^7.0.8"
+		"@octokit/core": "^7.0.8",
+		"qrcode": "^1.5.4"
 	},
 	"publishConfig": {
 		"access": "public"

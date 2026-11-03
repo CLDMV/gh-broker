@@ -4,7 +4,7 @@ One interactive installer does first-install and upgrade. Design and rationale: 
 
 ## 0. Host prerequisites
 
-- **Node ≥ 20** — the only real prerequisite; the installer runs under it (`sudo node deploy/install.mjs`). If node isn't installed yet, the optional Linux bootstrap `sudo ./deploy/install.sh` sets up a system-wide nvm + node + the `/usr/local/bin/node` symlink, then hands off to the Node installer.
+- **Node ≥ 20** — the only real prerequisite; the installer runs under it (`sudo gh-broker install`, or `sudo node deploy/install.mjs` from a checkout). If node isn't installed yet, the optional Linux bootstrap `sudo ./deploy/install.sh` sets up a system-wide nvm + node + the `/usr/local/bin/node` symlink, then hands off to the Node installer.
 - **`socat`** — the agent's stdio↔socket bridge. **`rsync`** — used to sync the build (falls back to a plain copy if absent). **`systemd`** with `systemctl`. **`sudo`** — used internally to build as the checkout's own owner (see step 5 below), not just to invoke the installer itself. Install what's missing (`apt install socat rsync sudo` etc.).
 
 The installer maintains `/usr/local/bin/node` as the single node indirection (CLI and service resolve the same link). Bumping node is re-pointing that symlink — which the installer does on every run.
@@ -14,9 +14,9 @@ The installer maintains `/usr/local/bin/node` as the single node indirection (CL
 For each GitHub owner (user or org) the broker serves, `<org>`: GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate new token, **twice**. Resource owner: `<org>`. Repository access: **All repositories**.
 
 **`<org>-read`** — Issues: Read, Pull requests: Read, Contents: Read, Metadata: Read (auto).
-**`<org>-write`** — Issues: R/W, Pull requests: R/W, Contents: R/W, Metadata: Read (auto).
+**`<org>-write`** — Issues: R/W, Pull requests: R/W, Contents: R/W, Metadata: Read (auto). For the tools added in #146, also: Administration: R/W (`create_repository`, `fork_repository`), Actions: R/W (`actions_run_trigger`), Workflows: R/W (`merge_pull_request` and `update_pull_request_branch` on a PR that changes `.github/workflows/`), Code scanning alerts: R/W, Dependabot alerts: R/W and Secret scanning alerts: R/W (`dismiss_alert`). The Copilot coding-agent tools ship disabled and need nothing extra beyond Issues and Pull requests: R/W, plus Copilot coding agent on the account. The installer ships every tool on each run, so a scope left off doesn't hide its tools: the calls are advertised and GitHub refuses them. Administration: R/W is broad: on its own it also lets the token delete repos and change their settings. The broker never offers those, but the token itself can do them, so treat the write PAT accordingly.
 
-No organization or admin permissions. If the org requires approval for fine-grained PATs, approve them in Org → Settings → Personal access tokens. The two-PAT split (read vs write) is a deliberate least-privilege control — see the design doc.
+No organization permissions. If the org requires approval for fine-grained PATs, approve them in Org → Settings → Personal access tokens. The two-PAT split (read vs write) is a deliberate least-privilege control — see the design doc.
 
 ### GHCR pushes: one classic PAT (`<org>-packages`)
 
@@ -27,23 +27,25 @@ The installer also creates the drop directory from `ghcr.dropDir` (default `/srv
 ## 2. Install (first install AND upgrade — same command)
 
 ```sh
-sudo npx @cldmv/gh-broker [agent-user]      # from npm
-sudo node deploy/install.mjs [agent-user]   # from a checkout
+sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker   # install, or upgrade with @latest
+sudo gh-broker install [agent-user]
 ```
 
-Both run the same installer and take the same flags; the npm package ships a prebuilt `dist/`, so step 5 has nothing to build. `agent-user` defaults to `$SUDO_USER` (the account you ran `sudo` from). The installer walks the whole thing and is idempotent:
+`--prefix /usr/local` puts the package in `/usr/local/lib/node_modules/@cldmv/gh-broker` and the command at `/usr/local/bin/gh-broker`, independent of the Node version and on `sudo`'s PATH. `--ignore-scripts` because a global install runs as root on the box that holds the tokens. The package ships a prebuilt `dist/`, so there is nothing to build. A copy installed under an nvm version folder breaks when Node is upgraded; `gh-broker install` warns if it finds one. One-offs still work: `sudo npx @cldmv/gh-broker install [agent-user]`, and from a checkout `sudo node deploy/install.mjs [agent-user]`.
+
+`gh-broker install` takes the same flags either way. `agent-user` registers that user as an agent (see [Agents](#3-agents-one-socket-and-one-mcp-config-each)); on an upgrade with agents already registered it is optional and adds nobody. A first install with no agent asks for one (`--non-interactive` needs `--agent-user`); it never takes `$SUDO_USER`, the admin running sudo. The installer walks the whole thing and is idempotent:
 
 1. checks prerequisites,
-2. **creates or confirms the agent user** (stops if it can't — no silent half-install),
-3. creates the `gh-broker` service user + `gh-broker-clients` bridge group, adds the agent user to it (and, when the config has a `ghcr` block, creates the GHCR drop directory),
+2. **registers the agents**: members of the old shared `gh-broker-clients` group become registered agents (the group itself is left alone), the user named on the command line is added (and created if missing), and each one gets its own group `gh-broker-agent-<user>`,
+3. creates the `gh-broker` service user and, when the config has a `ghcr` block, the GHCR drop directory (owned by the agent named on the command line, else the first registered one),
 4. points `/usr/local/bin/node` at the running node,
 5. builds `dist/` if it isn't already built, or rebuilds it if a prior run left it (or `node_modules/`) owned by someone other than the checkout's owner — the build itself runs via `sudo -u '#<uid>'` as whoever owns `deploy/install.mjs`, not as root, so the installer never leaves root-owned files behind in your checkout,
-6. regenerates the config by layering `config.example.json`, whatever is deployed, your `--config` file and your flags (your data is preserved; allowlist changes from the repo arrive; see [Configuring the install](#configuring-the-install)); a first install with no owner asks for one,
+6. regenerates the config (replacing an old `unix:` `listen` with `agents:/run/gh-broker/agents`) by layering `config.example.json`, whatever is deployed, your `--config` file and your flags (your data is preserved; allowlist changes from the repo arrive; see [Configuring the install](#configuring-the-install)); a first install with no owner asks for one,
 7. sets up the optional **npm integration** when asked (offered on a first install, or `--npm`): an npm web login it waits on, then the token it creates for `npm_scaffold` (see [npm integration](#npm-integration-npm_scaffold)),
-8. **asks how to store the credentials** — `systemd-creds` (encrypted at rest, host-bound; recommended) or a plaintext `file` (`0640 root:gh-broker`; portable) — then stores the tokens in the chosen backend: it keeps existing creds, decrypts a legacy `systemd-creds` token when you switch to `file`, and **prompts only for what it can't find** (input hidden),
+8. **asks how to store the credentials** — `systemd-creds` (encrypted at rest, host-bound; recommended) or a plaintext `file` (`0640 root:gh-broker`; portable) — then stores the tokens in the chosen backend: it keeps existing creds, decrypts a legacy `systemd-creds` token when you switch to `file`, and **prompts only for what it can't find** (input hidden); when no OTP seed is stored it also generates one and shows it once (see [OTP gate](#otp-gate-gh-broker-otp)),
 9. validates the config with the real loader (`--check`),
-10. installs the unit, deploys `dist/`, restarts, and
-11. runs a **smoke test** (MCP handshake + a real read over the socket) → ✅/❌.
+10. installs the unit, deploys `dist/` to `/opt/gh-broker`, restarts, writes every agent's MCP config (`--no-mcp-config` prints the entry instead), and
+11. runs a **smoke test** over each agent's own socket (MCP handshake + a real read) → ✅/❌.
 
 ### Unattended (single non-interactive command)
 
@@ -58,6 +60,28 @@ sudo GH_BROKER_SECRET_ACME_READ=… GH_BROKER_SECRET_ACME_WRITE=… \
 Re-running on an existing install needs no `--owner`: the deployed owners are kept. Migrating an existing `systemd-creds` install needs **no tokens** — `--secrets-provider systemd-creds --non-interactive` keeps the existing `.cred` files (nothing to prompt). `--help` lists every flag.
 
 **Upgrade** is just re-running it: config merged (edits kept), your previously-chosen storage backend pre-selected, existing tokens kept. You can **switch backends** on any run — pick `file` and it decrypts the existing `systemd-creds` tokens into the file (no re-entry); pick `systemd-creds` and it encrypts the tokens into `.cred` files. `launch.sh` is no longer used — remove it after a successful run: `sudo rm -f /opt/gh-broker/launch.sh` (and `sudo rm -rf /etc/gh-broker/creds` only if you've moved fully to the `file` backend).
+
+## OTP gate (`gh-broker otp`)
+
+Tools marked `"otp": true` in `/etc/gh-broker/config.json` (an upgrade keeps each tool's `otp` and `enabled` settings) only run when the call carries a current code from an authenticator app, so a code is something only you can supply. The seed behind those codes is generated by the installer and stored next to the PATs, where the agent can't read it.
+
+**Setup.** On a first install, and on any later run that finds no stored `otp-seed`, the installer generates a seed, prints it, then stores it in the chosen backend (an encrypted `otp-seed.cred` delivered by the unit drop-in under `systemd-creds`, or the `otp-seed` key in `secrets.json` under `file`). It is printed once, before it is stored, so a run that fails later can't leave a stored seed nobody saw: a QR code of the `otpauth://` URI, the base32 key as text, and the URI itself. If a run fails and the next one prints a different key, use the newer one. Scan the QR code with an authenticator app, or enter the key by hand. `--non-interactive` does the same, so capture the output of an unattended run. An existing seed is never overwritten by the installer. To supply your own, pass `--secret otp-seed=<base32>`, `--secrets-file` or env `GH_BROKER_SECRET_OTP_SEED`; it is then used as is and not printed.
+
+**The `gh-broker` command.** The global npm install puts `gh-broker` on root's PATH (`/usr/local/bin/gh-broker`). It needs root, because the state directory is `0700 gh-broker`:
+
+```sh
+sudo gh-broker otp status [<user>] [--json]   # per agent: bad codes so far, short lockouts in the last 24 h, hard lock, state file health
+sudo gh-broker otp list [--json]              # who is locked out now, and the command that clears each
+sudo gh-broker otp unlock <user>              # clear one agent's lockout and hard lock
+sudo gh-broker otp unlock --all               # clear everyone
+sudo gh-broker otp rotate                     # new seed: stored, shown once, service restarted
+```
+
+`unlock <user>` drops that user's entry from the state file and leaves the others alone, rewriting the file atomically as `0600 gh-broker:gh-broker`. Every write from the command also counts each code up to the next 30-second step as spent, so a write that races the daemon can't hand a code back that the daemon just accepted. After an unlock the current code and the one after it are refused (they don't count as bad codes); the command says how many seconds to wait for a fresh one, up to a minute. If the broker writes the state file while the command runs (a lockout, an accepted code), the command changes nothing and asks you to run it again, so it can't undo what the broker just recorded. Each unlock is logged to the journal as `gh-broker`, next to the daemon's audit log, with the sudo user who ran it. If the state file is corrupt the broker treats every user as hard-locked; `status` and `list` report that, `unlock <user>` refuses (clearing one user would not fix the file), and `unlock --all` rewrites it clean. `rotate` replaces the stored seed and restarts the service, which closes every open window; remove the old entry from your authenticator.
+
+**State file.** The lock counters live in `/var/lib/gh-broker/otp-state.json` (`otp.statePath` to change it): `version`, a global `lastAcceptedStep`, and a `users` object with `failures`, `lockedUntil`, `lockouts` and `hardLock` per agent user. A user with no entry is all zero. The unit sets `StateDirectory=gh-broker` with `StateDirectoryMode=0700`, which makes the directory writable under `ProtectSystem=strict` and owned by the service user. It survives restarts, so a hard lock does too. The broker re-reads it whenever it changes, so `unlock` takes effect on the next call with no restart.
+
+**Config.** `config.example.json` ships `"otp": { "seed": "cred:otp-seed" }`. An upgrade adds it to a deployed config that lacks it; an `otp` block you already have (`maxFailures`, `lockoutSeconds`, `maxLockouts`, `windowSeconds`, `statePath`) wins field by field, and a `--config` file may hold one too.
 
 ## Credential storage — your choice
 
@@ -101,23 +125,38 @@ Flags that build a single GHCR owner do so for one owner per run; use `--config`
 
 With no owner anywhere (a first install with no flags and no `--config`), an interactive run asks for the GitHub owner name and then for its two tokens; `--non-interactive` fails and names `--owner` / `--config`.
 
-## 3. Point Claude at the broker
+## 3. Agents: one socket and one MCP config each
 
-The installer prints this; add it to the agent user's `~/.claude.json` `mcpServers`:
+The broker knows which agent is calling from the socket the call arrives on: there is one Unix socket per agent user, `/run/gh-broker/agents/<user>.sock`, reachable only by that user. An agent is registered when the group `gh-broker-agent-<user>` exists with exactly `gh-broker` and `<user>` as members (user names are lowercase, up to 16 characters: `^[a-z_][a-z0-9_-]{0,15}$`). There is no shared socket, so a locked-out agent can't keep using the broker through another door.
+
+```sh
+sudo gh-broker agent add <user>      # group, MCP config, restart, smoke test over the user's socket
+sudo gh-broker agent remove <user>   # empty the group, restart (closes the socket), then the MCP entry (backup first) and the user's lock state
+sudo gh-broker agent list            # socket path, whether it exists, and whether the MCP config points at it (ok / missing / points elsewhere)
+sudo gh-broker agent sync [<user>]   # re-apply the MCP config for one agent or all
+```
+
+`agent remove` empties the agent's group rather than deleting it. Processes the user already has running keep that group's id, so deleting it would let a later `agent add` reuse the id and give those processes the new agent's socket. An empty group isn't an agent; `agent add` for the same user fills it again.
+
+**The MCP config.** The broker writes the entry into the top-level `mcpServers` of `<home>/.claude.json`, using `sg` so the new group is effective without a re-login:
 
 ```json
 "github": {
 	"type": "stdio",
-	"command": "socat",
-	"args": ["STDIO", "UNIX-CONNECT:/run/gh-broker/gh-broker.sock"]
+	"command": "sg",
+	"args": ["gh-broker-agent-<user>", "-c", "exec socat STDIO UNIX-CONNECT:/run/gh-broker/agents/<user>.sock"]
 }
 ```
 
-Re-login as the agent user first, so its `gh-broker-clients` membership is active.
+If an existing entry already mentions `/run/gh-broker/` (the old shared socket or the new one) that entry is updated in place and keeps its name; otherwise the entry is added as `github`, or `gh-broker` when that name is taken. Nothing else in the file changes. The file is parsed, edited, written to a temp file in the same directory and renamed, keeping its owner and mode, and `~/.claude.json.gh-broker.bak` keeps the previous copy (overwritten each time). A missing file is created `0600`; a file that doesn't parse is left alone and the entry is printed to add by hand. The home directory belongs to the agent user and the command runs as root, so it reads the file without following a symlink and only touches a plain file the user owns with a single link; anything else (a symlink, a hard link, someone else's file) is left alone with a warning, and the temp file is created with a random name that can't be pre-planted. Running Claude sessions for that user must be restarted to pick the change up, and `agent sync <user>` puts the entry back if a running session overwrote the file. `--no-mcp-config` (on `install`, `agent add` and `agent sync`) skips the write and prints the entry.
+
+**Upgrading from the shared socket.** The first `gh-broker install` after the change registers every member of `gh-broker-clients` (other than `gh-broker`) as an agent, writes the new `listen` (`agents:/run/gh-broker/agents`), rewrites each agent's MCP config to its own socket and smoke-tests every socket. `gh-broker-clients` is left in place; nothing depends on it any more. Agents added later need a service restart, which `agent add` does.
+
+**Versions.** The service runs from `/opt/gh-broker`, which `gh-broker install` deploys. `gh-broker otp status` and `gh-broker agent list` warn when the installed package and the deployed copy differ; run `sudo gh-broker install` again.
 
 ## Adding an org later
 
-Re-run the installer with `--owner <org>` (repeatable). The deployed owners stay, the new one is added with `cred:<org>-read` / `cred:<org>-write`, and the installer prompts for its two tokens. No code change.
+Re-run `sudo gh-broker install` with `--owner <org>` (repeatable). The deployed owners stay, the new one is added with `cred:<org>-read` / `cred:<org>-write`, and the installer prompts for its two tokens. No code change.
 
 ## npm integration (`npm_scaffold`)
 
@@ -148,4 +187,4 @@ Without the `npm` block nothing changes: the installer says "not enabled", and t
 - The agent user cannot read `/etc/gh-broker/` — the dir is `0750 root:gh-broker`; the config (`0640`) and, whichever backend is used, the tokens (systemd-creds `.cred` files `0400 root`, or the `file` backend's `secrets.json` `0640 root:gh-broker`) are unreadable to a non-member.
 - The config file holds **no tokens** — only `cred:` references; the tokens live in the separate secret store.
 - The socket carries MCP frames only.
-- `journalctl -u gh-broker` shows the audit log (tool, owner, mode, repo, result) — never tokens.
+- `journalctl -t gh-broker` shows the audit log (tool, user, owner, mode, repo, result, OTP outcome, lockouts and unlocks) — never tokens, codes or the seed.
