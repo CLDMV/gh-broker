@@ -80,7 +80,10 @@ describe("Router: disabled-by-default tools (#146)", () => {
 		await expect(off.call("assign_copilot_to_issue", { owner: "cldmv", repo: "x", issue_number: 1, otp: off.code() })).rejects.toThrow(
 			'tool "assign_copilot_to_issue" is not available on this broker: it is disabled by default; set "enabled": true on its entry in config.tools to turn it on'
 		);
-		expect(JSON.parse(((await off.call("otp_status", {})).content[0] as any).text).gatedTools).toEqual([]);
+		const after = JSON.parse(((await off.call("otp_status", {})).content[0] as any).text);
+		// The code never reached the gate: no window, no bad code, nothing forwarded.
+		expect(after).toMatchObject({ gatedTools: [], openWindows: 0, failures: 0 });
+		expect(off.upstream.forward).not.toHaveBeenCalled();
 
 		const on = setup({ tools: [{ ...tools[0], enabled: true }, tools[1]] });
 		expect(on.router.advertisedTools().map((t) => t.name)).toEqual(["assign_copilot_to_issue", "otp_status"]);

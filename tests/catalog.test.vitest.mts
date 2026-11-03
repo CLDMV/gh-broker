@@ -329,6 +329,18 @@ describe("buildCatalog", () => {
 		expect(bare!.description).toMatch(/^gh-broker: method "delete_workflow_run_logs"/);
 	});
 
+	it("leaves disabled tools out, and advertises an enabled Copilot tool with the otp argument", async () => {
+		upstream.listToolsFor.mockResolvedValue([
+			{ name: "assign_copilot_to_issue", inputSchema: { type: "object" } },
+			{ name: "get_me", inputSchema: { type: "object" } }
+		]);
+		const seeded = { resolve: vi.fn((ref: string) => (ref === "cred:otp-seed" ? "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" : "tok")), has: vi.fn(() => true) };
+		const off = await buildCatalog({ ...makeConfig([{ name: "assign_copilot_to_issue", mode: "write" }, { name: "get_me", mode: "read", enabled: false }]), otp: { seed: "cred:otp-seed" } }, seeded as any, upstream as any);
+		expect(off).toEqual([]);
+		const [on] = await buildCatalog({ ...makeConfig([{ name: "assign_copilot_to_issue", mode: "write", enabled: true }]), otp: { seed: "cred:otp-seed" } }, seeded as any, upstream as any);
+		expect(on).toMatchObject({ name: "assign_copilot_to_issue", inputSchema: { required: ["otp"], properties: { otp: expect.any(Object) } } });
+	});
+
 	it("hides default-gated tools while OTP isn't set up", async () => {
 		upstream.listToolsFor.mockResolvedValue([{ name: "merge_pull_request", inputSchema: { type: "object" } }]);
 		const catalog = await buildCatalog(makeConfig([{ name: "merge_pull_request", mode: "write" }, { name: "delete_branch", mode: "write", custom: true }]), secrets as any, upstream as any);

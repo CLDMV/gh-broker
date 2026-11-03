@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T21:27:12-08:00 (1793683632)
+ *	@Last modified time: 2026-11-02T21:30:45-08:00 (1793683845)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -24,7 +24,9 @@
  * Field-level rules, because the layers have different owners:
  *   - `tools` (the allowlist) is a SECURITY control and is always taken from the example, so a
  *     removal or tightening in an update applies and neither the deployed copy, a --config
- *     file nor a flag can widen it. A --config file that contains `tools` is refused.
+ *     file nor a flag can widen it. A --config file that contains `tools` is refused. The one
+ *     exception is each deployed tool's boolean `otp` and `enabled`, which carry onto the same
+ *     tool in the new list (they never add a tool).
  *   - Everything else is operator data and the deployed copy wins over the example: `listen`,
  *     `upstream`, `defaultOwner`, `owners`, `ghcr`, `app`, `secrets`, `npm`, `otp`. The example ships
  *     none of the owner-specific ones, so a fresh install has no owners until the operator

@@ -94,7 +94,7 @@ Everything else defaults to ungated, including `update_pull_request_branch` (mer
 
 ### Disabled by default
 
-`create_pull_request_with_copilot`, `assign_copilot_to_issue` and `assign_copilot_to_issue_with_intent` ship in the tool list but are off: hidden from the tool list and refused like an unlisted tool, with the reason. They hand work to Copilot's coding agent, which then writes code into the repo outside `git`. Turn one on with `"enabled": true` on its entry in `/etc/gh-broker/config.json`; it is then gated by default, like the tools above, and `"otp": false` ungates it. `"enabled": false` turns off any other tool the same way (`otp_status` can't be turned off). Their calls need the account's Copilot coding agent to be available on the repo.
+`create_pull_request_with_copilot`, `assign_copilot_to_issue` and `assign_copilot_to_issue_with_intent` ship in the tool list but are off: hidden from the tool list and refused with the reason, like a tool whose integration isn't set up. They hand work to Copilot's coding agent, which then writes code into the repo outside `git`. Turn one on with `"enabled": true` on its entry in `/etc/gh-broker/config.json`; it is then gated by default, like the tools above, and `"otp": false` ungates it. `"enabled": false` turns off any other tool the same way (`otp_status` can't be turned off). Their calls need the account's Copilot coding agent to be available on the repo.
 
 ### Never allowed
 
