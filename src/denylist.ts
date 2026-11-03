@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:20:15-08:00 (1793679615)
+ *	@Last modified time: 2026-11-02T20:26:20-08:00 (1793679980)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -42,17 +42,19 @@ const writeTo = (subjects: string, verbs = WRITE_VERBS): RegExp => new RegExp(`(
 /** Name shapes for the same classes of tool, should upstream add or rename one. */
 const DENIED_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 	[writeTo("files?|contents?|commits?|trees?|blobs?|refs?|git_refs?|changes", "create|update|delete|write|push"), "file writes go through git"],
-	[writeTo("repo|repository", "delete"), "deleting a repo stays a manual step in GitHub"],
+	[writeTo("repos?|repositor(y|ies)", "delete"), "deleting a repo stays a manual step in GitHub"],
 	// Not `create`: create_repository is a gated tool, not repo configuration.
-	[writeTo("repo|repository|repo_settings|repository_settings|settings|visibility|default_branch", "update|edit|write|set|change|transfer|archive|unarchive|rename"), "repo configuration is managed by org bootstrap"],
-	[writeTo("custom_property|custom_properties"), "repo configuration is managed by org bootstrap"],
+	[writeTo("repos?|repositor(y|ies)|repo_settings|repository_settings|settings|visibility|default_branch|topics", "update|edit|write|set|change|manage|replace|transfer|archive|unarchive|rename"), "repo configuration is managed by org bootstrap"],
+	[writeTo("custom_property|custom_properties|custom_property_values?"), "repo configuration is managed by org bootstrap"],
+	[writeTo("security_and_analysis|vulnerability_alerts|automated_security_fixes", `${WRITE_VERBS}|enable|disable`), "repo configuration is managed by org bootstrap"],
+	[writeTo("workflows?", "enable|disable|write|update|delete"), "turning workflows on or off changes how CI behaves; org bootstrap manages it"],
 	[writeTo("rulesets?"), "rulesets are managed by org bootstrap"],
 	[writeTo("branch_protections?|branch_protection_rules?"), "branch protection is managed by org bootstrap"],
 	[writeTo("variables?|secrets?"), "Actions variables and secrets are managed by org bootstrap"],
 	[writeTo("workflow_permissions|actions_permissions"), "workflow permissions are managed by org bootstrap"],
 	[writeTo("webhooks?|hooks?|deploy_keys?|collaborators?|environments?"), "repo access and configuration are managed by org bootstrap"],
-	[/^(bulk|batch)_(close|lock|unlock|delete|update|write|edit|label|set|add|remove)|^close_(issues|pull_requests|prs)$|_(issues|pull_requests)_close$/, "bulk writes aren't offered; loop over the single-item tool"],
-	[writeTo("issues?|conversations?|pull_requests?", "lock|unlock"), "locking conversations isn't offered"],
+	[/^(bulk|batch)_(close|lock|unlock|delete|update|write|edit|label|set|add|remove)|^close_((all|bulk)_)?(issues|pull_requests|prs)$|_(issues|pull_requests)_close$/, "bulk writes aren't offered; loop over the single-item tool"],
+	[writeTo("issues?|conversations?|pull_requests?|discussions?", "lock|unlock"), "locking conversations isn't offered"],
 	[/^lock_write$/, "locking conversations isn't offered"]
 ];
 

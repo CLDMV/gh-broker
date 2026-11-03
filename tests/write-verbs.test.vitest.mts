@@ -42,7 +42,8 @@ describe("minimize_comment", () => {
 			[{}, /pass commentId \(node id\), or commentNumber/],
 			[{ commentNumber: 0, type: "issue", repo: "r" }, /pass commentId/],
 			[{ commentNumber: 3, repo: "r" }, /needs type "issue"/],
-			[{ commentNumber: 3, type: "issue" }, /needs repo/]
+			[{ commentNumber: 3, type: "issue" }, /needs repo/],
+			[{ commentId: "IC_1", unhide: true, classifier: "OUTDATED" }, /unhide takes no classifier/]
 		];
 		for (const [input, err] of bad) await expect(minimizeComment(octokit, { owner: "cldmv", ...input })).rejects.toThrow(err);
 		expect(graphql).not.toHaveBeenCalled();
@@ -266,7 +267,22 @@ describe("deny list", () => {
 			["create_webhook", /access and configuration/],
 			["deploy_key_write", /access and configuration/],
 			["add_collaborator", /access and configuration/],
-			["environment_write", /access and configuration/]
+			["environment_write", /access and configuration/],
+			["delete_repositories", /manual step/],
+			["repos_delete", /manual step/],
+			["manage_repository", /repo configuration/],
+			["repository_manage", /repo configuration/],
+			["update_custom_property_values", /repo configuration/],
+			["custom_property_values_write", /repo configuration/],
+			["update_security_and_analysis", /repo configuration/],
+			["enable_vulnerability_alerts", /repo configuration/],
+			["enable_workflow", /CI behaves/],
+			["disable_workflow", /CI behaves/],
+			["actions_workflow_write", /CI behaves/],
+			["replace_repository_topics", /repo configuration/],
+			["close_all_issues", /bulk/],
+			["lock_discussion", /locking/],
+			["discussion_lock", /locking/]
 		];
 		for (const [name, why] of cases) expect(deniedReason(name), name).toMatch(why);
 	});
@@ -290,7 +306,11 @@ describe("deny list", () => {
 			"bulk_get",
 			"batch_read",
 			"list_webhooks",
-			"get_repository_visibility"
+			"get_repository_visibility",
+			"list_workflows",
+			"get_workflow",
+			"custom_properties_read",
+			"list_repository_topics"
 		];
 		for (const name of [...shipped, ...legit]) expect(deniedReason(name), name).toBeUndefined();
 	});

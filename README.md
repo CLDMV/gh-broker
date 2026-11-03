@@ -202,6 +202,7 @@ src/
   catalog.ts        build the advertised tool list (real upstream schemas + custom + augmented)
   server.ts         Unix-socket MCP server toward the agent (StdioServerTransport)
   audit.ts          structured audit log (never tokens)
+  denylist.ts       tools refused at config load, gated or not (file writes, repo deletion, repo configuration)
   verbs/
     report_unlabeled.ts  issues/PRs with no labels, one repo or org-wide
     report_security_alerts.ts  open Dependabot/CodeQL/secret alerts, one repo or org-wide
@@ -217,6 +218,9 @@ src/
     npm-registry.ts      the npm registry requests npm_scaffold makes
     npm-tarball.ts       minimal npm tarball builder for the placeholder
     review_thread.ts     resolve/reply PR review threads (write PAT)
+    minimize_comment.ts  hide or show a comment (write PAT)
+    delete_branch.ts     delete a branch, refusing flow branches and open-PR heads/bases (write PAT, gated)
+    dismiss_alert.ts     dismiss or reopen a code scanning, Dependabot or secret scanning alert (write PAT, gated)
     ghcr_push.ts         ghcr_push / ghcr_push_status / ghcr_tags (GHCR classic PAT)
     ghcr/                config policy, tar + image-archive reader, OCI registry client, push, job queue
     link_issue.ts         addClosingIssueReference (App token) — DEFERRED, not wired in
@@ -239,7 +243,7 @@ config.sample.json   a full config with placeholder values, for reference only
 
 ## 📚 Documentation
 
-- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_release_changes`, `report_dependents`, `report_ci_status`, the `pull_request_read` and `list_pull_requests` `ciVerbosity` extensions, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, and how to add a new one
+- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_release_changes`, `report_dependents`, `report_ci_status`, the `pull_request_read` and `list_pull_requests` `ciVerbosity` extensions, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `minimize_comment`, `delete_branch`, `dismiss_alert`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, `otp_status`, the OTP gate and the deny list, and how to add a new one
 - **[Agent-as-Separate-User Model](docs/agent-user-model.md)** — the isolation model behind "use ≠ possession": users, groups, filesystem permissions, verified against a real host
 - **[Deploy Architecture](docs/deploy-architecture.md)** — config merge, secret store backends, node handling, the installer's full flow
 - **[Install Guide](deploy/README.md)** — prerequisites, PAT scopes, install/upgrade command, flags

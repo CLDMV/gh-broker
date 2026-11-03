@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:03:02-08:00 (1793678582)
+ *	@Last modified time: 2026-11-02T20:26:21-08:00 (1793679981)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -83,6 +83,7 @@ async function nodeIdOf(octokit: Octokit, input: MinimizeCommentInput): Promise<
 
 export async function minimizeComment(octokit: Octokit, input: MinimizeCommentInput): Promise<MinimizeCommentResult> {
 	const classifier = input.classifier ?? "RESOLVED";
+	if (input.unhide === true && input.classifier !== undefined) throw new Error("minimize_comment: unhide takes no classifier");
 	if (!MINIMIZE_CLASSIFIERS.includes(classifier)) throw new Error(`minimize_comment: classifier must be one of ${MINIMIZE_CLASSIFIERS.join(", ")}`);
 	const id = await nodeIdOf(octokit, input);
 	type Out = { isMinimized: boolean; minimizedReason: string | null };
