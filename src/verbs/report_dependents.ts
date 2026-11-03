@@ -104,7 +104,7 @@ export interface AbandonedDev {
 	defaultVersion: string;
 }
 
-export type DependentsTruncatedReason = "max-results" | "incomplete-search" | "max-repos" | "max-api-calls" | "rate-limited";
+export type DependentsTruncatedReason = "max-results" | "incomplete-search" | "max-repos" | "max-api-calls" | "rate-limited" | "github-timeout";
 
 export interface ReportDependentsResult {
 	package: string;
@@ -146,17 +146,26 @@ const SEARCH_PAGE_SIZE = 100;
 const SEARCH_MAX_PAGES = 10;
 const LOCKFILES = ["package-lock.json", "pnpm-lock.yaml"];
 const NAME_PATTERN = /^(@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/;
-/** GraphQL pages of 100 repos read when listing dev branches. */
-const DEV_LIST_MAX_PAGES = 20;
+/**
+ * Repos per GraphQL page when listing dev branches. Each repo carries two package.json texts, so a
+ * page of 100 made GitHub time out (502) on a large org; a timed-out page is retried at half the
+ * size, down to DEV_LIST_MIN_PAGE_SIZE.
+ */
+const DEV_LIST_PAGE_SIZE = 25;
+const DEV_LIST_MIN_PAGE_SIZE = 5;
+/** GraphQL requests made when listing dev branches (retries included): 2000 repos at full size. */
+const DEV_LIST_MAX_PAGES = 80;
+/** Statuses GitHub answers a GraphQL query with when it took too long. */
+const TIMEOUT_STATUSES = new Set([502, 503, 504]);
 const DEV_BRANCH = "dev";
 const SEARCH_NOTE =
 	"Candidates come from GitHub code search, which lags recent commits and only indexes default branches; each candidate was verified against its default-branch package.json. A repo that changed very recently can be missing.";
 const DEV_NOTE =
 	" Every `dev` branch that differs from its default branch was also read in full, so dev-trunk repos are included; a `dev` whose root package.json version is below the default branch's is treated as abandoned and skipped (see `abandonedDev`).";
 const NO_DEV_NOTE = " Dev branches were not read, so a dev-trunk repo whose real manifests live on `dev` is missing.";
-const DEV_BRANCHES_QUERY = `query($owner: String!, $after: String) {
+const DEV_BRANCHES_QUERY = `query($owner: String!, $after: String, $first: Int!) {
   repositoryOwner(login: $owner) {
-    repositories(first: 100, after: $after, orderBy: { field: NAME, direction: ASC }) {
+    repositories(first: $first, after: $after, orderBy: { field: NAME, direction: ASC }) {
       pageInfo { hasNextPage endCursor }
       nodes {
         name
@@ -396,12 +405,25 @@ async function scanBranch(ctx: ScanContext, repo: RepoRef, branch: string, paths
  * branch. A `dev` whose root package.json version is below the default branch's has fallen behind
  * a release and is listed as abandoned instead; with either version missing it is kept.
  */
-async function listDevBranches(octokit: Octokit, budget: CallBudget, owner: string): Promise<{ repos: RepoRef[]; abandoned: AbandonedDev[]; complete: boolean }> {
+async function listDevBranches(
+	octokit: Octokit,
+	budget: CallBudget,
+	owner: string
+): Promise<{ repos: RepoRef[]; abandoned: AbandonedDev[]; complete: boolean; timedOut?: true }> {
 	const repos: RepoRef[] = [];
 	const abandoned: AbandonedDev[] = [];
 	let after: string | null = null;
+	let first = DEV_LIST_PAGE_SIZE;
 	for (let page = 1; page <= DEV_LIST_MAX_PAGES; page++) {
-		const res: DevBranchesResponse = await reqOne<DevBranchesResponse>(octokit, budget, "POST /graphql", { query: DEV_BRANCHES_QUERY, variables: { owner, after } });
+		let res: DevBranchesResponse;
+		try {
+			res = await reqOne<DevBranchesResponse>(octokit, budget, "POST /graphql", { query: DEV_BRANCHES_QUERY, variables: { owner, after, first } });
+		} catch (err) {
+			if (!TIMEOUT_STATUSES.has((err as { status?: number }).status as number)) throw err;
+			if (first === DEV_LIST_MIN_PAGE_SIZE) return { repos, abandoned, complete: false, timedOut: true };
+			first = Math.max(DEV_LIST_MIN_PAGE_SIZE, Math.ceil(first / 2));
+			continue;
+		}
 		const conn = res.data?.repositoryOwner?.repositories;
 		if (!conn) throw new Error(`report_dependents: listing dev branches failed: ${res.errors?.map((e) => e.message).join("; ") ?? `no owner "${owner}"`}`);
 		for (const r of conn.nodes) {
@@ -512,8 +534,9 @@ export async function reportDependents(octokit: Octokit, input: ReportDependents
 		}
 
 		if (devBranches) {
-			const { repos, abandoned, complete } = await listDevBranches(octokit, budget, owner);
+			const { repos, abandoned, complete, timedOut } = await listDevBranches(octokit, budget, owner);
 			abandonedDev.push(...abandoned);
+			if (timedOut) truncatedReason ??= "github-timeout";
 			if (!complete) truncatedReason ??= "max-repos";
 			const room = Math.max(0, maxRepos - Math.min(repoNames.length, maxRepos));
 			if (repos.length > room) truncatedReason ??= "max-repos";
