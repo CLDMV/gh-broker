@@ -92,7 +92,7 @@ Everything else defaults to ungated, including `update_pull_request_branch` (mer
 
 ### Never allowed
 
-Some tools are out of scope whatever the config says: file writes (`create_or_update_file`, `push_files`, `delete_file`; code changes go through `git`), deleting a repo (`delete_repository`), and repo configuration (rulesets, branch protection, repo settings, custom properties, Actions variables and secrets, workflow permissions), which org bootstrap manages. Bulk close and locking aren't offered either. No verb is written for any of them and the shipped config lists none, so default-deny already keeps them out. As a backup, `src/denylist.ts` holds their names and name patterns for the same kinds of tool, and a config that lists one fails to load:
+Some tools are out of scope whatever the config says: file writes (`create_or_update_file`, `push_files`, `delete_file`, and git-data writes of commits, trees, blobs and refs; code changes go through `git`), deleting a repo (`delete_repository`), and repo configuration (rulesets, branch protection, repo settings and visibility, custom properties, Actions variables and secrets, workflow permissions, webhooks, deploy keys, collaborators, environments), which org bootstrap manages. Bulk close and locking aren't offered either. No verb is written for any of them and the shipped config lists none, so default-deny already keeps them out. As a backup, `src/denylist.ts` holds their names and name patterns for the same kinds of tool (a write verb plus the subject, in either order, so `get_branch_protection` stays allowed and `repository_rulesets_write` doesn't), and a config that lists one fails to load:
 
 ```text
 config.tools[12] ("push_files"): never allowed in gh-broker (file writes go through git); remove it from config.tools
@@ -761,9 +761,9 @@ Delete one branch. Write, `mode: "write"`, `custom: true`, gated by default. Run
 { "owner": "cldmv", "repo": "gh-broker", "branch": "feat/otp-gate" }
 ```
 
-It refuses, before deleting anything, the repo's default branch, the release-flow and bot branches (`master`, `main`, `next`, `hotfixes`, `dev`, `badges`, `gh-pages`), and a branch that is the head or the base of an open PR in the repo, since deleting it would close the PR. Rulesets still apply on top. Returns `{ deleted, sha, restore }`, where `restore` is the `git push` that puts the branch back at the same commit.
+It refuses, before deleting anything, the repo's default branch, the release-flow and bot branches (`master`, `main`, `next`, `hotfixes`, `dev`, `badges`, `gh-pages`), and a branch that is the head or the base of an open PR in the repo, or, in a fork, the head of an open PR into the parent repo, since deleting it would close the PR. Rulesets still apply on top. Returns `{ deleted, sha, restore }`, where `restore` is the `git push` that puts the branch back at the same commit.
 
-**Calls.** One repo read, two open-PR lookups (by head and by base), one ref read, then the delete.
+**Calls.** One repo read, two open-PR lookups (by head and by base, plus one in the parent for a fork), one ref read, then the delete.
 
 ---
 
@@ -789,7 +789,7 @@ A dismissal needs a `reason`, spelled the way GitHub's API takes it for that kin
 
 ## `create_repository` / `fork_repository`
 
-Both are proxied and gated by default, with two rules on top. `organization` is required and must be a configured owner: upstream creates the repo in the token owner's personal account when it's left out. Repos are only created in orgs; a configured user-owner can't be used here, since upstream sends the name to the org endpoint. `organization` also picks the write PAT, so for a fork the PAT is the destination org's, not the source repo owner's, and the audit line adds `source` for the repo that was forked. `create_repository` also needs `private` given as `true` or `false`, since upstream would otherwise make it public. These checks run before the OTP gate, so a call that fails them never asks for a code. The advertised schemas mark these fields required.
+Both are proxied and gated by default, with two rules on top. `organization` is required and must be a configured owner: upstream creates the repo in the token owner's personal account when it's left out. Repos are only created in orgs: a configured user-owner passes this check but GitHub then refuses the call, since upstream sends the name to the org endpoint. `organization` also picks the write PAT, so for a fork the PAT is the destination org's, not the source repo owner's, and the audit line adds `source` for the repo that was forked. `create_repository` also needs `private` given as `true` or `false`, so a repo's visibility is never left to a default. These checks run before the OTP gate, so a call that fails them never asks for a code. The advertised schemas mark these fields required.
 
 ---
 

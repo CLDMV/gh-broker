@@ -89,8 +89,11 @@ describe("Router + OTP gate: new tools (#146)", () => {
 		await expect(h.call("create_repository", { name: "x", organization: "cldmv", otp: c })).rejects.toThrow(/"private" is required, true or false/);
 		await expect(h.call("fork_repository", { owner: "someone", repo: "y", otp: c })).rejects.toThrow(/"organization" is required/);
 		await expect(h.call("create_repository", { name: "x", organization: "OtherOrg", private: true, otp: c })).rejects.toThrow(/no credentials configured for owner "otherorg"/);
+		expect(lastAudit()).toMatchObject({ tool: "create_repository", mode: "write", owner: "otherorg", decision: "error" });
+		await expect(h.call("create_repository", { name: "x", otp: c })).rejects.toThrow(/"organization" is required/);
+		expect(lastAudit().owner).toBeUndefined();
 		await expect(h.call("actions_run_trigger", { owner: "cldmv", repo: "x", method: "delete_workflow_run_logs", run_id: 1, otp: c })).rejects.toThrow(/"delete_workflow_run_logs" is not allowed in gh-broker/);
-		expect(lastAudit()).toMatchObject({ tool: "actions_run_trigger", decision: "error" });
+		expect(lastAudit()).toMatchObject({ tool: "actions_run_trigger", mode: "write", owner: "cldmv", decision: "error" });
 		expect(lastAudit().otp).toBeUndefined();
 		expect(h.upstream.forward).not.toHaveBeenCalled();
 		// The code is still unspent: it opens a window now.

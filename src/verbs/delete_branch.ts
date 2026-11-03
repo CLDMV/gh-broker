@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:12:06-08:00 (1793679126)
+ *	@Last modified time: 2026-11-02T20:20:16-08:00 (1793679616)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,7 +23,8 @@ import type { Octokit } from "@octokit/core";
  *
  *  - the repo's default branch, or one of the staging-flow branches (next, hotfixes, dev) or the
  *    bot branches (badges, gh-pages), which the release machinery depends on;
- *  - the head or the base of an open PR in the same repo, since deleting it closes that PR.
+ *  - the head or the base of an open PR in the same repo, or, for a fork, the head of an open PR
+ *    into its parent, since deleting it closes that PR.
  *
  * Rulesets still apply on top: GitHub refuses a protected branch whatever this verb allows.
  * The result carries the deleted tip's sha, so the branch can be recreated from it.
@@ -52,15 +53,23 @@ export async function deleteBranch(octokit: Octokit, input: DeleteBranchInput): 
 	if (KEPT_BRANCHES.has(branch)) throw new Error(`delete_branch: refusing to delete "${branch}": the release flow depends on it`);
 
 	const meta = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
-	const defaultBranch = (meta.data as { default_branch?: string }).default_branch;
+	const repoData = meta.data as { default_branch?: string; fork?: boolean; parent?: { name?: string; owner?: { login?: string } } };
+	const defaultBranch = repoData.default_branch;
 	if (branch === defaultBranch) throw new Error(`delete_branch: refusing to delete "${branch}": it is ${owner}/${repo}'s default branch`);
 
-	for (const side of ["head", "base"] as const) {
-		const filter = side === "head" ? { head: `${owner}:${branch}` } : { base: branch };
-		const open = await octokit.request("GET /repos/{owner}/{repo}/pulls", { owner, repo, state: "open", ...filter, per_page: 10 });
+	const lookups: Array<{ side: "head" | "base"; where: { owner: string; repo: string }; filter: Record<string, string> }> = [
+		{ side: "head", where: { owner, repo }, filter: { head: `${owner}:${branch}` } },
+		{ side: "base", where: { owner, repo }, filter: { base: branch } }
+	];
+	// A PR from this fork into its parent lives in the parent repo.
+	const parent = repoData.fork ? repoData.parent : undefined;
+	if (parent?.owner?.login && parent.name) lookups.push({ side: "head", where: { owner: parent.owner.login, repo: parent.name }, filter: { head: `${owner}:${branch}` } });
+	for (const { side, where, filter } of lookups) {
+		const open = await octokit.request("GET /repos/{owner}/{repo}/pulls", { ...where, state: "open", ...filter, per_page: 10 });
 		const prs = open.data as Array<{ number: number }>;
 		if (prs.length > 0) {
-			throw new Error(`delete_branch: refusing to delete "${branch}": it is the ${side} of open PR ${prs.map((p) => `#${p.number}`).join(", ")}, which deleting it would close`);
+			const ref = where.owner === owner && where.repo === repo ? "" : `${where.owner}/${where.repo}`;
+			throw new Error(`delete_branch: refusing to delete "${branch}": it is the ${side} of open PR ${prs.map((p) => `${ref}#${p.number}`).join(", ")}, which deleting it would close`);
 		}
 	}
 
@@ -80,7 +89,7 @@ export async function deleteBranch(octokit: Octokit, input: DeleteBranchInput): 
 }
 
 export const DELETE_BRANCH_DESCRIPTION =
-	"Delete one branch on GitHub. Refuses the repo's default branch, the release-flow branches (master, main, next, hotfixes, dev, badges, gh-pages), and any branch that is the head or base of an open PR (deleting it would close the PR). Rulesets still apply. Returns the deleted tip's sha and the git command that restores it. Runs on the write PAT (Contents: write).";
+	"Delete one branch on GitHub. Refuses the repo's default branch, the release-flow branches (master, main, next, hotfixes, dev, badges, gh-pages), and any branch that is the head or base of an open PR, including a PR from a fork into its parent (deleting it would close the PR). Rulesets still apply. Returns the deleted tip's sha and the git command that restores it. Runs on the write PAT (Contents: write).";
 
 export const DELETE_BRANCH_SCHEMA = {
 	type: "object" as const,

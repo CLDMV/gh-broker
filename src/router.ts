@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:12:05-08:00 (1793679125)
+ *	@Last modified time: 2026-11-02T20:20:16-08:00 (1793679616)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -123,7 +123,8 @@ export class Router {
 				if (tool === "actions_run_trigger") refuseLogDeletion(args);
 				else createdIn = creationOwner(tool, args, this.config.owners);
 			} catch (err) {
-				audit({ tool, user, decision: "error", detail: (err as Error).message });
+				const requested = typeof args.organization === "string" ? args.organization : extractOwner(args);
+				audit({ tool, user, mode: rule.mode, ...(requested ? { owner: requested.toLowerCase() } : {}), decision: "error", detail: (err as Error).message });
 				throw err;
 			}
 		}
@@ -408,7 +409,7 @@ const REPO_CREATING = new Set(["create_repository", "fork_repository"]);
  * are only created in orgs: upstream sends a configured user-owner's name to the org endpoint,
  * which 404s. For a fork, `owner` is the repo being forked and `organization` is where the
  * fork goes, so the write PAT is the destination's. create_repository also needs `private`
- * said explicitly: upstream defaults it to public.
+ * said explicitly, so a repo's visibility is never left to a default.
  */
 export function creationOwner(tool: string, args: Record<string, unknown>, owners: Config["owners"]): string {
 	if (typeof args.organization !== "string" || !args.organization) {
@@ -417,7 +418,7 @@ export function creationOwner(tool: string, args: Record<string, unknown>, owner
 	const org = args.organization.toLowerCase();
 	if (!owners[org]) throw new Error(`no credentials configured for owner "${org}" — add it to config.owners + creds`);
 	if (tool === "create_repository" && typeof args.private !== "boolean") {
-		throw new Error('tool "create_repository": "private" is required, true or false; a repo\'s visibility is never left to the default');
+		throw new Error('tool "create_repository": "private" is required, true or false; a repo\'s visibility is never left to a default');
 	}
 	return org;
 }

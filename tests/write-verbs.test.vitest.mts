@@ -64,10 +64,13 @@ describe("minimize_comment", () => {
 
 describe("delete_branch", () => {
 	/** A repo with default branch master, `open` PR heads, and refs that exist. */
-	function fakeRepo(opts: { heads?: number[]; bases?: number[]; refs?: Record<string, unknown>; refError?: Error } = {}) {
+	function fakeRepo(opts: { heads?: number[]; bases?: number[]; parentHeads?: number[]; meta?: Record<string, unknown>; refs?: Record<string, unknown>; refError?: Error } = {}) {
 		return vi.fn(async (route: string, p: any) => {
-			if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "trunk" } };
-			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: ((p.head ? opts.heads : opts.bases) ?? []).map((number) => ({ number })) };
+			if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "trunk", ...opts.meta } };
+			if (route === "GET /repos/{owner}/{repo}/pulls") {
+				const list = p.owner !== "cldmv" ? opts.parentHeads : p.head ? opts.heads : opts.bases;
+				return { data: (list ?? []).map((number) => ({ number })) };
+			}
 			if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") {
 				if (opts.refError) throw opts.refError;
 				const hit = (opts.refs ?? { "heads/feat/x": { object: { sha: "abc123" } } })[p.ref];
@@ -103,6 +106,20 @@ describe("delete_branch", () => {
 		const base = octo(fakeRepo({ bases: [20] }));
 		await expect(deleteBranch(base.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" })).rejects.toThrow(/the base of open PR #20, which deleting it would close/);
 		for (const h of [head, base]) expect(h.request.mock.calls.some(([route]) => route.startsWith("DELETE"))).toBe(false);
+	});
+
+	it("in a fork, also refuses a branch that heads an open PR into the parent", async () => {
+		const meta = { fork: true, parent: { name: "bar", owner: { login: "foo" } } };
+		const blocked = octo(fakeRepo({ meta, parentHeads: [7] }));
+		await expect(deleteBranch(blocked.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" })).rejects.toThrow(/the head of open PR foo\/bar#7/);
+		expect(blocked.request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/pulls", { owner: "foo", repo: "bar", state: "open", head: "cldmv:feat/x", per_page: 10 });
+		expect(blocked.request.mock.calls.some(([route]) => route.startsWith("DELETE"))).toBe(false);
+		const free = octo(fakeRepo({ meta }));
+		await expect(deleteBranch(free.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" })).resolves.toMatchObject({ deleted: "feat/x" });
+		// A fork whose parent GitHub didn't describe gets only the same-repo checks.
+		const vague = octo(fakeRepo({ meta: { fork: true, parent: {} } }));
+		await deleteBranch(vague.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" });
+		expect(vague.request.mock.calls.filter(([route]) => route === "GET /repos/{owner}/{repo}/pulls")).toHaveLength(2);
 	});
 
 	it("says a branch doesn't exist on a 404 or a ref with no commit, and passes other errors through", async () => {
@@ -228,7 +245,28 @@ describe("deny list", () => {
 			["variable_write", /Actions variables/],
 			["secrets_delete", /Actions variables/],
 			["issue_lock", /locking/],
-			["lock_write", /locking/]
+			["lock_write", /locking/],
+			["rulesets_write", /rulesets/],
+			["repository_rulesets_write", /rulesets/],
+			["custom_property_write", /repo configuration/],
+			["repository_custom_properties_write", /repo configuration/],
+			["contents_write", /git/],
+			["repository_contents_write", /git/],
+			["create_commit", /git/],
+			["create_tree", /git/],
+			["create_blob", /git/],
+			["update_ref", /git/],
+			["delete_ref", /git/],
+			["git_ref_write", /git/],
+			["actions_permissions_write", /workflow permissions/],
+			["update_repository_visibility", /repo configuration/],
+			["set_repository_visibility", /repo configuration/],
+			["settings_write", /repo configuration/],
+			["close_issues", /bulk/],
+			["create_webhook", /access and configuration/],
+			["deploy_key_write", /access and configuration/],
+			["add_collaborator", /access and configuration/],
+			["environment_write", /access and configuration/]
 		];
 		for (const [name, why] of cases) expect(deniedReason(name), name).toMatch(why);
 	});
@@ -236,7 +274,24 @@ describe("deny list", () => {
 	it("leaves every tool the broker ships alone, including repository_ruleset_read", () => {
 		const shipped = (JSON.parse(readFileSync("config.example.json", "utf8")) as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
 		expect(shipped).toHaveLength(84);
-		const legit = ["repository_ruleset_read", "create_branch", "projects_write", "discussion_comment_write", "push_notifications_read", "list_secret_scanning_alerts", "star_repository", "update_gist"];
+		const legit = [
+			"repository_ruleset_read",
+			"create_branch",
+			"projects_write",
+			"discussion_comment_write",
+			"push_notifications_read",
+			"list_secret_scanning_alerts",
+			"star_repository",
+			"update_gist",
+			"get_branch_protection",
+			"list_branch_protection_rules",
+			"get_repository_settings",
+			"get_workflow_permissions",
+			"bulk_get",
+			"batch_read",
+			"list_webhooks",
+			"get_repository_visibility"
+		];
 		for (const name of [...shipped, ...legit]) expect(deniedReason(name), name).toBeUndefined();
 	});
 });
