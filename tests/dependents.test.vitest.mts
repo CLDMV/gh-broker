@@ -537,7 +537,7 @@ describe("reportDependents — dev branches", () => {
 		});
 		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME });
 		const graphql = gh.request.mock.calls.find((c: unknown[]) => c[0] === "POST /graphql");
-		expect(graphql[1]).toMatchObject({ variables: { owner: "CLDMV", after: null } });
+		expect(graphql[1]).toMatchObject({ variables: { owner: "CLDMV", after: null, first: 25 } });
 		expect(graphql[1].query).toMatch(/refs\/heads\/dev/);
 		expect(gh.request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", { owner: "CLDMV", repo: "trunk", tree_sha: "dev", recursive: "1" });
 		expect(out.scanned.devBranches).toBe(1);
@@ -646,8 +646,44 @@ describe("reportDependents — dev branches", () => {
 			route === "GET /search/code" ? { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} } : page(0, true)
 		);
 		const out2 = await reportDependents({ request: endless } as any, { owner: "CLDMV", name: NAME });
-		expect(endless.mock.calls.filter((c) => c[0] === "POST /graphql")).toHaveLength(20);
+		expect(endless.mock.calls.filter((c) => c[0] === "POST /graphql")).toHaveLength(80);
 		expect(out2.truncatedReason).toBe("max-repos");
+	});
+
+	it("retries a page GitHub times out on at half the size, and keeps that size", async () => {
+		const sizes: number[] = [];
+		let fails = 2;
+		const request = vi.fn(async (route: string, p: any) => {
+			if (route === "GET /search/code") return { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} };
+			sizes.push(p.variables.first);
+			if (fails-- > 0) throw status(502);
+			const more = sizes.length < 4;
+			return { data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: more, endCursor: "c" }, nodes: [] } } } }, headers: {} };
+		});
+		const out = await reportDependents({ request } as any, { owner: "CLDMV", name: NAME });
+		expect(sizes).toEqual([25, 13, 7, 7]);
+		expect(out.truncated).toBeUndefined();
+	});
+
+	it("gives up with github-timeout once the smallest page still times out", async () => {
+		const d = { dev: { files: { "package.json": dep("1") } } };
+		const gh = fakeGithub([["s", "package.json"]], { s: { files: { "package.json": dep("1") } }, a: d });
+		const request = vi.fn(async (route: string, p: any) => {
+			if (route === "POST /graphql") throw status([502, 503, 504][p.variables.first % 3]);
+			return gh.request(route, p);
+		});
+		const out = await reportDependents({ request } as any, { owner: "CLDMV", name: NAME, classify: false });
+		expect(request.mock.calls.filter((c) => c[0] === "POST /graphql").map((c: any[]) => c[1].variables.first)).toEqual([25, 13, 7, 5]);
+		expect(out).toMatchObject({ truncated: true, truncatedReason: "github-timeout" });
+		expect(out.dependents.map((x) => x.repo)).toEqual(["CLDMV/s"]);
+	});
+
+	it("rethrows a dev-listing failure that isn't a timeout", async () => {
+		const request = vi.fn(async (route: string) => {
+			if (route === "GET /search/code") return { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} };
+			throw status(500);
+		});
+		await expect(reportDependents({ request } as any, { owner: "CLDMV", name: NAME })).rejects.toMatchObject({ status: 500 });
 	});
 
 	it("only reads as many dev branches as maxRepos leaves room for", async () => {
