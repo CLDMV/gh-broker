@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T21:27:13-08:00 (1793683633)
+ *	@Last modified time: 2026-11-02T23:50:03-08:00 (1793692203)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -204,13 +204,34 @@ export class OtpGate {
 
 		// A real code whose step is already spent (reused, or spent by an unlock) is refused but isn't
 		// a guess, so it doesn't count toward a lockout.
-		if (step !== undefined) throw refusal();
-		this.recordFailure(tool, state, mine, user, now);
-		throw refusal();
+		if (step !== undefined) {
+			throw new OtpRefusal(
+				`OTP code for ${tool} was already used: ask the user for the next code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
+				{ otp: "refused" }
+			);
+		}
+		throw this.rejection(tool, user, this.recordFailure(tool, state, mine, user, now));
 	}
 
-	/** Count one bad code for `user`, starting a short lockout (and maybe the hard lock) at the limit. */
-	private recordFailure(tool: string, state: OtpState, mine: UserState, user: string, now: number): void {
+	/** The refusal for a wrong code, saying how close `user` now is to a lockout. */
+	private rejection(tool: string, user: string, after: UserState): OtpRefusal {
+		const lead = `OTP code for ${tool} was not accepted`;
+		if (after.hardLock) {
+			return new OtpRefusal(`${lead}, and that was the last lockout allowed: gh-broker is now locked for ${user}. Ask the user to run "${unlockCommand(user)}" on ${this.host}. Nothing was run.`, {
+				otp: "refused"
+			});
+		}
+		const minutes = Math.max(1, Math.ceil(this.settings.lockoutSeconds / 60));
+		// recordFailure resets the count to 0 exactly when this code started a short lockout.
+		if (after.failures === 0) return new OtpRefusal(`${lead}, and that was too many bad codes: OTP is locked for ${minutes} minute(s). Nothing was run.`, { otp: "refused" });
+		return new OtpRefusal(
+			`${lead} (${after.failures} of ${this.settings.maxFailures} bad codes before a ${minutes}-minute lockout): ask the user for a fresh code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
+			{ otp: "refused" }
+		);
+	}
+
+	/** Count one bad code for `user`, starting a short lockout (and maybe the hard lock) at the limit. Returns the user's new counters. */
+	private recordFailure(tool: string, state: OtpState, mine: UserState, user: string, now: number): UserState {
 		const next = { ...mine, lockouts: mine.lockouts.filter((t) => Date.parse(t) > now - DAY_MS) };
 		next.failures += 1;
 		if (next.failures >= this.settings.maxFailures) {
@@ -233,6 +254,7 @@ export class OtpGate {
 			this.unsaved.add(user);
 			console.error(`gh-broker: ${(err as Error).message}`);
 		}
+		return next;
 	}
 
 	/**

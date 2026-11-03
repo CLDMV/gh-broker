@@ -243,7 +243,7 @@ describe("Router + OTP gate", () => {
 		const h = setup();
 		const c = h.code();
 		await h.call("merge_pull_request", { owner: "cldmv", otp: c }, "repo");
-		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: c }, "glmtest")).rejects.toThrow(/OTP required for merge_pull_request/);
+		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: c }, "glmtest")).rejects.toThrow(/OTP code for merge_pull_request was already used/);
 		expect(lastAudit()).toMatchObject({ user: "glmtest", decision: "deny", otp: "refused" });
 		expect(h.upstream.forward).toHaveBeenCalledTimes(1);
 	});
@@ -257,7 +257,7 @@ describe("Router + OTP gate", () => {
 
 	it("a short lockout refuses gated tools only", async () => {
 		const h = setup({ otp: { maxFailures: 1 } });
-		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: "000000" })).rejects.toThrow(/OTP required/);
+		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: "000000" })).rejects.toThrow(/was not accepted, and that was too many bad codes/);
 		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: h.code() })).rejects.toThrow("OTP is locked for 10 more minute(s) after too many bad codes. Nothing was run.");
 		expect(lastAudit()).toMatchObject({ otp: "locked" });
 		await expect(h.call("get_me", { owner: "cldmv" })).resolves.toBeDefined();
