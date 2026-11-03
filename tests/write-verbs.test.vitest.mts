@@ -64,11 +64,17 @@ describe("minimize_comment", () => {
 
 describe("delete_branch", () => {
 	/** A repo with default branch master, `open` PR heads, and refs that exist. */
-	function fakeRepo(opts: { open?: number[]; refs?: Record<string, unknown> } = {}) {
+	function fakeRepo(opts: { heads?: number[]; bases?: number[]; refs?: Record<string, unknown>; refError?: Error } = {}) {
 		return vi.fn(async (route: string, p: any) => {
 			if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "trunk" } };
-			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: (opts.open ?? []).map((number) => ({ number })) };
-			if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { data: (opts.refs ?? { "heads/feat/x": { object: { sha: "abc123" } } })[p.ref] ?? [] };
+			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: ((p.head ? opts.heads : opts.bases) ?? []).map((number) => ({ number })) };
+			if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") {
+				if (opts.refError) throw opts.refError;
+				const hit = (opts.refs ?? { "heads/feat/x": { object: { sha: "abc123" } } })[p.ref];
+				// The singular ref endpoint answers an unknown ref with a 404, as GitHub does.
+				if (hit === undefined) throw Object.assign(new Error("Not Found"), { status: 404 });
+				return { data: hit };
+			}
 			if (route === "DELETE /repos/{owner}/{repo}/git/refs/{ref}") return { data: undefined };
 			throw new Error(`unexpected ${route}`);
 		});
@@ -79,6 +85,7 @@ describe("delete_branch", () => {
 		const { octokit } = octo(request);
 		expect(await deleteBranch(octokit, { owner: "cldmv", repo: "r", branch: "refs/heads/feat/x" })).toEqual({ deleted: "feat/x", sha: "abc123", restore: "git push origin abc123:refs/heads/feat/x" });
 		expect(request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/pulls", { owner: "cldmv", repo: "r", state: "open", head: "cldmv:feat/x", per_page: 10 });
+		expect(request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/pulls", { owner: "cldmv", repo: "r", state: "open", base: "feat/x", per_page: 10 });
 		expect(request).toHaveBeenLastCalledWith("DELETE /repos/{owner}/{repo}/git/refs/{ref}", { owner: "cldmv", repo: "r", ref: "heads/feat/x" });
 	});
 
@@ -90,12 +97,22 @@ describe("delete_branch", () => {
 		expect(request.mock.calls.some(([route]) => route.startsWith("DELETE"))).toBe(false);
 	});
 
-	it("refuses a branch with an open PR, and one that doesn't exist", async () => {
-		const withPr = octo(fakeRepo({ open: [12, 14] }));
-		await expect(deleteBranch(withPr.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" })).rejects.toThrow(/head of open PR #12, #14/);
+	it("refuses a branch that is the head or the base of an open PR", async () => {
+		const head = octo(fakeRepo({ heads: [12, 14] }));
+		await expect(deleteBranch(head.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" })).rejects.toThrow(/the head of open PR #12, #14/);
+		const base = octo(fakeRepo({ bases: [20] }));
+		await expect(deleteBranch(base.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" })).rejects.toThrow(/the base of open PR #20, which deleting it would close/);
+		for (const h of [head, base]) expect(h.request.mock.calls.some(([route]) => route.startsWith("DELETE"))).toBe(false);
+	});
+
+	it("says a branch doesn't exist on a 404 or a ref with no commit, and passes other errors through", async () => {
 		const missing = octo(fakeRepo());
-		await expect(deleteBranch(missing.octokit, { owner: "cldmv", repo: "r", branch: "feat" })).rejects.toThrow(/no branch "feat" in cldmv\/r/);
-		expect(missing.request.mock.calls.some(([route]) => route.startsWith("DELETE"))).toBe(false);
+		await expect(deleteBranch(missing.octokit, { owner: "cldmv", repo: "r", branch: "feat" })).rejects.toThrow('delete_branch: no branch "feat" in cldmv/r');
+		const odd = octo(fakeRepo({ refs: { "heads/feat": {} } }));
+		await expect(deleteBranch(odd.octokit, { owner: "cldmv", repo: "r", branch: "feat" })).rejects.toThrow(/no branch "feat"/);
+		const boom = octo(fakeRepo({ refError: Object.assign(new Error("Server Error"), { status: 502 }) }));
+		await expect(deleteBranch(boom.octokit, { owner: "cldmv", repo: "r", branch: "feat" })).rejects.toThrow("Server Error");
+		for (const h of [missing, odd, boom]) expect(h.request.mock.calls.some(([route]) => route.startsWith("DELETE"))).toBe(false);
 	});
 
 	it("needs repo and branch", async () => {
@@ -123,7 +140,7 @@ describe("dismiss_alert", () => {
 		const { octokit } = octo(request);
 		await dismissAlert(octokit, { owner: "cldmv", repo: "r", kind: "dependabot", alertNumber: 3, reason: "not_used" });
 		expect(request).toHaveBeenLastCalledWith("PATCH /repos/{owner}/{repo}/dependabot/alerts/{alert_number}", { owner: "cldmv", repo: "r", alert_number: 3, state: "dismissed", dismissed_reason: "not_used" });
-		await dismissAlert(octokit, { owner: "cldmv", repo: "r", kind: "dependabot", alertNumber: 3, reopen: true, comment: "ignored" });
+		await dismissAlert(octokit, { owner: "cldmv", repo: "r", kind: "dependabot", alertNumber: 3, reopen: true });
 		expect(request).toHaveBeenLastCalledWith(expect.any(String), { owner: "cldmv", repo: "r", alert_number: 3, state: "open" });
 	});
 
@@ -157,6 +174,8 @@ describe("dismiss_alert", () => {
 			[{ alertNumber: 1.5 }, /alertNumber must be a positive integer/],
 			[{ comment: 3 }, /comment must be a string/],
 			[{ reopen: true }, /a reopen takes no reason/],
+			[{ reopen: true, reason: undefined, comment: "x" }, /GitHub stores no comment when a code_scanning alert is reopened/],
+			[{ kind: "dependabot", reopen: true, reason: undefined, comment: "x" }, /no comment when a dependabot alert is reopened/],
 			[{ reason: undefined }, /reason is required for a code_scanning alert, one of: "false positive", "won't fix", "used in tests"/],
 			[{ kind: "dependabot", reason: "won't fix" }, /reason is required for a dependabot alert/]
 		];
@@ -193,7 +212,23 @@ describe("deny list", () => {
 			["update_workflow_permissions", /workflow permissions/],
 			["bulk_close_issues", /bulk/],
 			["lock_issue", /locking/],
-			["unlock_conversation", /locking/]
+			["unlock_conversation", /locking/],
+			["file_write", /git/],
+			["files_delete", /git/],
+			["push_files", /git/],
+			["push_commits", /git/],
+			["repository_delete", /manual step/],
+			["repository_write", /repo configuration/],
+			["repo_update", /repo configuration/],
+			["transfer_repository", /repo configuration/],
+			["archive_repo", /repo configuration/],
+			["set_default_branch", /repo configuration/],
+			["default_branch_update", /repo configuration/],
+			["manage_org_ruleset", /rulesets/],
+			["variable_write", /Actions variables/],
+			["secrets_delete", /Actions variables/],
+			["issue_lock", /locking/],
+			["lock_write", /locking/]
 		];
 		for (const [name, why] of cases) expect(deniedReason(name), name).toMatch(why);
 	});
@@ -201,6 +236,7 @@ describe("deny list", () => {
 	it("leaves every tool the broker ships alone, including repository_ruleset_read", () => {
 		const shipped = (JSON.parse(readFileSync("config.example.json", "utf8")) as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
 		expect(shipped).toHaveLength(84);
-		for (const name of [...shipped, "repository_ruleset_read", "create_branch"]) expect(deniedReason(name), name).toBeUndefined();
+		const legit = ["repository_ruleset_read", "create_branch", "projects_write", "discussion_comment_write", "push_notifications_read", "list_secret_scanning_alerts", "star_repository", "update_gist"];
+		for (const name of [...shipped, ...legit]) expect(deniedReason(name), name).toBeUndefined();
 	});
 });

@@ -27,7 +27,8 @@ const TOOLS = [
 	{ name: "otp_status", mode: "read", custom: true },
 	{ name: "create_repository", mode: "write" },
 	{ name: "fork_repository", mode: "write" },
-	{ name: "update_pull_request_branch", mode: "write" }
+	{ name: "update_pull_request_branch", mode: "write" },
+	{ name: "actions_run_trigger", mode: "write" }
 ];
 
 function setup(opts: { otp?: Record<string, unknown> | null; seedStored?: boolean } = {}) {
@@ -78,7 +79,7 @@ describe("Router + OTP gate: new tools (#146)", () => {
 		expect(h.upstream.forward).not.toHaveBeenCalled();
 		await h.call("create_repository", { name: "x", organization: "CLDMV", private: false, otp: h.code() });
 		expect(h.upstream.forward).toHaveBeenCalledWith("create_repository", { name: "x", organization: "CLDMV", private: false }, "token:cred:cldmv-write");
-		expect(lastAudit()).toMatchObject({ tool: "create_repository", owner: "cldmv", repo: "cldmv", decision: "forward", ok: true, otp: "opened" });
+		expect(lastAudit()).toMatchObject({ tool: "create_repository", owner: "cldmv", repo: "cldmv/x", decision: "forward", ok: true, otp: "opened" });
 	});
 
 	it("refuses a repo with no organization or no explicit private before the gate, so no code is spent or counted", async () => {
@@ -87,13 +88,19 @@ describe("Router + OTP gate: new tools (#146)", () => {
 		await expect(h.call("create_repository", { name: "x", private: true, otp: c })).rejects.toThrow(/"organization" is required .* personal account/);
 		await expect(h.call("create_repository", { name: "x", organization: "cldmv", otp: c })).rejects.toThrow(/"private" is required, true or false/);
 		await expect(h.call("fork_repository", { owner: "someone", repo: "y", otp: c })).rejects.toThrow(/"organization" is required/);
-		expect(lastAudit()).toMatchObject({ tool: "fork_repository", decision: "error" });
+		await expect(h.call("create_repository", { name: "x", organization: "OtherOrg", private: true, otp: c })).rejects.toThrow(/no credentials configured for owner "otherorg"/);
+		await expect(h.call("actions_run_trigger", { owner: "cldmv", repo: "x", method: "delete_workflow_run_logs", run_id: 1, otp: c })).rejects.toThrow(/"delete_workflow_run_logs" is not allowed in gh-broker/);
+		expect(lastAudit()).toMatchObject({ tool: "actions_run_trigger", decision: "error" });
 		expect(lastAudit().otp).toBeUndefined();
 		expect(h.upstream.forward).not.toHaveBeenCalled();
 		// The code is still unspent: it opens a window now.
 		await h.call("fork_repository", { owner: "someone", repo: "y", organization: "CLDMV", otp: c });
 		expect(h.upstream.forward).toHaveBeenCalledWith("fork_repository", { owner: "someone", repo: "y", organization: "CLDMV" }, "token:cred:cldmv-write");
-		expect(lastAudit()).toMatchObject({ owner: "cldmv", repo: "cldmv/y", otp: "opened" });
+		expect(lastAudit()).toMatchObject({ owner: "cldmv", repo: "cldmv/y", source: "someone/y", otp: "opened" });
+		// Other actions_run_trigger methods go through the gate as usual.
+		await h.call("actions_run_trigger", { owner: "cldmv", repo: "x", method: "rerun_failed_jobs", run_id: 1, otp: c });
+		expect(h.upstream.forward).toHaveBeenLastCalledWith("actions_run_trigger", { owner: "cldmv", repo: "x", method: "rerun_failed_jobs", run_id: 1 }, "token:cred:cldmv-write");
+		expect(lastAudit()).toMatchObject({ tool: "actions_run_trigger", otp: "window" });
 	});
 
 	it("leaves update_pull_request_branch ungated", async () => {
@@ -168,7 +175,7 @@ describe("Router + OTP gate", () => {
 				/tool "merge_pull_request" is not available on this broker: OTP is not set up on this broker.*re-run the installer/
 			);
 			const status = JSON.parse(((await h.call("otp_status", {})).content[0] as any).text);
-			expect(status).toMatchObject({ configured: false, gatedTools: ["merge_pull_request", "npm_scaffold", "create_repository", "fork_repository"] });
+			expect(status).toMatchObject({ configured: false, gatedTools: ["merge_pull_request", "npm_scaffold", "create_repository", "fork_repository", "actions_run_trigger"] });
 		}
 	});
 

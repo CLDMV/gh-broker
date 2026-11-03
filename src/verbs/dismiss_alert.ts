@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:03:01-08:00 (1793678581)
+ *	@Last modified time: 2026-11-02T20:12:06-08:00 (1793679126)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -80,6 +80,7 @@ export async function dismissAlert(octokit: Octokit, input: DismissAlertInput): 
 	if (input.comment !== undefined && typeof input.comment !== "string") throw new Error("dismiss_alert: comment must be a string");
 	const reopen = input.reopen === true;
 	if (reopen && input.reason !== undefined) throw new Error("dismiss_alert: a reopen takes no reason");
+	if (reopen && input.comment !== undefined && kind !== "secret_scanning") throw new Error(`dismiss_alert: GitHub stores no comment when a ${kind} alert is reopened; leave comment out`);
 	if (!reopen && !DISMISS_REASONS[kind].includes(input.reason as string)) {
 		throw new Error(`dismiss_alert: reason is required for a ${kind} alert, one of: ${DISMISS_REASONS[kind].map((r) => `"${r}"`).join(", ")}`);
 	}

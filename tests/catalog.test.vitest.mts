@@ -320,6 +320,15 @@ describe("buildCatalog", () => {
 		expect(createSchema.required).toEqual(["name"]);
 	});
 
+	it("says on actions_run_trigger that log deletion is refused", async () => {
+		upstream.listToolsFor.mockResolvedValue([{ name: "actions_run_trigger", description: "Trigger.", inputSchema: { type: "object" } }]);
+		const [tool] = await buildCatalog(makeConfig([{ name: "actions_run_trigger", mode: "write", otp: false }]), secrets as any, upstream as any);
+		expect(tool!.description).toBe('Trigger. gh-broker: method "delete_workflow_run_logs" is refused; a run\'s logs are kept.');
+		upstream.listToolsFor.mockResolvedValue([{ name: "actions_run_trigger", inputSchema: { type: "object" } }]);
+		const [bare] = await buildCatalog(makeConfig([{ name: "actions_run_trigger", mode: "write", otp: false }]), secrets as any, upstream as any);
+		expect(bare!.description).toMatch(/^gh-broker: method "delete_workflow_run_logs"/);
+	});
+
 	it("hides default-gated tools while OTP isn't set up", async () => {
 		upstream.listToolsFor.mockResolvedValue([{ name: "merge_pull_request", inputSchema: { type: "object" } }]);
 		const catalog = await buildCatalog(makeConfig([{ name: "merge_pull_request", mode: "write" }, { name: "delete_branch", mode: "write", custom: true }]), secrets as any, upstream as any);

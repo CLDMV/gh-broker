@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:03:01-08:00 (1793678581)
+ *	@Last modified time: 2026-11-02T20:12:06-08:00 (1793679126)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,7 +23,7 @@ import type { Octokit } from "@octokit/core";
  *
  *  - the repo's default branch, or one of the staging-flow branches (next, hotfixes, dev) or the
  *    bot branches (badges, gh-pages), which the release machinery depends on;
- *  - the head of an open PR in the same repo, since deleting it closes that PR.
+ *  - the head or the base of an open PR in the same repo, since deleting it closes that PR.
  *
  * Rulesets still apply on top: GitHub refuses a protected branch whatever this verb allows.
  * The result carries the deleted tip's sha, so the branch can be recreated from it.
@@ -55,23 +55,32 @@ export async function deleteBranch(octokit: Octokit, input: DeleteBranchInput): 
 	const defaultBranch = (meta.data as { default_branch?: string }).default_branch;
 	if (branch === defaultBranch) throw new Error(`delete_branch: refusing to delete "${branch}": it is ${owner}/${repo}'s default branch`);
 
-	const open = await octokit.request("GET /repos/{owner}/{repo}/pulls", { owner, repo, state: "open", head: `${owner}:${branch}`, per_page: 10 });
-	const prs = open.data as Array<{ number: number }>;
-	if (prs.length > 0) {
-		throw new Error(`delete_branch: refusing to delete "${branch}": it is the head of open PR ${prs.map((p) => `#${p.number}`).join(", ")}, which deleting it would close`);
+	for (const side of ["head", "base"] as const) {
+		const filter = side === "head" ? { head: `${owner}:${branch}` } : { base: branch };
+		const open = await octokit.request("GET /repos/{owner}/{repo}/pulls", { owner, repo, state: "open", ...filter, per_page: 10 });
+		const prs = open.data as Array<{ number: number }>;
+		if (prs.length > 0) {
+			throw new Error(`delete_branch: refusing to delete "${branch}": it is the ${side} of open PR ${prs.map((p) => `#${p.number}`).join(", ")}, which deleting it would close`);
+		}
 	}
 
-	const ref = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", { owner, repo, ref: `heads/${branch}` });
+	const missing = new Error(`delete_branch: no branch "${branch}" in ${owner}/${repo}`);
+	let ref: { data: unknown };
+	try {
+		ref = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", { owner, repo, ref: `heads/${branch}` });
+	} catch (err) {
+		throw (err as { status?: number }).status === 404 ? missing : err;
+	}
 	const sha = (ref.data as { object?: { sha?: string } }).object?.sha;
-	// A prefix match ("heads/feat" when only "heads/feat/x" exists) answers with an array, not the ref.
-	if (typeof sha !== "string") throw new Error(`delete_branch: no branch "${branch}" in ${owner}/${repo}`);
+	// A tag or other object would carry no commit sha to restore from; don't delete what can't be put back.
+	if (typeof sha !== "string") throw missing;
 
 	await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", { owner, repo, ref: `heads/${branch}` });
 	return { deleted: branch, sha, restore: `git push origin ${sha}:refs/heads/${branch}` };
 }
 
 export const DELETE_BRANCH_DESCRIPTION =
-	"Delete one branch on GitHub. Refuses the repo's default branch, the release-flow branches (master, main, next, hotfixes, dev, badges, gh-pages), and any branch that is the head of an open PR (deleting it would close the PR). Rulesets still apply. Returns the deleted tip's sha and the git command that restores it. Runs on the write PAT (Contents: write).";
+	"Delete one branch on GitHub. Refuses the repo's default branch, the release-flow branches (master, main, next, hotfixes, dev, badges, gh-pages), and any branch that is the head or base of an open PR (deleting it would close the PR). Rulesets still apply. Returns the deleted tip's sha and the git command that restores it. Runs on the write PAT (Contents: write).";
 
 export const DELETE_BRANCH_SCHEMA = {
 	type: "object" as const,

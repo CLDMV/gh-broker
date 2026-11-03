@@ -83,7 +83,7 @@ These need a code unless their entry says `"otp": false`, because each can publi
 | `fork_repository` | A new repo in the org. |
 | `merge_pull_request` | Ships code into the base branch. |
 | `pull_request_review_write` | An approval counts toward required reviews. |
-| `actions_run_trigger` | Dispatches a workflow, re-runs or cancels a run. A re-run of a release or publish job releases again; some manual workflows (`v4-bootstrap`, org onboarding) change settings, rulesets, tags and releases. |
+| `actions_run_trigger` | Dispatches a workflow, re-runs or cancels a run. A re-run of a release or publish job releases again; some manual workflows (`v4-bootstrap`, org onboarding) change settings, rulesets, tags and releases. Its `delete_workflow_run_logs` method is refused outright, gated or not: a run's logs are the record of what it did. |
 | `label_write` | Renaming or deleting a repo label changes every issue and PR carrying it, and the release and status workflows match label names exactly. |
 | `delete_branch` | See [`delete_branch`](#delete_branch). |
 | `dismiss_alert` | See [`dismiss_alert`](#dismiss_alert). |
@@ -108,7 +108,7 @@ The gate's state for the calling agent user, plus every hard-locked user. Read, 
 {
 	"configured": true,
 	"user": "repo",
-	"gatedTools": ["merge_pull_request"],
+	"gatedTools": ["create_repository", "fork_repository", "merge_pull_request", "pull_request_review_write", "actions_run_trigger", "label_write", "delete_branch", "dismiss_alert"],
 	"windowSeconds": 300,
 	"openWindows": 1,
 	"nextWindowExpiresAt": "2026-11-01T12:05:00.000Z",
@@ -761,9 +761,9 @@ Delete one branch. Write, `mode: "write"`, `custom: true`, gated by default. Run
 { "owner": "cldmv", "repo": "gh-broker", "branch": "feat/otp-gate" }
 ```
 
-It refuses, before deleting anything, the repo's default branch, the release-flow and bot branches (`master`, `main`, `next`, `hotfixes`, `dev`, `badges`, `gh-pages`), and a branch that is the head of an open PR in the repo, since deleting it would close the PR. Rulesets still apply on top. Returns `{ deleted, sha, restore }`, where `restore` is the `git push` that puts the branch back at the same commit.
+It refuses, before deleting anything, the repo's default branch, the release-flow and bot branches (`master`, `main`, `next`, `hotfixes`, `dev`, `badges`, `gh-pages`), and a branch that is the head or the base of an open PR in the repo, since deleting it would close the PR. Rulesets still apply on top. Returns `{ deleted, sha, restore }`, where `restore` is the `git push` that puts the branch back at the same commit.
 
-**Calls.** One repo read, one open-PR lookup, one ref read, then the delete.
+**Calls.** One repo read, two open-PR lookups (by head and by base), one ref read, then the delete.
 
 ---
 
@@ -783,13 +783,13 @@ A dismissal needs a `reason`, spelled the way GitHub's API takes it for that kin
 | `dependabot` | `fix_started`, `inaccurate`, `no_bandwidth`, `not_used`, `tolerable_risk` |
 | `secret_scanning` | `false_positive`, `wont_fix`, `revoked`, `used_in_tests` (the alert is marked resolved) |
 
-`reopen: true` (no reason) sets the alert back to open. `comment` is optional. The answer is `{ kind, number, state, reason, url }` and nothing else: a secret scanning alert's API response carries the secret, which is never returned.
+`reopen: true` (no reason) sets the alert back to open. `comment` is optional; on a reopen only secret scanning stores one, so it's refused for the other two kinds. The answer is `{ kind, number, state, reason, url }` and nothing else: a secret scanning alert's API response carries the secret, which is never returned.
 
 ---
 
 ## `create_repository` / `fork_repository`
 
-Both are proxied and gated by default, with two rules on top. `organization` is required: upstream creates the repo in the token owner's personal account when it's left out, and no configured owner covers that. It also picks the write PAT, so for a fork the PAT is the destination org's, not the source repo owner's. `create_repository` also needs `private` given as `true` or `false`, since upstream would otherwise make it public. Both rules are checked before the OTP gate, so a call that can't run never asks for a code. The advertised schemas mark these fields required.
+Both are proxied and gated by default, with two rules on top. `organization` is required and must be a configured owner: upstream creates the repo in the token owner's personal account when it's left out. Repos are only created in orgs; a configured user-owner can't be used here, since upstream sends the name to the org endpoint. `organization` also picks the write PAT, so for a fork the PAT is the destination org's, not the source repo owner's, and the audit line adds `source` for the repo that was forked. `create_repository` also needs `private` given as `true` or `false`, since upstream would otherwise make it public. These checks run before the OTP gate, so a call that fails them never asks for a code. The advertised schemas mark these fields required.
 
 ---
 

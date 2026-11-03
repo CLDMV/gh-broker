@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-11-02T20:12:05-08:00 (1793679125)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -25,6 +25,8 @@ export interface AuditEntry {
 	owner?: string;
 	mode?: "read" | "write";
 	repo?: string;
+	/** fork_repository only: the repo that was forked (owner/repo are the new copy). */
+	source?: string;
 	decision: "forward" | "custom" | "augment" | "deny" | "error";
 	ok?: boolean;
 	detail?: string;

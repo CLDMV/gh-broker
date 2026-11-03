@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:03:00-08:00 (1793678580)
+ *	@Last modified time: 2026-11-02T20:12:05-08:00 (1793679125)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -232,6 +232,10 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 				description: `${base.description ?? ""}${note}`.trim(),
 				inputSchema: { ...schema, type: "object", required: [...new Set([...(schema.required ?? []), ...needed])] } as Tool["inputSchema"]
 			});
+			continue;
+		}
+		if (rule.name === "actions_run_trigger") {
+			tools.push({ ...base, description: `${base.description ?? ""} gh-broker: method "delete_workflow_run_logs" is refused; a run's logs are kept.`.trim() });
 			continue;
 		}
 		if (rule.name === "issue_write") {

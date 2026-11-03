@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:03:01-08:00 (1793678581)
+ *	@Last modified time: 2026-11-02T20:12:05-08:00 (1793679125)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -118,9 +118,10 @@ export class Router {
 		}
 		// Checked before the gate, so a call that can't run never asks for a code.
 		let createdIn: string | undefined;
-		if (REPO_CREATING.has(tool)) {
+		if (REPO_CREATING.has(tool) || tool === "actions_run_trigger") {
 			try {
-				createdIn = creationOwner(tool, args);
+				if (tool === "actions_run_trigger") refuseLogDeletion(args);
+				else createdIn = creationOwner(tool, args, this.config.owners);
 			} catch (err) {
 				audit({ tool, user, decision: "error", detail: (err as Error).message });
 				throw err;
@@ -155,7 +156,10 @@ export class Router {
 			throw new Error(`no credentials configured for owner "${owner}" — add it to config.owners + creds`);
 		}
 		const token = this.secrets.resolve(rule.mode === "write" ? creds.write : creds.read);
-		const repo = typeof args.repo === "string" ? `${owner}/${args.repo}` : owner;
+		const repoName = tool === "create_repository" ? args.name : args.repo;
+		const repo = typeof repoName === "string" ? `${owner}/${repoName}` : owner;
+		// A fork's audit line also names what was forked; owner/repo above are the new copy.
+		const forked = tool === "fork_repository" ? { source: `${String(args.owner)}/${String(args.repo)}` } : {};
 
 		const decision = rule.custom ? "custom" : rule.augment ? "augment" : "forward";
 		try {
@@ -164,10 +168,10 @@ export class Router {
 				: rule.augment
 					? await this.dispatchAugmented(tool, args, owner, token)
 					: await this.upstream.forward(tool, args, token);
-			audit({ tool, user, owner, mode: rule.mode, repo, decision, ok: true, ...otp });
+			audit({ tool, user, owner, mode: rule.mode, repo, ...forked, decision, ok: true, ...otp });
 			return out;
 		} catch (err) {
-			audit({ tool, user, owner, mode: rule.mode, repo, decision, ok: false, detail: (err as Error).message, ...otp });
+			audit({ tool, user, owner, mode: rule.mode, repo, ...forked, decision, ok: false, detail: (err as Error).message, ...otp });
 			throw err;
 		}
 	}
@@ -399,20 +403,31 @@ export class Router {
 const REPO_CREATING = new Set(["create_repository", "fork_repository"]);
 
 /**
- * The owner a new repo lands in. Upstream creates it in the PAT user's own account when
- * `organization` is left out, which no configured owner covers, so it's required here. For a
- * fork, `owner` is the repo being forked and `organization` is where the fork goes, so the
- * write PAT is the destination's. create_repository also needs `private` said explicitly:
- * upstream defaults it to public.
+ * The org a new repo lands in. Upstream creates it in the PAT user's own account when
+ * `organization` is left out, so it's required here, and it must be a configured owner. Repos
+ * are only created in orgs: upstream sends a configured user-owner's name to the org endpoint,
+ * which 404s. For a fork, `owner` is the repo being forked and `organization` is where the
+ * fork goes, so the write PAT is the destination's. create_repository also needs `private`
+ * said explicitly: upstream defaults it to public.
  */
-export function creationOwner(tool: string, args: Record<string, unknown>): string {
+export function creationOwner(tool: string, args: Record<string, unknown>, owners: Config["owners"]): string {
 	if (typeof args.organization !== "string" || !args.organization) {
 		throw new Error(`tool "${tool}": "organization" is required (the org the repo is created in); gh-broker doesn't create repos in a personal account`);
 	}
+	const org = args.organization.toLowerCase();
+	if (!owners[org]) throw new Error(`no credentials configured for owner "${org}" — add it to config.owners + creds`);
 	if (tool === "create_repository" && typeof args.private !== "boolean") {
 		throw new Error('tool "create_repository": "private" is required, true or false; a repo\'s visibility is never left to the default');
 	}
-	return args.organization.toLowerCase();
+	return org;
+}
+
+/**
+ * actions_run_trigger's delete_workflow_run_logs method removes a run's logs, which are the
+ * record of what a run did. The other methods (dispatch, re-run, cancel) stay, behind the gate.
+ */
+export function refuseLogDeletion(args: Record<string, unknown>): void {
+	if (args.method === "delete_workflow_run_logs") throw new Error('tool "actions_run_trigger": method "delete_workflow_run_logs" is not allowed in gh-broker; a run\'s logs are kept');
 }
 
 /** Derive the repo owner from a tool call's arguments, so we pick the right PAT. */

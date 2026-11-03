@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:03:00-08:00 (1793678580)
+ *	@Last modified time: 2026-11-02T20:12:05-08:00 (1793679125)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -32,15 +32,16 @@ export const DENIED_TOOLS: ReadonlyMap<string, string> = new Map([
 
 /** Name shapes for the same classes of tool, should upstream add or rename one. */
 const DENIED_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
-	[/(^|_)(create|update|delete|write)_(file|files)$|^push_/, "file writes go through git"],
-	[/^delete_(repo|repository)(_|$)/, "deleting a repo stays a manual step in GitHub"],
-	[/ruleset_(write|create|update|delete)|(create|update|delete)_.*ruleset/, "rulesets are managed by org bootstrap"],
+	[/(^|_)(create|update|delete|write)_(file|files)$|^(file|files)_(write|create|update|delete)$|^push_(file|files|commit|commits|changes)$/, "file writes go through git"],
+	[/^delete_(repo|repository)(_|$)|^(repo|repository)_delete$/, "deleting a repo stays a manual step in GitHub"],
+	[/^(transfer|archive|unarchive|rename)_(repo|repository)$|default_branch_(write|update|set)|^(set|update)_default_branch$/, "repo configuration is managed by org bootstrap"],
+	[/ruleset_(write|create|update|delete)|(create|update|delete|manage)_.*ruleset/, "rulesets are managed by org bootstrap"],
 	[/branch_protection/, "branch protection is managed by org bootstrap"],
-	[/(update|edit|write)_(repo|repository)(_settings)?$|repository_settings/, "repo configuration is managed by org bootstrap"],
-	[/(actions|repo|repository|org)_(variable|secret)s?_(write|create|update|delete|set)|^(create|update|delete|set)_.*(variable|secret)s?$/, "Actions variables and secrets are managed by org bootstrap"],
+	[/(update|edit|write)_(repo|repository)(_settings)?$|^(repo|repository)_(write|update|settings_write)$|repository_settings/, "repo configuration is managed by org bootstrap"],
+	[/(actions|repo|repository|org)_(variable|secret)s?_(write|create|update|delete|set)|^(variable|secret)s?_(write|create|update|delete|set)$|^(create|update|delete|set)_.*(variable|secret)s?$/, "Actions variables and secrets are managed by org bootstrap"],
 	[/workflow_permissions/, "workflow permissions are managed by org bootstrap"],
 	[/^(bulk_|batch_)/, "bulk writes aren't offered; loop over the single-item tool"],
-	[/(^|_)(lock|unlock)_(issue|issues|conversation|pull_request)/, "locking conversations isn't offered"]
+	[/(^|_)(lock|unlock)_(issue|issues|conversation|pull_request)|^(issue|issues|conversation|pull_request)_(lock|unlock)$|^lock_write$/, "locking conversations isn't offered"]
 ];
 
 /** Why `name` can never be allowlisted, or undefined when it can. */
