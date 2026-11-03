@@ -58,7 +58,7 @@ function refusal(fn: () => unknown): OtpRefusal {
 }
 
 const REFUSED = /^OTP required for merge_pull_request: ask the user for a current code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
-const SPENT = /^OTP code for merge_pull_request was already used: ask the user for the next code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
+const SPENT = /^OTP code for merge_pull_request is spent \(it, or a newer code, was already used\): ask the user for the next code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
 /** The refusal for the `n`th bad code of `max`, before a lockout of `lockout`. */
 const rejected = (n: number, max = 5, lockout = "10 minutes") =>
 	`OTP code for merge_pull_request was not accepted (${n} of ${max} bad codes before a lockout of ${lockout}): ask the user for a fresh code from their authenticator app and pass it as "otp". Nothing was run.`;

@@ -243,7 +243,7 @@ describe("Router + OTP gate", () => {
 		const h = setup();
 		const c = h.code();
 		await h.call("merge_pull_request", { owner: "cldmv", otp: c }, "repo");
-		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: c }, "glmtest")).rejects.toThrow(/OTP code for merge_pull_request was already used/);
+		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: c }, "glmtest")).rejects.toThrow(/OTP code for merge_pull_request is spent/);
 		expect(lastAudit()).toMatchObject({ user: "glmtest", decision: "deny", otp: "refused" });
 		expect(h.upstream.forward).toHaveBeenCalledTimes(1);
 	});

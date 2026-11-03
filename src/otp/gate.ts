@@ -206,7 +206,7 @@ export class OtpGate {
 		// a guess, so it doesn't count toward a lockout.
 		if (step !== undefined) {
 			throw new OtpRefusal(
-				`OTP code for ${tool} was already used: ask the user for the next code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
+				`OTP code for ${tool} is spent (it, or a newer code, was already used): ask the user for the next code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
 				{ otp: "refused" }
 			);
 		}
