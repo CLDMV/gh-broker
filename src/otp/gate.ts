@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T20:43:25-08:00 (1793594605)
+ *	@Last modified time: 2026-11-02T21:27:13-08:00 (1793683633)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -39,6 +39,7 @@ import { audit } from "../audit.ts";
 import { hostname } from "node:os";
 import type { Config, SecretStore } from "../types.ts";
 import { OTP_ARG, isGated, otpSettings, readSeed, type OtpSettings } from "./policy.ts";
+import { isEnabled } from "../availability.ts";
 import { OtpStateFile, emptyUser, userState, type HardLock, type OtpState, type UserState } from "./state.ts";
 import { matchStep, safeEqual } from "./totp.ts";
 
@@ -255,7 +256,8 @@ export class OtpGate {
 	 */
 	status(user: string): Record<string, unknown> {
 		const now = this.now();
-		const gatedTools = this.config.tools.filter(isGated).map((t) => t.name);
+		// A disabled tool can't be called at all, so it isn't listed as needing a code.
+		const gatedTools = this.config.tools.filter((t) => isGated(t) && isEnabled(t)).map((t) => t.name);
 		let mine = emptyUser();
 		let hardLock: HardLock | null = null;
 		let lockedUsers: Array<{ user: string; since: string; lockouts: number; unlockCommand: string }> = [];

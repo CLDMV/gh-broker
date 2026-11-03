@@ -31,14 +31,14 @@ const TOOLS = [
 	{ name: "actions_run_trigger", mode: "write" }
 ];
 
-function setup(opts: { otp?: Record<string, unknown> | null; seedStored?: boolean } = {}) {
+function setup(opts: { otp?: Record<string, unknown> | null; seedStored?: boolean; tools?: unknown[] } = {}) {
 	const dir = join(ROOT, `case-${n++}`);
 	mkdirSync(dir, { recursive: true });
 	const statePath = join(dir, "state.json");
 	const config: any = {
 		listen: "agents:/run/gh-broker/agents",
 		upstream: "https://api.githubcopilot.com/mcp/",
-		tools: TOOLS,
+		tools: opts.tools ?? TOOLS,
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
 		npm: { token: "cred:npm-token", scopes: ["@cldmv"] },
 		...(opts.otp === null ? {} : { otp: { seed: "cred:otp-seed", statePath, ...opts.otp } })
@@ -71,6 +71,32 @@ afterAll(() => {
 });
 
 const lastAudit = () => JSON.parse(logs[logs.length - 1]!);
+
+describe("Router: disabled-by-default tools (#146)", () => {
+	it("hides and refuses a Copilot coding tool until it's enabled, then gates it by default", async () => {
+		const tools = [{ name: "assign_copilot_to_issue", mode: "write" }, { name: "otp_status", mode: "read", custom: true }];
+		const off = setup({ tools });
+		expect(off.router.advertisedTools().map((t) => t.name)).toEqual(["otp_status"]);
+		await expect(off.call("assign_copilot_to_issue", { owner: "cldmv", repo: "x", issue_number: 1, otp: off.code() })).rejects.toThrow(
+			'tool "assign_copilot_to_issue" is not available on this broker: it is disabled by default; set "enabled": true on its entry in config.tools to turn it on'
+		);
+		expect(JSON.parse(((await off.call("otp_status", {})).content[0] as any).text).gatedTools).toEqual([]);
+
+		const on = setup({ tools: [{ ...tools[0], enabled: true }, tools[1]] });
+		expect(on.router.advertisedTools().map((t) => t.name)).toEqual(["assign_copilot_to_issue", "otp_status"]);
+		expect(JSON.parse(((await on.call("otp_status", {})).content[0] as any).text).gatedTools).toEqual(["assign_copilot_to_issue"]);
+		await expect(on.call("assign_copilot_to_issue", { owner: "cldmv", repo: "x", issue_number: 1 })).rejects.toThrow(/OTP required for assign_copilot_to_issue/);
+		await on.call("assign_copilot_to_issue", { owner: "cldmv", repo: "x", issue_number: 1, otp: on.code() });
+		expect(on.upstream.forward).toHaveBeenCalledWith("assign_copilot_to_issue", { owner: "cldmv", repo: "x", issue_number: 1 }, "token:cred:cldmv-write");
+	});
+
+	it("lets config disable any tool, and ungate an enabled Copilot tool", async () => {
+		const h = setup({ tools: [{ name: "get_me", mode: "read", enabled: false }, { name: "create_pull_request_with_copilot", mode: "write", enabled: true, otp: false }] });
+		await expect(h.call("get_me", { owner: "cldmv" })).rejects.toThrow('tool "get_me" is not available on this broker: it is disabled in config.tools ("enabled": false)');
+		await h.call("create_pull_request_with_copilot", { owner: "cldmv", repo: "x", problem_statement: "p" });
+		expect(h.upstream.forward).toHaveBeenCalledTimes(1);
+	});
+});
 
 describe("Router + OTP gate: new tools (#146)", () => {
 	it("gates create_repository by default and runs it on the write PAT of the org the repo lands in", async () => {

@@ -18,7 +18,7 @@ Any tool can additionally be put behind the broker's OTP gate with `"otp": true`
 
 ## OTP gate and `otp_status`
 
-Some tools should only run after the user has approved them. A tool marked `"otp": true` in `config.tools` (or gated by the built-in default, see [Gated by default](#gated-by-default)) needs a code from the user's authenticator app. The agent can't produce one: it asks the user, and passes the code it's given as the `otp` argument. `"otp": false` turns a default-gated tool off again. Set it on the tool's entry in `/etc/gh-broker/config.json`; `gh-broker install` replaces the tool list with the shipped one on every run but keeps each tool's `otp` setting. Every tool that isn't gated behaves exactly as before.
+Some tools should only run after the user has approved them. A tool marked `"otp": true` in `config.tools` (or gated by the built-in default, see [Gated by default](#gated-by-default)) needs a code from the user's authenticator app. The agent can't produce one: it asks the user, and passes the code it's given as the `otp` argument. `"otp": false` turns a default-gated tool off again. Set it on the tool's entry in `/etc/gh-broker/config.json`; `gh-broker install` replaces the tool list with the shipped one on every run but keeps each tool's `otp` and `enabled` settings. Every tool that isn't gated behaves exactly as before.
 
 ```json
 { "owner": "cldmv", "repo": "gh-broker", "pullNumber": 12, "otp": "123456" }
@@ -88,7 +88,13 @@ These need a code unless their entry says `"otp": false`, because each can publi
 | `delete_branch` | See [`delete_branch`](#delete_branch). |
 | `dismiss_alert` | See [`dismiss_alert`](#dismiss_alert). |
 
+The Copilot coding-agent tools are on this list too, and are also [disabled by default](#disabled-by-default).
+
 Everything else defaults to ungated, including `update_pull_request_branch` (merges the base into the PR branch; GitHub makes that commit, signed by GitHub), `request_copilot_review` and [`minimize_comment`](#minimize_comment).
+
+### Disabled by default
+
+`create_pull_request_with_copilot`, `assign_copilot_to_issue` and `assign_copilot_to_issue_with_intent` ship in the tool list but are off: hidden from the tool list and refused like an unlisted tool, with the reason. They hand work to Copilot's coding agent, which then writes code into the repo outside `git`. Turn one on with `"enabled": true` on its entry in `/etc/gh-broker/config.json`; it is then gated by default, like the tools above, and `"otp": false` ungates it. `"enabled": false` turns off any other tool the same way (`otp_status` can't be turned off). Their calls need the account's Copilot coding agent to be available on the repo.
 
 ### Never allowed
 

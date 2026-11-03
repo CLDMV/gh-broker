@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T12:12:12-07:00 (1793473932)
+ *	@Last modified time: 2026-11-02T21:27:13-08:00 (1793683633)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -44,6 +44,12 @@ export interface ToolRule {
 	 * direction; omitted means the default (src/otp/policy.ts). Never allowed on otp_status.
 	 */
 	otp?: boolean;
+	/**
+	 * Whether the tool is served. Overrides the built-in default (src/availability.ts, where a few
+	 * shipped tools start disabled) in either direction; omitted means the default. A disabled tool
+	 * is hidden and refused like an unlisted one. Never false on otp_status.
+	 */
+	enabled?: boolean;
 }
 
 /** Credential *references* (e.g. "cred:cldmv-read"), resolved via the SecretStore. */

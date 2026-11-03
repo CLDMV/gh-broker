@@ -35,6 +35,15 @@ describe("mergeConfig", () => {
 		expect(mergeConfig({ ...example, tools: undefined }, { ...example, tools: "nope" }).tools).toBeUndefined();
 	});
 
+	it("keeps the operator's per-tool enabled setting too, alongside otp", () => {
+		const ex = { ...example, tools: [{ name: "assign_copilot_to_issue", mode: "write" }, { name: "get_me", mode: "read" }] };
+		const current = { ...ex, tools: [{ name: "assign_copilot_to_issue", mode: "write", enabled: true, otp: false }, { name: "get_me", mode: "read", enabled: "no" }] };
+		expect(mergeConfig(ex, current).tools).toEqual([
+			{ name: "assign_copilot_to_issue", mode: "write", otp: false, enabled: true },
+			{ name: "get_me", mode: "read" }
+		]);
+	});
+
 	it("preserves current owner data and adds example-only owners on upgrade", () => {
 		const current = { ...example, owners: { acme: { read: "cred:acme-read", write: "cred:acme-write", installationId: 123 } } };
 		const example2 = {

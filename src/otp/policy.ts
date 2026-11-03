@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:03:01-08:00 (1793678581)
+ *	@Last modified time: 2026-11-02T21:27:13-08:00 (1793683633)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -40,7 +40,11 @@ export const DEFAULT_GATED: ReadonlySet<string> = new Set<string>([
 	"actions_run_trigger",
 	"label_write",
 	"delete_branch",
-	"dismiss_alert"
+	"dismiss_alert",
+	// Disabled by default too (src/availability.ts); gated once enabled.
+	"create_pull_request_with_copilot",
+	"assign_copilot_to_issue",
+	"assign_copilot_to_issue_with_intent"
 ]);
 
 export const OTP_DEFAULTS = {

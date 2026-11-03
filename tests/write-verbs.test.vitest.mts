@@ -297,7 +297,7 @@ describe("deny list", () => {
 
 	it("leaves every tool the broker ships alone, including repository_ruleset_read", () => {
 		const shipped = (JSON.parse(readFileSync("config.example.json", "utf8")) as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
-		expect(shipped).toHaveLength(84);
+		expect(shipped).toHaveLength(87);
 		const legit = [
 			"repository_ruleset_read",
 			"create_branch",

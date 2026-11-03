@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:03:00-08:00 (1793678580)
+ *	@Last modified time: 2026-11-02T21:27:13-08:00 (1793683633)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -60,12 +60,14 @@ export function loadConfig(path: string): Config {
 		const augment = o.augment === true;
 		if (custom && augment) throw new Error(`config.tools[${i}] ("${o.name}"): custom and augment are mutually exclusive`);
 		if (o.otp !== undefined && typeof o.otp !== "boolean") throw new Error(`config.tools[${i}].otp: must be true or false`);
+		if (o.enabled !== undefined && typeof o.enabled !== "boolean") throw new Error(`config.tools[${i}].enabled: must be true or false`);
 		if (o.name === OTP_STATUS) {
 			// otp_status has to keep working while everything else is locked, so it can't be gated.
 			if (o.otp === true) throw new Error(`config.tools[${i}] ("${OTP_STATUS}"): can't be gated (otp: true)`);
+			if (o.enabled === false) throw new Error(`config.tools[${i}] ("${OTP_STATUS}"): can't be disabled (enabled: false)`);
 			if (!custom) throw new Error(`config.tools[${i}] ("${OTP_STATUS}"): must be custom: true`);
 		}
-		return { name: o.name, mode: o.mode as Mode, custom, augment, ...(typeof o.otp === "boolean" ? { otp: o.otp } : {}) };
+		return { name: o.name, mode: o.mode as Mode, custom, augment, ...(typeof o.otp === "boolean" ? { otp: o.otp } : {}), ...(typeof o.enabled === "boolean" ? { enabled: o.enabled } : {}) };
 	});
 
 	if (typeof c.owners !== "object" || c.owners === null) throw new Error("config.owners: must be an object");

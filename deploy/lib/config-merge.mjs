@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T00:40:44-07:00 (1793518844)
+ *	@Last modified time: 2026-11-02T21:27:12-08:00 (1793683632)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -53,11 +53,15 @@ export function mergeConfig(example, current) {
 
 	const out = structuredClone(example);
 
-	// tools: the allowlist is authoritative from the example (already copied into out). The one
-	// per-tool setting the operator owns is `otp` (gate a tool or ungate it, #143), so a boolean
-	// `otp` on a deployed tool is carried onto the same tool in the new list. It never adds a tool.
-	const deployedOtp = new Map((Array.isArray(current.tools) ? current.tools : []).filter((t) => isObject(t) && typeof t.otp === "boolean").map((t) => [t.name, t.otp]));
-	for (const t of out.tools ?? []) if (deployedOtp.has(t.name)) t.otp = deployedOtp.get(t.name);
+	// tools: the allowlist is authoritative from the example (already copied into out). The per-tool
+	// settings the operator owns are `otp` (gate a tool or ungate it, #143) and `enabled` (turn a
+	// shipped tool on or off, #146), so a boolean one on a deployed tool is carried onto the same
+	// tool in the new list. It never adds a tool.
+	const deployed = (Array.isArray(current.tools) ? current.tools : []).filter(isObject);
+	for (const key of ["otp", "enabled"]) {
+		const kept = new Map(deployed.filter((t) => typeof t[key] === "boolean").map((t) => [t.name, t[key]]));
+		for (const t of out.tools ?? []) if (kept.has(t.name)) t[key] = kept.get(t.name);
+	}
 
 	// scalars: current wins when defined. An old `unix:` listen is the shared-socket form the
 	// per-agent sockets replaced, so it is not carried over (buildConfig sets the new default).
