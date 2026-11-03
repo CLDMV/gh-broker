@@ -26,11 +26,15 @@ Some tools should only run after the user has approved them. A tool marked `"otp
 
 **Windows.** Each call comes from a known agent user: every registered agent has its own socket (see [Callers](#callers-one-socket-per-agent) below). The first gated call with a valid TOTP code (RFC 6238, SHA1, 6 digits, 30 s step, ±1 step accepted) that is newer than the last accepted one opens a window for that user. For `windowSeconds` (default 300) every gated tool runs for that user when the call carries the same code; the window is fixed, with no renewal. A window only serves the user who opened it: another agent sending the same code is refused. A code can open only one window, ever, for anyone: there is one seed, and the last accepted TOTP step is stored, so a code can't reopen a window after it closes or after a restart. A user can have several windows open at once, one per code. Windows are held in memory, so a restart closes them.
 
-**Refusals.** A missing, wrong, expired or reused code gets the same answer, and nothing runs:
+**Refusals.** Nothing runs on a refusal. The answer says which case it was, so the agent can tell the user why it needs another code:
 
 ```
 OTP required for <tool>: ask the user for a current code from their authenticator app and pass it as "otp". Nothing was run.
+OTP code for <tool> is spent (it, or a newer code, was already used): ask the user for the next code from their authenticator app and pass it as "otp". Nothing was run.
+OTP code for <tool> was not accepted (<n> of <maxFailures> bad codes before a lockout of <lockout length>): ask the user for a fresh code from their authenticator app and pass it as "otp". Nothing was run.
 ```
+
+The first is a missing code (or a non-string one), the second a real code whose time step is already spent (it was used, or a newer one was), and the third a wrong, expired or malformed code. The bad code that starts a lockout says so (`… was not accepted, and that was too many bad codes: OTP is locked for <lockout length>.`), and the one that starts a hard lock names the unlock command. The count is the one `otp_status` already shows the agent.
 
 The `otp` argument is the broker's own: it is removed from the arguments of every call, gated or not, before anything is forwarded upstream or handed to a verb.
 
