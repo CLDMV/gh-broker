@@ -761,9 +761,9 @@ Delete one branch. Write, `mode: "write"`, `custom: true`, gated by default. Run
 { "owner": "cldmv", "repo": "gh-broker", "branch": "feat/otp-gate" }
 ```
 
-It refuses, before deleting anything, the repo's default branch, the release-flow and bot branches (`master`, `main`, `next`, `hotfixes`, `dev`, `badges`, `gh-pages`), and a branch that is the head or the base of an open PR in the repo, or, in a fork, the head of an open PR into the parent repo, since deleting it would close the PR. Rulesets still apply on top. Returns `{ deleted, sha, restore }`, where `restore` is the `git push` that puts the branch back at the same commit.
+It refuses, before deleting anything, the repo's default branch, the release-flow and bot branches (`master`, `main`, `next`, `hotfixes`, `dev`, `badges`, `gh-pages`), and a branch that is the head or the base of an open PR in the repo, or, in a fork, the head of an open PR into the parent repo or the root of the fork network, since deleting it would close the PR. Rulesets still apply on top. Returns `{ deleted, sha, restore }`, where `restore` is the `git push` that puts the branch back at the same commit.
 
-**Calls.** One repo read, two open-PR lookups (by head and by base, plus one in the parent for a fork), one ref read, then the delete.
+**Calls.** One repo read, two open-PR lookups (by head and by base, plus one each in the parent and the root for a fork), one ref read, then the delete.
 
 ---
 

@@ -117,6 +117,14 @@ describe("delete_branch", () => {
 		expect(blocked.request.mock.calls.some(([route]) => route.startsWith("DELETE"))).toBe(false);
 		const free = octo(fakeRepo({ meta }));
 		await expect(deleteBranch(free.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" })).resolves.toMatchObject({ deleted: "feat/x" });
+		// A fork of a fork also checks the root; a root equal to the parent is checked once.
+		const deep = octo(fakeRepo({ meta: { fork: true, parent: { name: "bar", owner: { login: "mid" } }, source: { name: "bar", owner: { login: "foo" } } } }));
+		await deleteBranch(deep.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" });
+		expect(deep.request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/pulls", { owner: "foo", repo: "bar", state: "open", head: "cldmv:feat/x", per_page: 10 });
+		expect(deep.request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/pulls", { owner: "mid", repo: "bar", state: "open", head: "cldmv:feat/x", per_page: 10 });
+		const same = octo(fakeRepo({ meta: { ...meta, source: meta.parent } }));
+		await deleteBranch(same.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" });
+		expect(same.request.mock.calls.filter(([route]) => route === "GET /repos/{owner}/{repo}/pulls")).toHaveLength(3);
 		// A fork whose parent GitHub didn't describe gets only the same-repo checks.
 		const vague = octo(fakeRepo({ meta: { fork: true, parent: {} } }));
 		await deleteBranch(vague.octokit, { owner: "cldmv", repo: "r", branch: "feat/x" });
