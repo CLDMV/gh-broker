@@ -31,10 +31,10 @@ Some tools should only run after the user has approved them. A tool marked `"otp
 ```
 OTP required for <tool>: ask the user for a current code from their authenticator app and pass it as "otp". Nothing was run.
 OTP code for <tool> was already used: ask the user for the next code from their authenticator app and pass it as "otp". Nothing was run.
-OTP code for <tool> was not accepted (<n> of <maxFailures> bad codes before a <m>-minute lockout): ask the user for a fresh code from their authenticator app and pass it as "otp". Nothing was run.
+OTP code for <tool> was not accepted (<n> of <maxFailures> bad codes before a lockout of <lockoutSeconds>): ask the user for a fresh code from their authenticator app and pass it as "otp". Nothing was run.
 ```
 
-The first is a missing code (or a non-string one), the second a real code whose time step is already spent, and the third a wrong or expired code. The bad code that starts a lockout says so (`… was not accepted, and that was too many bad codes: OTP is locked for <m> minute(s).`), and the one that starts a hard lock names the unlock command. The count is the one `otp_status` already shows the agent.
+The first is a missing code (or a non-string one), the second a real code whose time step is already spent, and the third a wrong, expired or malformed code. The bad code that starts a lockout says so (`… was not accepted, and that was too many bad codes: OTP is locked for <lockoutSeconds>.`), and the one that starts a hard lock names the unlock command. The count is the one `otp_status` already shows the agent.
 
 The `otp` argument is the broker's own: it is removed from the arguments of every call, gated or not, before anything is forwarded upstream or handed to a verb.
 

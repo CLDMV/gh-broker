@@ -221,11 +221,11 @@ export class OtpGate {
 				otp: "refused"
 			});
 		}
-		const minutes = Math.max(1, Math.ceil(this.settings.lockoutSeconds / 60));
+		const lockout = windowText(this.settings.lockoutSeconds);
 		// recordFailure resets the count to 0 exactly when this code started a short lockout.
-		if (after.failures === 0) return new OtpRefusal(`${lead}, and that was too many bad codes: OTP is locked for ${minutes} minute(s). Nothing was run.`, { otp: "refused" });
+		if (after.failures === 0) return new OtpRefusal(`${lead}, and that was too many bad codes: OTP is locked for ${lockout}. Nothing was run.`, { otp: "refused" });
 		return new OtpRefusal(
-			`${lead} (${after.failures} of ${this.settings.maxFailures} bad codes before a ${minutes}-minute lockout): ask the user for a fresh code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
+			`${lead} (${after.failures} of ${this.settings.maxFailures} bad codes before a lockout of ${lockout}): ask the user for a fresh code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
 			{ otp: "refused" }
 		);
 	}

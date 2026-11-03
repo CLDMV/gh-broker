@@ -59,10 +59,10 @@ function refusal(fn: () => unknown): OtpRefusal {
 
 const REFUSED = /^OTP required for merge_pull_request: ask the user for a current code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
 const SPENT = /^OTP code for merge_pull_request was already used: ask the user for the next code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
-/** The refusal for the `n`th bad code of `max`, before a `minutes`-minute lockout. */
-const rejected = (n: number, max = 5, minutes = 10) =>
-	`OTP code for merge_pull_request was not accepted (${n} of ${max} bad codes before a ${minutes}-minute lockout): ask the user for a fresh code from their authenticator app and pass it as "otp". Nothing was run.`;
-const LOCKED_NOW = /^OTP code for merge_pull_request was not accepted, and that was too many bad codes: OTP is locked for \d+ minute\(s\)\. Nothing was run\.$/;
+/** The refusal for the `n`th bad code of `max`, before a lockout of `lockout`. */
+const rejected = (n: number, max = 5, lockout = "10 minutes") =>
+	`OTP code for merge_pull_request was not accepted (${n} of ${max} bad codes before a lockout of ${lockout}): ask the user for a fresh code from their authenticator app and pass it as "otp". Nothing was run.`;
+const LOCKED_NOW = /^OTP code for merge_pull_request was not accepted, and that was too many bad codes: OTP is locked for \d+ (minutes?|seconds)\. Nothing was run\.$/;
 
 beforeEach(() => {
 	vi.spyOn(console, "error").mockImplementation(() => {});
@@ -226,6 +226,14 @@ describe("OtpGate windows", () => {
 		expect(h.readState().users.repo.failures).toBe(4);
 	});
 
+	it("states a lockout that isn't whole minutes in seconds", () => {
+		const h = harness({ maxFailures: 2, lockoutSeconds: 90 });
+		expect(() => h.auth("000000")).toThrow(rejected(1, 2, "90 seconds"));
+		expect(refusal(() => h.auth("000000")).message).toBe(
+			"OTP code for merge_pull_request was not accepted, and that was too many bad codes: OTP is locked for 90 seconds. Nothing was run."
+		);
+	});
+
 	it("a valid code resets the user's failure counter and drops their now-empty entry", () => {
 		const h = harness();
 		expect(() => h.auth("000000")).toThrow(rejected(1));
@@ -284,7 +292,7 @@ describe("OtpGate lockouts", () => {
 		const h = harness();
 		fail(h, 4);
 		expect(refusal(() => h.auth("000000")).message).toBe(
-			"OTP code for merge_pull_request was not accepted, and that was too many bad codes: OTP is locked for 10 minute(s). Nothing was run."
+			"OTP code for merge_pull_request was not accepted, and that was too many bad codes: OTP is locked for 10 minutes. Nothing was run."
 		);
 		expect(h.readState().users.repo).toEqual({ failures: 0, lockedUntil: new Date(T0 + 10 * MIN).toISOString(), lockouts: [new Date(T0).toISOString()], hardLock: null });
 		expect(auditLines()).toEqual([expect.objectContaining({ tool: "merge_pull_request", user: "repo", decision: "deny", otp: "lockout", until: new Date(T0 + 10 * MIN).toISOString(), detail: "5 bad codes" })]);
