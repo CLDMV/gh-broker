@@ -26,11 +26,15 @@ Some tools should only run after the user has approved them. A tool marked `"otp
 
 **Windows.** Each call comes from a known agent user: every registered agent has its own socket (see [Callers](#callers-one-socket-per-agent) below). The first gated call with a valid TOTP code (RFC 6238, SHA1, 6 digits, 30 s step, ±1 step accepted) that is newer than the last accepted one opens a window for that user. For `windowSeconds` (default 300) every gated tool runs for that user when the call carries the same code; the window is fixed, with no renewal. A window only serves the user who opened it: another agent sending the same code is refused. A code can open only one window, ever, for anyone: there is one seed, and the last accepted TOTP step is stored, so a code can't reopen a window after it closes or after a restart. A user can have several windows open at once, one per code. Windows are held in memory, so a restart closes them.
 
-**Refusals.** A missing, wrong, expired or reused code gets the same answer, and nothing runs:
+**Refusals.** Nothing runs on a refusal. The answer says which case it was, so the agent can tell the user why it needs another code:
 
 ```
 OTP required for <tool>: ask the user for a current code from their authenticator app and pass it as "otp". Nothing was run.
+OTP code for <tool> is spent (it, or a newer code, was already used): ask the user for the next code from their authenticator app and pass it as "otp". Nothing was run.
+OTP code for <tool> was not accepted (<n> of <maxFailures> bad codes before a lockout of <lockout length>): ask the user for a fresh code from their authenticator app and pass it as "otp". Nothing was run.
 ```
+
+The first is a missing code (or a non-string one), the second a real code whose time step is already spent (it was used, or a newer one was), and the third a wrong, expired or malformed code. The bad code that starts a lockout says so (`… was not accepted, and that was too many bad codes: OTP is locked for <lockout length>.`), and the one that starts a hard lock names the unlock command. The count is the one `otp_status` already shows the agent.
 
 The `otp` argument is the broker's own: it is removed from the arguments of every call, gated or not, before anything is forwarded upstream or handed to a verb.
 
@@ -325,7 +329,7 @@ Every non-archived, non-fork repo an owner has that declares an npm package, wit
 
 **How it finds repos.** One org-wide code search (`"<name>" org:<owner> filename:package.json`, up to 10 pages of 100) produces the candidate list. Each candidate repo is then read directly: its repo record (archived and fork repos are skipped and counted), then every matching `package.json` at the default branch. A manifest counts only when the package appears as a key in `dependencies`, `devDependencies` or `peerDependencies`; a repo that merely mentions the name in text lands in `scanned.notDeclared`. Code search is not trusted for completeness: it lags recent commits, only indexes default branches and returns at most 1000 hits, so `discovery.note` says so on every result, and `incomplete_results` / a full result window set `truncated`.
 
-**Dev branches.** Code search never sees a dev-trunk repo, whose real manifests live on `dev`. So a second pass lists every repo with GraphQL (one call per 100 repos), keeps the non-archived, non-fork ones whose `dev` branch exists and points at a different commit than the default branch, and reads each of those branches in full: one recursive tree call, then every `package.json` outside `node_modules`, then the lockfile on `dev`. Each entry carries `branch`, so a repo that declares the package on both branches shows up twice, default branch first. `scanned.devBranches` counts the branches read; a tree too big for GitHub to return whole is flagged with `unread: [{ "path": ".", "reason": "tree-truncated" }]`.
+**Dev branches.** Code search never sees a dev-trunk repo, whose real manifests live on `dev`. So a second pass lists every repo with GraphQL (one call per 25 repos, since each repo carries two `package.json` texts; a page GitHub times out on with a 502/503/504 is retried at half the size, down to 5, and then the result is `truncated` with `truncatedReason: "github-timeout"`), keeps the non-archived, non-fork ones whose `dev` branch exists and points at a different commit than the default branch, and reads each of those branches in full: one recursive tree call, then every `package.json` outside `node_modules`, then the lockfile on `dev`. Each entry carries `branch`, so a repo that declares the package on both branches shows up twice, default branch first. `scanned.devBranches` counts the branches read; a tree too big for GitHub to return whole is flagged with `unread: [{ "path": ".", "reason": "tree-truncated" }]`.
 
 A `dev` that has fallen behind a release is abandoned, not a trunk: when its root `package.json` `version` is lower than the default branch's, it is skipped and listed as `abandonedDev: [{ "repo", "devVersion", "defaultVersion" }]`. If either side has no readable version the branch is read as usual. Pass `devBranches: false` to skip the whole pass.
 
@@ -359,7 +363,7 @@ A `dev` that has fallen behind a release is abandoned, not a trunk: when its roo
 
 `unread` also lists manifests that could not be read: `missing` (the search is stale), `too-large` or `invalid-json`, plus `tree-truncated` for a dev tree GitHub cut short.
 
-**Fan-out safety** works like the other report verbs: hitting `maxRepos`, `maxApiCalls`, the search window or GitHub's rate limit returns what was verified so far with `truncated: true` and a `truncatedReason` (`"max-results"` | `"incomplete-search"` | `"max-repos"` | `"max-api-calls"` | `"rate-limited"`). Code search has its own small quota (10 requests a minute), so the proactive rate-limit floor is not applied to it; a real 403/429 still stops the run with `rate-limited`.
+**Fan-out safety** works like the other report verbs: hitting `maxRepos`, `maxApiCalls`, the search window or GitHub's rate limit returns what was verified so far with `truncated: true` and a `truncatedReason` (`"max-results"` | `"incomplete-search"` | `"max-repos"` | `"max-api-calls"` | `"rate-limited"` | `"github-timeout"`, the last when the dev-branch listing kept timing out). Code search has its own small quota (10 requests a minute), so the proactive rate-limit floor is not applied to it; a real 403/429 still stops the run with `rate-limited`.
 
 ---
 
