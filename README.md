@@ -143,7 +143,7 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 ### Requirements
 
 - **Linux with systemd.** The broker runs as a hardened systemd service and listens on a Unix socket.
-- **Node.js 22.12.0 or later** (`engines.node` is `>=22.12.0`). The installer points `/usr/local/bin/node` at the node it runs under.
+- **Node.js 22.0.0 or later** (`engines.node` is `>=22.0.0`; development needs 22.22.0+). The installer points `/usr/local/bin/node` at the node it runs under.
 - **The agent runs as its own Linux user**, without passwordless sudo, so it can't read the broker's secrets. The model behind that is in [docs/agent-user-model.md](docs/agent-user-model.md).
 - **Two fine-grained PATs per org** (read and write). The scopes are listed in [deploy/README.md](deploy/README.md).
 
