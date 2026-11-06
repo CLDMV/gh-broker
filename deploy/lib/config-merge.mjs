@@ -121,9 +121,17 @@ export function layerConfig(base, overlay) {
  * a new object; neither argument is changed.
  */
 export function addClaudeConfigDirs(base, more) {
-	const out = structuredClone(base ?? {});
-	for (const [user, dirs] of Object.entries(more)) out[user] = [...new Set([...(out[user] ?? []), ...dirs])];
+	const out = structuredClone(isObject(base) ? base : {});
+	for (const [user, dirs] of Object.entries(more)) out[user] = [...new Set([...absoluteFolders(out[user]), ...absoluteFolders(dirs)])];
 	return out;
+}
+
+/**
+ * The absolute folder paths in one agent's saved list. The deployed config can be hand-edited, so
+ * a string instead of a list, or a relative entry, yields nothing rather than odd folders.
+ */
+export function absoluteFolders(dirs) {
+	return Array.isArray(dirs) ? dirs.filter((d) => typeof d === "string" && d.startsWith("/")) : [];
 }
 
 /** Throw unless `v` is { "<agent user>": ["/absolute/dir", ...] }. `where` names it in the message. */

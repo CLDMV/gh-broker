@@ -22,7 +22,7 @@
 import { agentGroup, agentsDir, assertAgentName, registeredAgents, socketPath, versionWarning } from "./agents.mjs";
 import { applyMcpConfig, mcpEntry, mcpFileStatus, removeMcpConfig, SkippedFolder, MCP_BACKUP, MCP_FILE } from "./mcp-config.mjs";
 import { statePathOf } from "./otp-cli.mjs";
-import { addClaudeConfigDirs } from "./config-merge.mjs";
+import { absoluteFolders, addClaudeConfigDirs } from "./config-merge.mjs";
 import { spendRecentCodes, withoutUser } from "./otp.mjs";
 
 /** Run one `agent` subcommand. Returns the exit code; throws on a failure the dispatcher reports. */
@@ -32,7 +32,11 @@ export async function agentCommand(command, rest, config, d) {
 	if (command === "list") return list(config, d);
 	if (command === "sync") {
 		if (claudeConfigs.length && names.length !== 1) throw new Error("--claude-config needs the agent named: sudo gh-broker agent sync <user> --claude-config <dir>");
-		if (claudeConfigs.length) config = rememberFolders(config, names[0], claudeConfigs, d);
+		if (claudeConfigs.length) {
+			assertAgentName(names[0]);
+			if (!registry(d).some((a) => a.user === names[0])) throw new Error(`"${names[0]}" is not a registered agent`);
+			config = rememberFolders(config, names[0], claudeConfigs, d);
+		}
 		return sync(config, names[0], noMcp, d);
 	}
 	if (names.length !== 1) throw new Error(`name the agent user: sudo gh-broker agent ${command} <user>`);
@@ -65,7 +69,6 @@ function parseAgentArgs(rest) {
 
 /** Add `dirs` to `user`'s saved Claude config folders and write the broker config. Returns the new config. */
 function rememberFolders(config, user, dirs, d) {
-	assertAgentName(user);
 	const next = { ...config, claudeConfigDirs: addClaudeConfigDirs(config.claudeConfigDirs, { [user]: dirs }) };
 	d.writeConfig(next);
 	d.log(`${user}: Claude config folders kept in the broker config: ${next.claudeConfigDirs[user].join(", ")}`);
@@ -83,7 +86,7 @@ const registry = (d) => registeredAgents(d.groups());
  */
 function extraFolders(info, d, config, user) {
 	const home = info.home.replace(/\/+$/, "");
-	const saved = config.claudeConfigDirs?.[user] ?? [];
+	const saved = absoluteFolders(config.claudeConfigDirs?.[user]);
 	const found = [...(d.mcpIO.scan?.(info.home) ?? []), ...(d.mcpIO.sessions?.(info.uid) ?? [])];
 	const seen = new Set([home, info.home]);
 	const out = [];

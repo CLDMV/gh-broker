@@ -260,6 +260,13 @@ describe("other Claude config folders (#163)", () => {
 		expect(pins.filter((p) => !p.startsWith("closed"))).toEqual([`${SAVED}|-`, `${SEC}|-`, "/home/repo/.claude|/home/repo", `${VLLM}|/home/repo`]);
 	});
 
+	it("a hand-edited saved list that isn't a list of absolute paths gives no folders", async () => {
+		const { d, pins } = withFolders({}, { scan: () => [], sessions: () => [] });
+		await agentCommand("sync", ["repo"], { ...config, claudeConfigDirs: { repo: "/x" } }, d);
+		await agentCommand("sync", ["repo"], { ...config, claudeConfigDirs: { repo: ["rel", 7, "/ok"] } }, d);
+		expect(pins.filter((p) => !p.startsWith("closed"))).toEqual(["/ok|-"]);
+	});
+
 	it("a folder root won't use is skipped with a warning and doesn't fail the sync", async () => {
 		const { d, err, out } = withFolders({ [`${VLLM}/.claude.json`]: "{}" }, {
 			pin: (folder: string) => {
@@ -312,6 +319,8 @@ describe("other Claude config folders (#163)", () => {
 		await expect(agentCommand("list", ["--bogus"], config, d)).rejects.toThrow("unknown flag: --bogus");
 		await expect(agentCommand("add", ["ghost", "--claude-config", SAVED], config, d)).rejects.toThrow(/does not exist/);
 		await expect(agentCommand("add", ["Bad Name"], config, d)).rejects.toThrow(/not a valid agent user name/);
+		await expect(agentCommand("sync", ["newbie", "--claude-config", SAVED], config, d)).rejects.toThrow(/"newbie" is not a registered agent/);
+		await expect(agentCommand("sync", ["Bad Name", "--claude-config", SAVED], config, d)).rejects.toThrow(/not a valid agent user name/);
 		expect(d.writeConfig).not.toHaveBeenCalled();
 	});
 

@@ -342,6 +342,20 @@ describe("Claude config folders (#163)", () => {
 		expect(() => m.pinFolder(join(dir, "home-wx"), uid, io, { within: home })).toThrow(/outside the agent's home/);
 	});
 
+	it("pinner holds a found folder inside the home's real path and lets a saved folder (no home) be anywhere", () => {
+		const home = join(dir, "home-p");
+		mkdirSync(join(home, ".claude-y"), { recursive: true });
+		mkdirSync(join(dir, "saved-p"));
+		symlinkSync(home, join(dir, "home-p-link"));
+		const pin = m.pinner(io);
+		pin(join(home, ".claude-y"), uid, join(dir, "home-p-link"))!.close(); // the home is resolved first
+		expect(() => pin(join(dir, "saved-p"), uid, home)).toThrow(/outside the agent's home/);
+		pin(join(dir, "saved-p"), uid, undefined)!.close();
+		const seen: unknown[] = [];
+		m.pinner(io, { realpath: (p: string) => { seen.push(p); return home; } })(join(home, ".claude-y"), uid, "/h")!.close();
+		expect(seen).toEqual(["/h"]);
+	});
+
 	it("readHead reads at most the limit", () => {
 		const p = join(dir, "head.txt");
 		writeFileSync(p, "abcdef");

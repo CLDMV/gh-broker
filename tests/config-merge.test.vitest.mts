@@ -421,6 +421,8 @@ describe("claudeConfigDirs (#163)", () => {
 		expect(addClaudeConfigDirs(base, { repo: ["/a", "/b"] })).toEqual({ repo: ["/a", "/b"] });
 		expect(base).toEqual({ repo: ["/a"] });
 		expect(addClaudeConfigDirs(undefined, { repo: ["/a"] })).toEqual({ repo: ["/a"] });
+		expect(addClaudeConfigDirs({ repo: "/x" }, { repo: ["/a"] })).toEqual({ repo: ["/a"] }); // a hand-edited string isn't split up
+		expect(addClaudeConfigDirs("junk", { repo: ["rel", "/a"] })).toEqual({ repo: ["/a"] });
 	});
 
 	it("a --config file may set it, in the right shape only", () => {

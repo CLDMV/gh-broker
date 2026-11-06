@@ -23,7 +23,7 @@
  * read-back check) with every filesystem effect injected. Root does that work in a directory the
  * agent user owns, so `readOwnedFile` refuses anything but the user's own plain file.
  */
-import { closeSync, constants, fstatSync, openSync, readdirSync, readlinkSync, readSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { agentGroup, socketPath } from "./agents.mjs";
 
@@ -328,3 +328,9 @@ export function pinFolder(folder, uid, io, { within, open = openSync, fstat = fs
 		close: () => close(fd)
 	};
 }
+
+/**
+ * The `pin` effect for an io: pinFolder, held inside the real path of `home` when one is given
+ * (a found folder) and not when it isn't (a folder root saved with --claude-config).
+ */
+export const pinner = (io, { realpath = realpathSync } = {}) => (folder, uid, home) => pinFolder(folder, uid, io, { within: home === undefined ? undefined : realpath(home) });
