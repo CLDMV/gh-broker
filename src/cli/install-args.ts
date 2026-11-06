@@ -1,26 +1,26 @@
 /**
  *
  *	@Project: @cldmv/gh-broker
- *	@Filename: /deploy/lib/install-args.mjs
+ *	@Filename: /src/cli/install-args.ts
  *	@Date: 2026-10-31T12:31:29-07:00 (1793475089)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T00:40:47-07:00 (1793518847)
+ *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 /**
- * The installer's command-line parsing, kept apart from install.mjs (which needs root and
- * a systemd host) so it can be tested. Every problem throws; install.mjs turns that into
+ * The installer's command-line parsing, kept apart from install.ts (which needs root and
+ * a systemd host) so it can be tested. Every problem throws; install.ts turns that into
  * its usual fatal message.
  */
 
-import { assertSafeCredName } from "./secret-store.mjs";
-import { assertAgentName } from "./agents.mjs";
+import { assertSafeCredName } from "./secret-store.ts";
+import { assertAgentName } from "./agents.ts";
 
 export const NPM_SCOPE = /^@[a-z0-9][a-z0-9._~-]*$/;
 export const NPM_ORG = /^[a-z0-9][a-z0-9._~-]*$/;
@@ -30,26 +30,60 @@ const GH_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const IMAGE_GLOB = /^[a-z0-9*](?:[a-z0-9._*-]*[a-z0-9*])?(?:\/[a-z0-9*](?:[a-z0-9._*-]*[a-z0-9*])?)*$/;
 
 /** env var that supplies the token for cred `name`: GH_BROKER_SECRET_<NAME>. */
-export const envSecretKey = (name) => "GH_BROKER_SECRET_" + name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+export const envSecretKey = (name: string): string => "GH_BROKER_SECRET_" + name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 
-export function parseArgs(argv) {
-	const o = { positional: [], nonInteractive: false, createAgentUser: false, noMcpConfig: false, npm: false, npmScopes: [], npmOrgs: [], cliSecrets: {} };
+/** What the installer's command line parses to. Optional fields are set only when their flag is given. */
+export interface InstallArgs {
+	positional: string[];
+	help?: boolean;
+	nonInteractive: boolean;
+	createAgentUser: boolean;
+	noMcpConfig: boolean;
+	agentUser?: string;
+	provider?: "systemd-creds" | "file";
+	secretsFile?: string;
+	cliSecrets: Record<string, string>;
+	npm: boolean;
+	npmScopes: string[];
+	npmOrgs: string[];
+	npmTokenDays?: number;
+	configFile?: string;
+	owners?: string[];
+	installationIds?: Record<string, number>;
+	defaultOwner?: string;
+	listen?: string;
+	upstream?: string;
+	appId?: number;
+	appPrivateKey?: string;
+	secretsPath?: string;
+	npmRegistry?: string;
+	ghcrOwner?: string;
+	ghcrUsername?: string;
+	ghcrImages?: string[];
+	ghcrDropDir?: string;
+	ghcrMaxArchiveBytes?: number;
+	claudeConfigs?: { user: string; dir: string }[];
+	protectReleaseTags?: boolean;
+}
+
+export function parseArgs(argv: string[]): InstallArgs {
+	const o: InstallArgs = { positional: [], nonInteractive: false, createAgentUser: false, noMcpConfig: false, npm: false, npmScopes: [], npmOrgs: [], cliSecrets: {} };
 	// Consume the value after a value-taking flag, failing if it's missing or is
 	// itself a flag — so `--agent-user --secrets-provider file` can't silently take
 	// "--secrets-provider" as the username and proceed with an unintended user.
-	const value = (i, flag) => {
+	const value = (i: number, flag: string): string => {
 		const v = argv[i];
 		if (v === undefined || v.startsWith("-")) throw new Error(`${flag} requires a value (see --help)`);
 		return v;
 	};
 	for (let i = 0; i < argv.length; i++) {
-		const a = argv[i];
+		const a = argv[i]!;
 		if (a === "-h" || a === "--help") o.help = true;
 		else if (a === "-y" || a === "--non-interactive") o.nonInteractive = true;
 		else if (a === "--create-agent-user") o.createAgentUser = true;
 		else if (a === "--no-mcp-config") o.noMcpConfig = true;
 		else if (a === "--agent-user") o.agentUser = value(++i, a);
-		else if (a === "--secrets-provider") o.provider = value(++i, a);
+		else if (a === "--secrets-provider") o.provider = value(++i, a) as InstallArgs["provider"];
 		else if (a === "--secrets-file") o.secretsFile = value(++i, a);
 		else if (a === "--secret") {
 			const pair = value(++i, a);

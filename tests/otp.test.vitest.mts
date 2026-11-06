@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, symlinkSync, lstatSync } from "node:fs";
 import { join } from "node:path";
-import * as otp from "../deploy/lib/otp.mjs";
+import * as otp from "../src/cli/otp.ts";
 
 let dir: string;
 beforeAll(() => {

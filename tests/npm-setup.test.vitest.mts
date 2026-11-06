@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createNpmToken, wantsOtp } from "../deploy/lib/npm-setup.mjs";
+import { createNpmToken, wantsOtp } from "../src/cli/npm-setup.ts";
 
 const SESSION = "npm_SESSIONTOKEN";
 const NEW_TOKEN = "npm_NEWGRANULARTOKEN";

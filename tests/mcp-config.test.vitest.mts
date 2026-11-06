@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync, chmodSync, symlinkSync, linkSync, lstatSync, truncateSync } from "node:fs";
 import { join } from "node:path";
-import * as m from "../deploy/lib/mcp-config.mjs";
-import { writeFileAtomic } from "../deploy/lib/otp.mjs";
+import * as m from "../src/cli/mcp-config.ts";
+import { writeFileAtomic } from "../src/cli/otp.ts";
 
 const DIR = "/run/gh-broker/agents";
 const entry = (u: string) => m.mcpEntry(u, DIR);

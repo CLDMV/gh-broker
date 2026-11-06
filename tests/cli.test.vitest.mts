@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runCli, USAGE } from "../deploy/lib/cli.mjs";
+import { runCli, USAGE } from "../src/cli/cli.ts";
 import { makeDeps } from "./helpers/cli-deps.mjs";
 
 describe("runCli dispatch", () => {

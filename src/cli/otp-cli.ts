@@ -1,13 +1,13 @@
 /**
  *
  *	@Project: @cldmv/gh-broker
- *	@Filename: /deploy/lib/otp-cli.mjs
+ *	@Filename: /src/cli/otp-cli.ts
  *	@Date: 2026-11-02T09:12:00-08:00 (1793639520)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T09:12:00-08:00 (1793639520)
+ *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -16,23 +16,48 @@
 /**
  * `gh-broker otp unlock | status | list | rotate` (#143, contract v2): the root-side half of the OTP gate.
  * Lock state is per agent user, in the state file the daemon writes. Every effect is injected (see
- * deploy/cli.mjs for the real wiring), so the commands are testable without root.
+ * src/cli/real-deps.ts for the real wiring), so the commands are testable without root.
  */
-import { DEFAULT_STATE_PATH, DEFAULT_MAX_FAILURES, DEFAULT_MAX_LOCKOUTS, describeUsers, emptyState, formatStatus, generateSeed, secondsUntilFreshCode, seedCredName, showSeed, spendRecentCodes, userOf, withoutUser, withoutUsers } from "./otp.mjs";
-import { assertAgentName, registeredAgents, versionWarning } from "./agents.mjs";
+import type { OtpState } from "../otp/state.ts";
+import type { ConfigLayer } from "./config-merge.ts";
+import type { Group } from "./agents.ts";
+import type { StateReading } from "./otp.ts";
+import { DEFAULT_STATE_PATH, DEFAULT_MAX_FAILURES, DEFAULT_MAX_LOCKOUTS, describeUsers, emptyState, formatStatus, generateSeed, secondsUntilFreshCode, seedCredName, showSeed, spendRecentCodes, userOf, withoutUser, withoutUsers } from "./otp.ts";
+import { assertAgentName, registeredAgents, versionWarning } from "./agents.ts";
 
-export const statePathOf = (config) => config.otp?.statePath ?? DEFAULT_STATE_PATH;
-export const limitsOf = (config) => ({ maxFailures: config.otp?.maxFailures ?? DEFAULT_MAX_FAILURES, maxLockouts: config.otp?.maxLockouts ?? DEFAULT_MAX_LOCKOUTS });
+/** The effects the `otp` commands use. */
+export interface OtpDeps {
+	log: (line: string) => void;
+	error: (line: string) => void;
+	now: () => number;
+	host: () => string;
+	groups: () => Group[];
+	readState: (path: string) => StateReading;
+	writeState: (path: string, state: OtpState) => void;
+	versions: () => { pkg: string | undefined; deployed: string | undefined };
+	/** Journal entry for an unlock (never fatal when it fails). */
+	audit: (entry: { ts: string; decision: "otp-unlock"; user: string; by: string; detail?: string }) => void;
+	sudoUser: () => string | undefined;
+	/** Replaces the seed generator (tests). */
+	newSeed?: () => string;
+	/** Replaces the QR renderer (tests). */
+	qr?: (uri: string) => Promise<string>;
+	storeSeed: (config: ConfigLayer, name: string, seed: string) => unknown;
+	restart: () => void;
+}
+
+export const statePathOf = (config: ConfigLayer): string => config.otp?.statePath ?? DEFAULT_STATE_PATH;
+export const limitsOf = (config: ConfigLayer): { maxFailures: number; maxLockouts: number } => ({ maxFailures: config.otp?.maxFailures ?? DEFAULT_MAX_FAILURES, maxLockouts: config.otp?.maxLockouts ?? DEFAULT_MAX_LOCKOUTS });
 
 /** Run one `otp` subcommand. Returns the exit code; throws on a failure the dispatcher reports. */
-export async function otpCommand(command, rest, config, d) {
+export async function otpCommand(command: string, rest: string[], config: ConfigLayer, d: OtpDeps): Promise<number> {
 	if (command === "status") return status(config, rest, d);
 	if (command === "unlock") return unlock(config, rest, d);
 	if (command === "list") return list(config, rest, d);
 	return rotate(config, d);
 }
 
-function status(config, rest, d) {
+function status(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 	const only = rest.find((a) => !a.startsWith("-"));
 	const statePath = statePathOf(config);
 	const read = d.readState(statePath);
@@ -50,7 +75,7 @@ function status(config, rest, d) {
 }
 
 /** Who is locked out right now (short lockout or hard lock), with the command that clears each. */
-function list(config, rest, d) {
+function list(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 	const statePath = statePathOf(config);
 	const read = d.readState(statePath);
 	const known = registeredAgents(d.groups()).map((a) => a.user);
@@ -70,18 +95,18 @@ function list(config, rest, d) {
 }
 
 /** Record an unlock in the journal next to the daemon's audit log (never fatal). */
-function auditUnlock(d, user, detail) {
+function auditUnlock(d: OtpDeps, user: string, detail?: string): void {
 	try {
 		d.audit({ ts: new Date(d.now()).toISOString(), decision: "otp-unlock", user, by: d.sudoUser() ?? "root", ...(detail ? { detail } : {}) });
 	} catch (err) {
-		d.error(`warning: the unlock could not be written to the journal: ${err.message}`);
+		d.error(`warning: the unlock could not be written to the journal: ${(err as Error).message}`);
 	}
 }
 
 /** What to tell the operator after a write that spent the recent codes (a code that is refused counts as a bad one). */
-const afterUnlock = (now) => `The code the authenticator shows now won't work, nor the one after it: wait ${secondsUntilFreshCode(now)} s for a fresh code.`;
+const afterUnlock = (now: number): string => `The code the authenticator shows now won't work, nor the one after it: wait ${secondsUntilFreshCode(now)} s for a fresh code.`;
 
-function unlock(config, rest, d) {
+function unlock(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 	const all = rest.includes("--all");
 	const user = rest.find((a) => !a.startsWith("-"));
 	if (all === Boolean(user)) throw new Error('name the agent to unlock ("sudo gh-broker otp unlock <user>") or pass --all');
@@ -107,18 +132,18 @@ function unlock(config, rest, d) {
 		d.log(`cleared the lock state of every user in ${statePath}. ${afterUnlock(now)}`);
 		return 0;
 	}
-	if (!Object.hasOwn(read.state.users, user)) {
+	if (!Object.hasOwn(read.state.users, user!)) {
 		d.log(`${user} has no lock state; nothing to clear`);
 		return 0;
 	}
-	const wasLocked = Boolean(userOf(read.state, user).hardLock);
-	d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user), now));
-	auditUnlock(d, user);
+	const wasLocked = Boolean(userOf(read.state, user!).hardLock);
+	d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user!), now));
+	auditUnlock(d, user!);
 	d.log(`${wasLocked ? `unlocked ${user}` : `cleared ${user}'s counters (not hard-locked)`}. ${afterUnlock(now)}`);
 	return 0;
 }
 
-async function rotate(config, d) {
+async function rotate(config: ConfigLayer, d: OtpDeps): Promise<number> {
 	const name = seedCredName(config);
 	if (!name) throw new Error("OTP is not configured (no otp.seed in the config); re-run the installer first");
 	const seed = d.newSeed ? d.newSeed() : generateSeed();
@@ -128,7 +153,7 @@ async function rotate(config, d) {
 	try {
 		d.storeSeed(config, name, seed);
 	} catch (err) {
-		throw new Error(`storing the new seed failed (${err.message}); the key above is not in use and the old seed is still the stored one. Nothing was restarted; run "sudo gh-broker otp rotate" again`);
+		throw new Error(`storing the new seed failed (${(err as Error).message}); the key above is not in use and the old seed is still the stored one. Nothing was restarted; run "sudo gh-broker otp rotate" again`);
 	}
 	d.restart();
 	d.log("service restarted. The old authenticator entry no longer works; remove it from your app.");

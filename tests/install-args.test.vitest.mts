@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseArgs, envSecretKey } from "../deploy/lib/install-args.mjs";
+import { parseArgs, envSecretKey } from "../src/cli/install-args.ts";
 
 describe("parseArgs", () => {
 	it("defaults", () => {

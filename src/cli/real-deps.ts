@@ -1,49 +1,53 @@
 /**
  *
  *	@Project: @cldmv/gh-broker
- *	@Filename: /deploy/real-deps.mjs
+ *	@Filename: /src/cli/real-deps.ts
  *	@Date: 2026-11-01T20:43:03-08:00 (1793594583)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T20:43:03-08:00 (1793594583)
+ *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 /**
- * The real effects behind the `gh-broker` CLI (lib/cli.mjs), also used by the installer for the
- * MCP config and smoke test. Wiring only: the logic and its tests are in lib/. Kept apart from
- * cli.mjs because cli.mjs awaits the installer, which imports this.
+ * The real effects behind the `gh-broker` CLI (src/cli/cli.ts), also used by the installer for the
+ * MCP config and smoke test. Wiring only: the logic is in the other files of src/cli/. Kept apart from
+ * cli.ts so the installer can import it without pulling in the dispatcher.
  */
 import { readFileSync, existsSync, readdirSync, rmSync, renameSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseGroups, parsePasswd } from "./lib/agents.mjs";
-import { stateStore, writeFileAtomic, storeSeed } from "./lib/otp.mjs";
-import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./lib/mcp-config.mjs";
-import { readSecretsFile, writeSecretsFile } from "./lib/secret-store.mjs";
-import { smokeTest } from "./lib/smoke.mjs";
-import { run, isRoot, requireUid, requireGid, systemdCredsEncrypt, writeCredsDropin, restartService, ensureAgentGroup, removeAgentGroup } from "./lib/system.mjs";
+import { parseGroups, parsePasswd } from "./agents.ts";
+import { stateStore, writeFileAtomic, storeSeed } from "./otp.ts";
+import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./mcp-config.ts";
+import { readSecretsFile, writeSecretsFile } from "./secret-store.ts";
+import { smokeTest } from "./smoke.ts";
+import type { CliDeps } from "./cli.ts";
+import type { ConfigLayer } from "./config-merge.ts";
+import type { FileOwner } from "./mcp-config.ts";
+import { run, isRoot, requireUid, requireGid, systemdCredsEncrypt, writeCredsDropin, restartService, ensureAgentGroup, removeAgentGroup } from "./system.ts";
 
 const SVC = "gh-broker";
+// The package root: this module is bundled into bin/gh-broker.mjs.
 const PKG_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const configDir = () => process.env.GH_BROKER_CONFIG_DIR || "/etc/gh-broker";
-const configPath = () => process.env.GH_BROKER_CONFIG || join(configDir(), "config.json");
-const readText = (p) => {
+const configDir = (): string => process.env.GH_BROKER_CONFIG_DIR || "/etc/gh-broker";
+const configPath = (): string => process.env.GH_BROKER_CONFIG || join(configDir(), "config.json");
+const readText = (p: string): string | undefined => {
 	try {
 		return readFileSync(p, "utf8");
 	} catch (err) {
-		if (err.code === "ENOENT") return undefined;
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw err;
 	}
 };
 
 /** The version `install` recorded in /opt/gh-broker (root's own plain file; anything else there is ignored, never followed). */
-const deployedVersion = () => {
+const deployedVersion = (): string | undefined => {
 	try {
 		return readOwnedFile("/opt/gh-broker/version", 0)?.text.trim();
 	} catch {
@@ -51,17 +55,17 @@ const deployedVersion = () => {
 	}
 };
 
-/** The real effects for lib/cli.mjs `runCli` (also used by the installer for the MCP config and smoke test). */
-export function realDeps() {
-	let store;
-	const states = () => (store ??= stateStore({ uid: requireUid(SVC), gid: requireGid(SVC) }));
+/** The real effects for src/cli/cli.ts `runCli` (also used by the installer for the MCP config and smoke test). */
+export function realDeps(): CliDeps {
+	let store: ReturnType<typeof stateStore> | undefined;
+	const states = (): ReturnType<typeof stateStore> => (store ??= stateStore({ uid: requireUid(SVC), gid: requireGid(SVC) }));
 	return {
 		log: (m) => console.log(m),
 		error: (m) => console.error(m),
 		now: () => Date.now(),
 		isRoot,
 		host: () => hostname(),
-		readConfig: () => JSON.parse(readFileSync(configPath(), "utf8")),
+		readConfig: (): ConfigLayer => JSON.parse(readFileSync(configPath(), "utf8")),
 		// Atomic: agent commands now write the live config, and a torn file would stop the daemon.
 		writeConfig: (cfg) => writeFileAtomic(configPath(), JSON.stringify(cfg, null, "\t") + "\n", { uid: 0, gid: requireGid(SVC), mode: 0o640 }),
 		groups: () => parseGroups(readText("/etc/group") ?? ""),
@@ -72,7 +76,7 @@ export function realDeps() {
 		ensureGroup: (user) => ensureAgentGroup(user, SVC),
 		removeGroup: removeAgentGroup,
 		mcpIO: (() => {
-			const io = { read: readOwnedFile, write: (p, text, owner) => writeFileAtomic(p, text, owner) };
+			const io = { read: readOwnedFile, write: (p: string, text: string, owner: FileOwner & { mode: number }) => writeFileAtomic(p, text, owner) };
 			return { ...io, scan: (home) => scanConfigFolders(home), sessions: (uid) => sessionConfigFolders(uid), pin: pinner(io) };
 		})(),
 		socketExists: existsSync,

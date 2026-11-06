@@ -1,6 +1,7 @@
 # deps + build
 node_modules/
 dist/
+bin/
 
 # test coverage output (regenerated every `npm run coverage`)
 coverage/

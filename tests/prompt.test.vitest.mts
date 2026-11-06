@@ -23,7 +23,7 @@ vi.mock("node:process", async () => {
 	return { stdin: h.stdin, stdout: h.stdout };
 });
 
-import { promptLine, promptHidden, confirm, choose } from "../deploy/lib/prompt.mjs";
+import { promptLine, promptHidden, confirm, choose } from "../src/cli/prompt.ts";
 
 const type = (s: string) => h.stdin.emit("data", Buffer.from(s, "utf8"));
 
