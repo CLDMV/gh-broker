@@ -88,7 +88,7 @@ Flags:
                           Each agent gets its own socket and MCP config. Optional on an
                           upgrade (registered agents are kept); a first install with none
                           asks (never $SUDO_USER)
-  --no-mcp-config         do not write any agent's ~/.claude.json; print the entry instead
+  --no-mcp-config         do not write any agent's Claude MCP config; print the entry instead
   --secrets-provider <p>  systemd-creds | file   (skips the prompt)
   --secrets-file <path>   JSON { "<cred-name>": "<token>" } to import tokens from
   --secret <name>=<tok>   one token on the command line (repeatable). Visible in

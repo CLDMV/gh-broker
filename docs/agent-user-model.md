@@ -74,7 +74,7 @@ sudo -l -U agent            # should report it may run nothing, or fail
 sudo gh-broker agent add agent   # its group, socket, MCP config, restart and smoke test
 ```
 
-`agent add` writes the entry into the user's `~/.claude.json` (the stdio bridge through `sg gh-broker-agent-<user>`, so no re-login is needed). Restart the user's running Claude sessions to pick it up. Nothing else about the agent needs the broker's internals.
+`agent add` writes the entry into the user's `~/.claude.json`, and into the `.claude.json` of any other Claude config folder they use (`~/.claude*`, or a running session's `CLAUDE_CONFIG_DIR`) (the stdio bridge through `sg gh-broker-agent-<user>`, so no re-login is needed). Restart the user's running Claude sessions to pick it up. Nothing else about the agent needs the broker's internals.
 
 ## Anti-patterns
 

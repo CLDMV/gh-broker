@@ -24,7 +24,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseGroups, parsePasswd } from "./lib/agents.mjs";
 import { stateStore, writeFileAtomic, storeSeed } from "./lib/otp.mjs";
-import { readOwnedFile } from "./lib/mcp-config.mjs";
+import { pinFolder, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./lib/mcp-config.mjs";
 import { readSecretsFile, writeSecretsFile } from "./lib/secret-store.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
 import { run, isRoot, requireUid, requireGid, systemdCredsEncrypt, writeCredsDropin, restartService, ensureAgentGroup, removeAgentGroup } from "./lib/system.mjs";
@@ -69,7 +69,10 @@ export function realDeps() {
 		},
 		ensureGroup: (user) => ensureAgentGroup(user, SVC),
 		removeGroup: removeAgentGroup,
-		mcpIO: { read: readOwnedFile, write: (p, text, owner) => writeFileAtomic(p, text, owner) },
+		mcpIO: (() => {
+			const io = { read: readOwnedFile, write: (p, text, owner) => writeFileAtomic(p, text, owner) };
+			return { ...io, scan: (home) => scanConfigFolders(home), sessions: (uid) => sessionConfigFolders(uid), pin: (folder, uid) => pinFolder(folder, uid, io) };
+		})(),
 		socketExists: existsSync,
 		smoke: smokeTest,
 		versions: () => ({ pkg: JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version, deployed: deployedVersion() }),

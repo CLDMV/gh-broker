@@ -15,13 +15,16 @@
 
 /**
  * Writing an agent user's Claude Code MCP config (#143, contract v2). The broker's entry goes in
- * the top-level `mcpServers` of `<home>/.claude.json`; nothing else in that file is touched. The
+ * the top-level `mcpServers` of `<home>/.claude.json`, and of the `.claude.json` in each other
+ * Claude config folder the user has (#163: a session started with `CLAUDE_CONFIG_DIR` reads only
+ * that folder's file); nothing else in those files is touched. The
  * pure functions build the entry, pick its key and edit the JSON text; `applyMcpConfig` and
  * `removeMcpConfig` do the file work (backup, atomic write that keeps the owner and mode, and a
  * read-back check) with every filesystem effect injected. Root does that work in a directory the
  * agent user owns, so `readOwnedFile` refuses anything but the user's own plain file.
  */
-import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
+import { basename } from "node:path";
 import { agentGroup, socketPath } from "./agents.mjs";
 
 export const MCP_FILE = ".claude.json";
@@ -159,27 +162,29 @@ export function dropEntries(text, dir) {
 }
 
 /**
- * Set `user`'s entry in their `.claude.json`.
+ * Set `user`'s entry in the `.claude.json` in `folder`.
  * @param {object} o
- * @param {string} o.home  the agent user's home directory
+ * @param {string} o.folder  the folder holding the file: the agent user's home, or a Claude config folder
  * @param {string} o.user
- * @param {string} o.dir   the agents' socket directory
+ * @param {string} o.dir     the agents' socket directory
  * @param {{ uid: number, gid: number }} o.owner  the agent user; owner for a file that has to be created
- * @param {object} io      { read(path, uid) -> { text, stat: { uid, gid, mode } } | undefined (see readOwnedFile), write(path, text, { uid, gid, mode }) }
- * @returns {{ status: "created" | "written" | "unchanged" | "unreadable" | "unsafe", key?: string, reason?: string, entry: object, path: string }}
+ * @param {boolean} [o.create=true]  create the file when there is none; when false that is "no-file"
+ * @param {object} io        { read(path, uid) -> { text, stat: { uid, gid, mode } } | undefined (see readOwnedFile), write(path, text, { uid, gid, mode }) }
+ * @returns {{ status: "created" | "written" | "unchanged" | "unreadable" | "unsafe" | "no-file", key?: string, reason?: string, entry: object, path: string }}
  */
-export function applyMcpConfig({ home, user, dir, owner }, io) {
-	const path = `${home}/${MCP_FILE}`;
+export function applyMcpConfig({ folder, user, dir, owner, create = true }, io) {
+	const path = `${folder}/${MCP_FILE}`;
 	const entry = mcpEntry(user, dir);
 	const before = load(io, path, owner.uid);
 	if (before?.unsafe) return { status: "unsafe", reason: before.unsafe, entry, path };
+	if (before === undefined && !create) return { status: "no-file", entry, path };
 	const merged = mergeEntry(before?.text, user, dir);
 	if (merged.status === "unreadable") return { status: "unreadable", entry, path };
 	if (merged.status === "unchanged") return { status: "unchanged", key: merged.key, entry, path };
 	let target = { ...owner, mode: 0o600 };
 	if (before !== undefined) {
 		target = { uid: before.stat.uid, gid: before.stat.gid, mode: before.stat.mode & 0o777 };
-		io.write(`${home}/${MCP_BACKUP}`, before.text, target);
+		io.write(`${folder}/${MCP_BACKUP}`, before.text, target);
 	}
 	io.write(path, merged.text, target);
 	const after = load(io, path, owner.uid);
@@ -188,24 +193,105 @@ export function applyMcpConfig({ home, user, dir, owner }, io) {
 }
 
 /**
- * Remove the broker entry from `user`'s `.claude.json`, backing the file up first.
+ * Remove the broker entry from the `.claude.json` in `folder`, backing the file up first.
  * @returns {{ status: "removed" | "absent" | "no-file" | "unreadable" | "unsafe", keys?: string[], reason?: string, path: string }}
  */
-export function removeMcpConfig({ home, dir, uid }, io) {
-	const path = `${home}/${MCP_FILE}`;
+export function removeMcpConfig({ folder, dir, uid }, io) {
+	const path = `${folder}/${MCP_FILE}`;
 	const before = load(io, path, uid);
 	if (before === undefined) return { status: "no-file", path };
 	if (before.unsafe) return { status: "unsafe", reason: before.unsafe, path };
 	const dropped = dropEntries(before.text, dir);
 	if (dropped.status !== "removed") return { status: dropped.status, path };
 	const target = { uid: before.stat.uid, gid: before.stat.gid, mode: before.stat.mode & 0o777 };
-	io.write(`${home}/${MCP_BACKUP}`, before.text, target);
+	io.write(`${folder}/${MCP_BACKUP}`, before.text, target);
 	io.write(path, dropped.text, target);
 	return { status: "removed", keys: dropped.keys, path };
 }
 
-/** The MCP status of `user`'s file for `agent list`: mcpStatus, or "unsafe (<reason>)". */
-export function mcpFileStatus({ home, user, dir, uid }, io) {
-	const got = load(io, `${home}/${MCP_FILE}`, uid);
+/** The MCP status of the file in `folder` for `agent list`: mcpStatus, "unsafe (<reason>)", or `ifAbsent` when there is no file and that is given. */
+export function mcpFileStatus({ folder, user, dir, uid, ifAbsent }, io) {
+	const got = load(io, `${folder}/${MCP_FILE}`, uid);
+	if (got === undefined && ifAbsent !== undefined) return ifAbsent;
 	return got?.unsafe ? `unsafe (${got.unsafe})` : mcpStatus(got?.text, user, dir);
+}
+
+/**
+ * The folders in `home` that may be Claude config folders: `.claude*` entries that are real
+ * directories (a symlink is skipped; readdir's entry types don't follow it). Whether one holds a
+ * `.claude.json` is decided when it's opened, through pinFolder.
+ */
+export function scanConfigFolders(home, { readdir = readdirSync } = {}) {
+	let entries;
+	try {
+		entries = readdir(home, { withFileTypes: true });
+	} catch {
+		return []; // no home directory, or root can't list it: only ~/.claude.json is tried
+	}
+	return entries.filter((e) => e.isDirectory() && e.name.startsWith(".claude")).map((e) => `${home}/${e.name}`).sort();
+}
+
+/**
+ * The absolute `CLAUDE_CONFIG_DIR` of every `claude` process `uid` is running, read from `proc`.
+ * Only root can read another user's environ, which is the case here. The values come from the
+ * agent, so pinFolder checks each one before anything is read there.
+ */
+export function sessionConfigFolders(uid, { proc = "/proc", fs = { readdirSync, statSync, readFileSync } } = {}) {
+	const found = new Set();
+	let pids;
+	try {
+		pids = fs.readdirSync(proc).filter((n) => /^\d+$/.test(n));
+	} catch {
+		return [];
+	}
+	for (const pid of pids) {
+		try {
+			if (fs.statSync(`${proc}/${pid}`).uid !== uid) continue;
+			const argv = fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").split("\0");
+			if (!argv.slice(0, 2).some((a) => basename(a) === "claude")) continue;
+			const env = fs.readFileSync(`${proc}/${pid}/environ`, "utf8").split("\0");
+			const value = env.find((e) => e.startsWith("CLAUDE_CONFIG_DIR="))?.slice("CLAUDE_CONFIG_DIR=".length).replace(/\/+$/, "");
+			if (value?.startsWith("/")) found.add(value);
+		} catch {
+			// the process exited while being read
+		}
+	}
+	return [...found].sort();
+}
+
+/**
+ * Open `folder` as a directory owned by `uid`, without following a symlink, and return an io that
+ * reaches the files in it through the open descriptor (`/proc/self/fd/<n>/...`), so the agent
+ * can't swap the folder for a symlink between the check and the write. Error messages keep the
+ * folder's own path. Returns undefined when there is no such folder.
+ * @returns {{ io: object, close: () => void } | undefined}
+ */
+export function pinFolder(folder, uid, io, { open = openSync, fstat = fstatSync, close = closeSync } = {}) {
+	let fd;
+	try {
+		fd = open(folder, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+	} catch (err) {
+		if (err.code === "ENOENT") return undefined;
+		if (err.code === "ELOOP" || err.code === "ENOTDIR") throw new UnsafeFile(`${folder} is a symlink or not a directory`);
+		throw err;
+	}
+	const uidOf = fstat(fd).uid;
+	if (uidOf !== uid) {
+		close(fd);
+		throw new UnsafeFile(`${folder} is owned by uid ${uidOf}, not the agent user (uid ${uid})`);
+	}
+	const base = `/proc/self/fd/${fd}`;
+	const at = (p) => base + p.slice(folder.length);
+	const named = (fn) => {
+		try {
+			return fn();
+		} catch (err) {
+			if (err instanceof Error) err.message = err.message.split(base).join(folder);
+			throw err;
+		}
+	};
+	return {
+		io: { read: (p, u) => named(() => io.read(at(p), u)), write: (p, text, owner) => named(() => io.write(at(p), text, owner)) },
+		close: () => close(fd)
+	};
 }
