@@ -20,6 +20,7 @@
  */
 
 import { assertSafeCredName } from "./secret-store.mjs";
+import { assertAgentName } from "./agents.mjs";
 
 export const NPM_SCOPE = /^@[a-z0-9][a-z0-9._~-]*$/;
 export const NPM_ORG = /^[a-z0-9][a-z0-9._~-]*$/;
@@ -125,6 +126,12 @@ export function parseArgs(argv) {
 			const n = value(++i, a);
 			if (!/^[1-9][0-9]{0,15}$/.test(n) || !Number.isSafeInteger(Number(n))) throw new Error("--ghcr-max-archive-bytes must be a positive whole number of bytes");
 			o.ghcrMaxArchiveBytes = Number(n);
+		} else if (a === "--claude-config") {
+			const pair = value(++i, a);
+			const colon = pair.indexOf(":");
+			const dir = pair.slice(colon + 1);
+			if (colon <= 0 || !dir.startsWith("/")) throw new Error(`--claude-config takes <agent user>:<absolute folder>, got "${pair}"`);
+			(o.claudeConfigs ??= []).push({ user: assertAgentName(pair.slice(0, colon)), dir: dir.replace(/(.)\/+$/, "$1") });
 		} else if (a === "--protect-release-tags") o.protectReleaseTags = true;
 		else if (a === "--no-protect-release-tags") o.protectReleaseTags = false;
 		else if (a.startsWith("-")) throw new Error(`unknown flag: ${a} (see --help)`);

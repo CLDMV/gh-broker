@@ -89,6 +89,10 @@ Flags:
                           upgrade (registered agents are kept); a first install with none
                           asks (never $SUDO_USER)
   --no-mcp-config         do not write any agent's Claude MCP config; print the entry instead
+  --claude-config <user>:<dir>
+                          another Claude config folder (CLAUDE_CONFIG_DIR) that agent uses,
+                          kept in the config so every sync updates it (repeatable). Folders
+                          in the agent's home are found without it
   --secrets-provider <p>  systemd-creds | file   (skips the prompt)
   --secrets-file <path>   JSON { "<cred-name>": "<token>" } to import tokens from
   --secret <name>=<tok>   one token on the command line (repeatable). Visible in

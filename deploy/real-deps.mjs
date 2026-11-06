@@ -18,7 +18,7 @@
  * MCP config and smoke test. Wiring only: the logic and its tests are in lib/. Kept apart from
  * cli.mjs because cli.mjs awaits the installer, which imports this.
  */
-import { readFileSync, existsSync, readdirSync, rmSync, renameSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, realpathSync, rmSync, renameSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +27,7 @@ import { stateStore, writeFileAtomic, storeSeed } from "./lib/otp.mjs";
 import { pinFolder, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./lib/mcp-config.mjs";
 import { readSecretsFile, writeSecretsFile } from "./lib/secret-store.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
-import { run, isRoot, requireUid, requireGid, systemdCredsEncrypt, writeCredsDropin, restartService, ensureAgentGroup, removeAgentGroup } from "./lib/system.mjs";
+import { run, isRoot, requireUid, requireGid, systemdCredsEncrypt, writeCredsDropin, restartService, ensureAgentGroup, removeAgentGroup, writeConfigFile } from "./lib/system.mjs";
 
 const SVC = "gh-broker";
 const PKG_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -62,6 +62,7 @@ export function realDeps() {
 		isRoot,
 		host: () => hostname(),
 		readConfig: () => JSON.parse(readFileSync(configPath(), "utf8")),
+		writeConfig: (cfg) => writeConfigFile(configPath(), cfg, SVC),
 		groups: () => parseGroups(readText("/etc/group") ?? ""),
 		userInfo: (user) => {
 			const r = run("getent", ["passwd", user], { allowFail: true });
@@ -71,7 +72,7 @@ export function realDeps() {
 		removeGroup: removeAgentGroup,
 		mcpIO: (() => {
 			const io = { read: readOwnedFile, write: (p, text, owner) => writeFileAtomic(p, text, owner) };
-			return { ...io, scan: (home) => scanConfigFolders(home), sessions: (uid) => sessionConfigFolders(uid), pin: (folder, uid) => pinFolder(folder, uid, io) };
+			return { ...io, scan: (home) => scanConfigFolders(home), sessions: (uid) => sessionConfigFolders(uid), pin: (folder, uid, home) => pinFolder(folder, uid, io, { within: realpathSync(home) }) };
 		})(),
 		socketExists: existsSync,
 		smoke: smokeTest,

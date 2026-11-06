@@ -20,40 +20,91 @@
  * `.claude.json` in each other Claude config folder the user has (#163). Every effect is injected.
  */
 import { agentGroup, agentsDir, assertAgentName, registeredAgents, socketPath, versionWarning } from "./agents.mjs";
-import { applyMcpConfig, mcpEntry, mcpFileStatus, removeMcpConfig, UnsafeFile, MCP_BACKUP, MCP_FILE } from "./mcp-config.mjs";
+import { applyMcpConfig, mcpEntry, mcpFileStatus, removeMcpConfig, SkippedFolder, MCP_BACKUP, MCP_FILE } from "./mcp-config.mjs";
 import { statePathOf } from "./otp-cli.mjs";
+import { addClaudeConfigDirs } from "./config-merge.mjs";
 import { spendRecentCodes, withoutUser } from "./otp.mjs";
 
 /** Run one `agent` subcommand. Returns the exit code; throws on a failure the dispatcher reports. */
 export async function agentCommand(command, rest, config, d) {
-	const flags = rest.filter((a) => a.startsWith("-"));
-	const names = rest.filter((a) => !a.startsWith("-"));
-	const noMcp = flags.includes("--no-mcp-config");
+	const { names, noMcp, claudeConfigs } = parseAgentArgs(rest);
+	if (claudeConfigs.length && !["add", "sync"].includes(command)) throw new Error("--claude-config only goes with agent add or agent sync");
 	if (command === "list") return list(config, d);
-	if (command === "sync") return sync(config, names[0], noMcp, d);
+	if (command === "sync") {
+		if (claudeConfigs.length && names.length !== 1) throw new Error("--claude-config needs the agent named: sudo gh-broker agent sync <user> --claude-config <dir>");
+		if (claudeConfigs.length) config = rememberFolders(config, names[0], claudeConfigs, d);
+		return sync(config, names[0], noMcp, d);
+	}
 	if (names.length !== 1) throw new Error(`name the agent user: sudo gh-broker agent ${command} <user>`);
-	return command === "add" ? add(config, names[0], noMcp, d) : remove(config, names[0], d);
+	if (command === "add") {
+		assertAgentName(names[0]);
+		if (!d.userInfo(names[0])) throw new Error(`user "${names[0]}" does not exist; create it first (the installer can: sudo gh-broker install --agent-user ${names[0]} --create-agent-user)`);
+		if (claudeConfigs.length) config = rememberFolders(config, names[0], claudeConfigs, d);
+		return add(config, names[0], noMcp, d);
+	}
+	return remove(config, names[0], d);
+}
+
+/** Split `agent` arguments into names and flags; `--claude-config <dir>` (or `=<dir>`) is repeatable. */
+function parseAgentArgs(rest) {
+	const names = [];
+	const claudeConfigs = [];
+	let noMcp = false;
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i];
+		if (a === "--no-mcp-config") noMcp = true;
+		else if (a === "--claude-config" || a.startsWith("--claude-config=")) {
+			const dir = a === "--claude-config" ? rest[++i] : a.slice("--claude-config=".length);
+			if (!dir?.startsWith("/")) throw new Error("--claude-config takes an absolute folder: --claude-config /path/to/claude-config");
+			claudeConfigs.push(dir.replace(/(.)\/+$/, "$1"));
+		} else if (a.startsWith("-")) throw new Error(`unknown flag: ${a}`);
+		else names.push(a);
+	}
+	return { names, noMcp, claudeConfigs };
+}
+
+/** Add `dirs` to `user`'s saved Claude config folders and write the broker config. Returns the new config. */
+function rememberFolders(config, user, dirs, d) {
+	assertAgentName(user);
+	const next = { ...config, claudeConfigDirs: addClaudeConfigDirs(config.claudeConfigDirs, { [user]: dirs }) };
+	d.writeConfig(next);
+	d.log(`${user}: Claude config folders kept in the broker config: ${next.claudeConfigDirs[user].join(", ")}`);
+	return next;
 }
 
 const registry = (d) => registeredAgents(d.groups());
 
 /**
- * The agent's Claude config folders other than the home directory: its `~/.claude*` folders and
- * the `CLAUDE_CONFIG_DIR` of its running `claude` sessions (#163). Only these users' own folders
- * are looked at, never anyone else's.
+ * The agent's Claude config folders other than the home directory (#163): the ones saved for it
+ * with --claude-config, its `~/.claude*` folders, and the `CLAUDE_CONFIG_DIR` of its running
+ * `claude` sessions. Only these users' own folders are looked at, never anyone else's. Saved
+ * folders were named by root, so they may be outside the home directory; found ones may not.
+ * @returns {Array<{ folder: string, saved: boolean }>}
  */
-function extraFolders(info, d) {
+function extraFolders(info, d, config, user) {
+	const home = info.home.replace(/\/+$/, "");
+	const saved = config.claudeConfigDirs?.[user] ?? [];
 	const found = [...(d.mcpIO.scan?.(info.home) ?? []), ...(d.mcpIO.sessions?.(info.uid) ?? [])];
-	return [...new Set(found)].filter((f) => f !== info.home);
+	const seen = new Set([home, info.home]);
+	const out = [];
+	for (const [list, isSaved] of [[saved, true], [found, false]]) {
+		for (const folder of list) {
+			if (seen.has(folder)) continue;
+			seen.add(folder);
+			out.push({ folder, saved: isSaved });
+		}
+	}
+	return out;
 }
 
 /**
  * Run `fn(io)` for the files in `folder`. The home directory uses the io as is; any other folder is
- * pinned first (it must be a real directory the agent owns). Returns undefined when the folder is gone.
+ * pinned first (it must be a real directory the agent owns, and unless it was saved with
+ * --claude-config, inside the agent's home). Returns undefined when the folder is gone.
  */
-function inFolder(folder, info, d, fn) {
+function inFolder({ folder, saved }, info, d, fn) {
 	if (folder === info.home || !d.mcpIO.pin) return fn(d.mcpIO);
-	const pinned = d.mcpIO.pin(folder, info.uid);
+	const pinned = d.mcpIO.pin(folder, info.uid, saved ? undefined : info.home);
 	if (!pinned) return undefined;
 	try {
 		return fn(pinned.io);
@@ -77,10 +128,10 @@ export function configureMcp(user, config, d, { noMcp = false } = {}) {
 		d.log(JSON.stringify({ github: entry }, null, "\t"));
 		return "skipped";
 	}
-	const home = configureFolder(user, info.home, info, dir, entry, d);
+	const home = configureFolder(user, { folder: info.home, saved: false }, info, dir, entry, d);
 	let worst = home;
-	for (const folder of extraFolders(info, d)) {
-		const r = configureFolder(user, folder, info, dir, entry, d);
+	for (const place of extraFolders(info, d, config, user)) {
+		const r = configureFolder(user, place, info, dir, entry, d);
 		if (BAD.includes(r) && !BAD.includes(worst)) worst = r;
 	}
 	d.log(`${user}: restart the user's running Claude sessions to pick it up. If a running session overwrites the file, "sudo gh-broker agent sync ${user}" puts it back.`);
@@ -92,21 +143,24 @@ export function configureMcp(user, config, d, { noMcp = false } = {}) {
  * created when missing; another folder is only updated when it already has one, since Claude
  * Code writes that file itself in any folder it uses.
  */
-function configureFolder(user, folder, info, dir, entry, d) {
+function configureFolder(user, place, info, dir, entry, d) {
+	const { folder } = place;
 	const isHome = folder === info.home;
 	const file = isHome ? "the user's ~/.claude.json" : `${folder}/${MCP_FILE}`;
 	const where = isHome ? "" : ` in ${folder}/${MCP_FILE}`;
 	let r;
 	try {
-		r = inFolder(folder, info, d, (io) => applyMcpConfig({ folder, user, dir, owner: { uid: info.uid, gid: info.gid }, create: isHome }, io)) ?? { status: "no-file" };
+		r = inFolder(place, info, d, (io) => applyMcpConfig({ folder, user, dir, owner: { uid: info.uid, gid: info.gid }, create: isHome }, io)) ?? { status: "no-file" };
 	} catch (err) {
+		if (err instanceof SkippedFolder) {
+			d.error(`${user}: skipped ${err.message}`);
+			return "skipped";
+		}
 		// Root is working in a folder the agent owns, so a write can fail on anything the agent puts
-		// in the way (a directory where the backup goes, a symlinked folder). Report it; it must not
-		// stop the caller.
-		const reason = err instanceof UnsafeFile ? `${err.message}, so it was left alone` : `could not write the MCP config${where}: ${err.message}`;
-		d.error(`${user}: ${reason}. Add this under "mcpServers" in ${file} by hand:`);
+		// in the way (a directory where the backup goes). Report it; it must not stop the caller.
+		d.error(`${user}: could not write the MCP config${where}: ${err.message}. Add this under "mcpServers" in ${file} by hand:`);
 		d.log(JSON.stringify({ github: entry }, null, "\t"));
-		return err instanceof UnsafeFile ? "unsafe" : "failed";
+		return "failed";
 	}
 	if (r.status === "no-file") return "no-file";
 	if (r.status === "unsafe") {
@@ -136,9 +190,8 @@ export async function smokeAgent(user, config, d) {
 	}
 }
 
+/** `user` is a valid name and an existing user (agentCommand checks both before it saves anything). */
 async function add(config, user, noMcp, d) {
-	assertAgentName(user);
-	if (!d.userInfo(user)) throw new Error(`user "${user}" does not exist; create it first (the installer can: sudo gh-broker install --agent-user ${user} --create-agent-user)`);
 	d.ensureGroup(user);
 	d.log(`${user}: registered (group ${agentGroup(user)})`);
 	configureMcp(user, config, d, { noMcp });
@@ -158,16 +211,30 @@ function remove(config, user, d) {
 	const info = d.userInfo(user);
 	if (info) {
 		const dir = agentsDir(config.listen);
-		for (const folder of [info.home, ...extraFolders(info, d)]) {
+		for (const place of [{ folder: info.home, saved: false }, ...extraFolders(info, d, config, user)]) {
+			const { folder } = place;
 			const isHome = folder === info.home;
 			try {
-				const r = inFolder(folder, info, d, (io) => removeMcpConfig({ folder, dir, uid: info.uid }, io));
+				const r = inFolder(place, info, d, (io) => removeMcpConfig({ folder, dir, uid: info.uid }, io));
 				if (!r || (!isHome && r.status === "no-file")) continue;
 				const what = { removed: `removed the broker entry from ${r.path} (backup: ${MCP_BACKUP})`, absent: `no broker entry in ${r.path}`, "no-file": `no ${MCP_FILE} to edit`, unreadable: `${r.path} is not valid JSON, so it was left alone`, unsafe: `${r.reason}, so it was left alone` };
 				d.log(`${user}: ${what[r.status]}`);
 			} catch (err) {
+				if (err instanceof SkippedFolder) {
+					d.error(`${user}: skipped ${err.message}`);
+					continue;
+				}
 				d.error(`${user}: could not remove the broker entry from ${folder}/${MCP_FILE}: ${err.message}. The agent is unregistered anyway; remove the entry by hand.`);
 			}
+		}
+	}
+	if (config.claudeConfigDirs?.[user]) {
+		try {
+			const { [user]: _gone, ...rest } = config.claudeConfigDirs;
+			d.writeConfig({ ...config, claudeConfigDirs: rest });
+			d.log(`${user}: saved Claude config folders removed from the broker config`);
+		} catch (err) {
+			d.error(`${user}: could not update the broker config: ${err.message}. Remove claudeConfigDirs.${user} from it by hand.`);
 		}
 	}
 	try {
@@ -201,12 +268,13 @@ function list(config, d) {
 				mcp = `can't read (${err.message})`; // one agent's file must not hide the others
 			}
 			const others = [];
-			for (const folder of extraFolders(info, d)) {
+			for (const place of extraFolders(info, d, config, a.user)) {
+				const { folder } = place;
 				let status;
 				try {
-					status = inFolder(folder, info, d, (io) => mcpFileStatus({ folder, user: a.user, dir, uid: info.uid, ifAbsent: null }, io));
+					status = inFolder(place, info, d, (io) => mcpFileStatus({ folder, user: a.user, dir, uid: info.uid, ifAbsent: null }, io));
 				} catch (err) {
-					status = err instanceof UnsafeFile ? `unsafe (${err.message})` : `can't read (${err.message})`;
+					status = err instanceof SkippedFolder ? `skipped (${err.message})` : `can't read (${err.message})`;
 				}
 				if (status) others.push(`${folder}: ${status}`);
 			}

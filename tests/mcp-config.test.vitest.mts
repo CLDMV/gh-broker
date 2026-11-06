@@ -290,10 +290,12 @@ describe("Claude config folders (#163)", () => {
 		pid("12", ["claude"], ["HOME=/home/glm"]); // no CLAUDE_CONFIG_DIR: uses ~/.claude.json
 		pid("13", ["claude"], ["CLAUDE_CONFIG_DIR=relative/dir"]); // not absolute: ignored
 		pid("14", ["/bin/bash", "-c", "claude"], ["CLAUDE_CONFIG_DIR=/home/glm/.claude-bash"]); // not a claude process
+		pid("17", ["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"], ["CLAUDE_CONFIG_DIR=/srv/claude-npx"]); // npx / npm install
+		pid("18", ["claude"], ["CLAUDE_CONFIG_DIR=/"]); // "/" strips to nothing: ignored
 		pid("15", ["claude"], ["CLAUDE_CONFIG_DIR=/home/glm/.claude-vllm-dev2"]); // same folder twice
 		mkdirSync(join(proc, "16")); // exited: no cmdline
 		mkdirSync(join(proc, "self"));
-		expect(m.sessionConfigFolders(uid, { proc })).toEqual(["/home/glm/.claude-vllm-dev2", "/srv/claude-b"]);
+		expect(m.sessionConfigFolders(uid, { proc })).toEqual(["/home/glm/.claude-vllm-dev2", "/srv/claude-b", "/srv/claude-npx"]);
 		expect(m.sessionConfigFolders(uid + 1, { proc })).toEqual([]);
 		expect(m.sessionConfigFolders(uid, { proc: join(dir, "no-proc") })).toEqual([]);
 	});
@@ -319,12 +321,32 @@ describe("Claude config folders (#163)", () => {
 		symlinkSync(real, join(dir, "linked"));
 		writeFileSync(join(dir, "plain"), "");
 		expect(() => m.pinFolder(join(dir, "linked"), uid, io)).toThrow(/is a symlink or not a directory/);
-		expect(() => m.pinFolder(join(dir, "plain"), uid, io)).toThrow(m.UnsafeFile);
+		expect(() => m.pinFolder(join(dir, "plain"), uid, io)).toThrow(m.SkippedFolder);
 		const closed: number[] = [];
 		expect(() => m.pinFolder(real, uid + 1, io, { close: (fd: number) => closed.push(fd) } as any)).toThrow(/is owned by uid \d+, not the agent user/);
 		expect(closed).toHaveLength(1);
 		expect(m.pinFolder(join(dir, "gone"), uid, io)).toBeUndefined();
 		expect(() => m.pinFolder(join(dir, "plain", "x"), uid, io, { open: () => { throw Object.assign(new Error("EACCES"), { code: "EACCES" }); } } as any)).toThrow("EACCES");
+	});
+
+	it("pinFolder with `within` only takes a folder that resolves inside it", () => {
+		const home = join(dir, "home-w");
+		mkdirSync(join(home, ".claude-x"), { recursive: true });
+		mkdirSync(join(dir, "elsewhere"));
+		const inside = m.pinFolder(join(home, ".claude-x"), uid, io, { within: home })!;
+		inside.close();
+		m.pinFolder(home, uid, io, { within: home })!.close(); // the home itself is fine
+		expect(() => m.pinFolder(join(dir, "elsewhere"), uid, io, { within: home })).toThrow(/is outside the agent's home directory/);
+		expect(() => m.pinFolder(join(home, "..", "elsewhere"), uid, io, { within: home })).toThrow(/outside the agent's home/); // ".." resolves out
+		mkdirSync(join(dir, "home-wx"));
+		expect(() => m.pinFolder(join(dir, "home-wx"), uid, io, { within: home })).toThrow(/outside the agent's home/);
+	});
+
+	it("readHead reads at most the limit", () => {
+		const p = join(dir, "head.txt");
+		writeFileSync(p, "abcdef");
+		expect(m.readHead(p, 4)).toBe("abcd");
+		expect(m.readHead(p, 100)).toBe("abcdef");
 	});
 
 	it("pinFolder names the folder, not the descriptor path, in errors", () => {

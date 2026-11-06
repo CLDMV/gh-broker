@@ -23,7 +23,7 @@
  * read-back check) with every filesystem effect injected. Root does that work in a directory the
  * agent user owns, so `readOwnedFile` refuses anything but the user's own plain file.
  */
-import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readlinkSync, readSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { agentGroup, socketPath } from "./agents.mjs";
 
@@ -36,6 +36,30 @@ export const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 
 /** A file root must not read or replace: a symlink, not a regular file, not the user's, hard-linked, or oversized. */
 export class UnsafeFile extends Error {}
+
+/** A config folder root won't work in (a symlink, not the agent's, outside the agent's home). It is skipped with a warning, not an error. */
+export class SkippedFolder extends Error {}
+
+/** Most of `/proc/<pid>/cmdline` read (only argv[0] and argv[1] are looked at). */
+export const MAX_CMDLINE_BYTES = 64 * 1024;
+/** Most of `/proc/<pid>/environ` read: the agent sets its own environment's size, and root reads it. */
+export const MAX_ENVIRON_BYTES = 1024 * 1024;
+
+/** Up to `max` bytes of `path`. */
+export function readHead(path, max) {
+	const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+	try {
+		const buf = Buffer.alloc(max);
+		let length = 0;
+		for (let n; length < max && (n = readSync(fd, buf, length, max - length, null)) > 0; ) length += n;
+		return buf.toString("utf8", 0, length);
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/** Whether a process's argv is a Claude Code session: the `claude` binary, or node running the claude-code package. */
+const isClaude = (argv) => argv.slice(0, 2).some((a) => basename(a) === "claude" || a.includes("/@anthropic-ai/claude-code/"));
 
 /**
  * Read `path` as root on behalf of the user `uid`, without following a symlink: the file must be
@@ -236,7 +260,7 @@ export function scanConfigFolders(home, { readdir = readdirSync } = {}) {
  * Only root can read another user's environ, which is the case here. The values come from the
  * agent, so pinFolder checks each one before anything is read there.
  */
-export function sessionConfigFolders(uid, { proc = "/proc", fs = { readdirSync, statSync, readFileSync } } = {}) {
+export function sessionConfigFolders(uid, { proc = "/proc", fs = { readdirSync, statSync, readHead } } = {}) {
 	const found = new Set();
 	let pids;
 	try {
@@ -247,9 +271,9 @@ export function sessionConfigFolders(uid, { proc = "/proc", fs = { readdirSync, 
 	for (const pid of pids) {
 		try {
 			if (fs.statSync(`${proc}/${pid}`).uid !== uid) continue;
-			const argv = fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").split("\0");
-			if (!argv.slice(0, 2).some((a) => basename(a) === "claude")) continue;
-			const env = fs.readFileSync(`${proc}/${pid}/environ`, "utf8").split("\0");
+			const argv = fs.readHead(`${proc}/${pid}/cmdline`, MAX_CMDLINE_BYTES).split("\0");
+			if (!isClaude(argv)) continue;
+			const env = fs.readHead(`${proc}/${pid}/environ`, MAX_ENVIRON_BYTES).split("\0");
 			const value = env.find((e) => e.startsWith("CLAUDE_CONFIG_DIR="))?.slice("CLAUDE_CONFIG_DIR=".length).replace(/\/+$/, "");
 			if (value?.startsWith("/")) found.add(value);
 		} catch {
@@ -262,25 +286,34 @@ export function sessionConfigFolders(uid, { proc = "/proc", fs = { readdirSync, 
 /**
  * Open `folder` as a directory owned by `uid`, without following a symlink, and return an io that
  * reaches the files in it through the open descriptor (`/proc/self/fd/<n>/...`), so the agent
- * can't swap the folder for a symlink between the check and the write. Error messages keep the
- * folder's own path. Returns undefined when there is no such folder.
+ * can't swap the folder for a symlink between the check and the write. With `within` (the real
+ * path of the agent's home), the opened folder must also resolve inside it: owning a folder
+ * doesn't mean the agent can reach it (one inside another user's private directory, named through
+ * `..` or a symlinked parent), and root shouldn't write where the agent couldn't. Error messages
+ * keep the folder's own path. Throws SkippedFolder for a folder root won't use; returns undefined
+ * when there is no such folder.
  * @returns {{ io: object, close: () => void } | undefined}
  */
-export function pinFolder(folder, uid, io, { open = openSync, fstat = fstatSync, close = closeSync } = {}) {
+export function pinFolder(folder, uid, io, { within, open = openSync, fstat = fstatSync, close = closeSync, readlink = readlinkSync } = {}) {
 	let fd;
 	try {
 		fd = open(folder, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
 	} catch (err) {
 		if (err.code === "ENOENT") return undefined;
-		if (err.code === "ELOOP" || err.code === "ENOTDIR") throw new UnsafeFile(`${folder} is a symlink or not a directory`);
+		if (err.code === "ELOOP" || err.code === "ENOTDIR") throw new SkippedFolder(`${folder} is a symlink or not a directory`);
 		throw err;
 	}
-	const uidOf = fstat(fd).uid;
-	if (uidOf !== uid) {
-		close(fd);
-		throw new UnsafeFile(`${folder} is owned by uid ${uidOf}, not the agent user (uid ${uid})`);
-	}
 	const base = `/proc/self/fd/${fd}`;
+	const refuse = (why) => {
+		close(fd);
+		throw new SkippedFolder(why);
+	};
+	const uidOf = fstat(fd).uid;
+	if (uidOf !== uid) refuse(`${folder} is owned by uid ${uidOf}, not the agent user (uid ${uid})`);
+	if (within !== undefined) {
+		const real = readlink(base);
+		if (real !== within && !real.startsWith(`${within}/`)) refuse(`${folder} is outside the agent's home directory`);
+	}
 	const at = (p) => base + p.slice(folder.length);
 	const named = (fn) => {
 		try {

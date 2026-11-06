@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mergeConfig, layerConfig, overlayFromFlags, readOperatorConfig, buildConfig, secretsBlock, DEFAULT_GHCR_DROP_DIR } from "../deploy/lib/config-merge.mjs";
+import { mergeConfig, layerConfig, overlayFromFlags, readOperatorConfig, buildConfig, secretsBlock, addClaudeConfigDirs, checkClaudeConfigDirs, DEFAULT_GHCR_DROP_DIR } from "../deploy/lib/config-merge.mjs";
 
 const example = {
 	listen: "agents:/run/gh-broker/agents",
@@ -401,5 +401,34 @@ describe("per-agent listen (#143)", () => {
 	it("keeps a deployed agents: listen and lets a --config file change it", async () => {
 		expect((await build({ ...example, listen: "agents:/run/custom" })).config.listen).toBe("agents:/run/custom");
 		expect((await build({ ...example }, example, { listen: "agents:/run/filed" })).config.listen).toBe("agents:/run/filed");
+	});
+});
+
+describe("claudeConfigDirs (#163)", () => {
+	const ex = { listen: "agents:/run/gh-broker/agents", owners: {}, tools: [] };
+	it("is carried from the deployed config, and the flags and a --config file add to it", () => {
+		const deployed = { ...ex, claudeConfigDirs: { glmtest: ["/a"] } };
+		expect(mergeConfig(ex, deployed).claudeConfigDirs).toEqual({ glmtest: ["/a"] });
+		expect(mergeConfig(ex, { ...ex }).claudeConfigDirs).toBeUndefined();
+		const flags = overlayFromFlags({ claudeConfigs: [{ user: "glmtest", dir: "/b" }, { user: "glmtest", dir: "/a" }, { user: "repo", dir: "/c" }] });
+		expect(flags).toEqual({ claudeConfigDirs: { glmtest: ["/b", "/a"], repo: ["/c"] } });
+		expect(layerConfig(mergeConfig(ex, deployed), flags).claudeConfigDirs).toEqual({ glmtest: ["/a", "/b"], repo: ["/c"] });
+		expect(layerConfig({ ...ex }, { claudeConfigDirs: { repo: ["/c"] } }).claudeConfigDirs).toEqual({ repo: ["/c"] });
+	});
+
+	it("addClaudeConfigDirs leaves its arguments alone", () => {
+		const base = { repo: ["/a"] };
+		expect(addClaudeConfigDirs(base, { repo: ["/a", "/b"] })).toEqual({ repo: ["/a", "/b"] });
+		expect(base).toEqual({ repo: ["/a"] });
+		expect(addClaudeConfigDirs(undefined, { repo: ["/a"] })).toEqual({ repo: ["/a"] });
+	});
+
+	it("a --config file may set it, in the right shape only", () => {
+		const read = (t: string) => () => t;
+		expect(readOperatorConfig("/c.json", read(JSON.stringify({ claudeConfigDirs: { repo: ["/srv/x"] } })))).toEqual({ claudeConfigDirs: { repo: ["/srv/x"] } });
+		expect(() => readOperatorConfig("/c.json", read('{"claudeConfigDirs":[]}'))).toThrow("--config: claudeConfigDirs must be an object of agent user -> list of folders");
+		expect(() => readOperatorConfig("/c.json", read('{"claudeConfigDirs":{"repo":["rel"]}}'))).toThrow("--config: claudeConfigDirs.repo must be a list of absolute paths");
+		expect(() => readOperatorConfig("/c.json", read('{"claudeConfigDirs":{"repo":"/x"}}'))).toThrow(/must be a list of absolute paths/);
+		expect(() => checkClaudeConfigDirs({ "Bad Name": ["/x"] }, "x")).toThrow(/not a valid agent user name/);
 	});
 });
