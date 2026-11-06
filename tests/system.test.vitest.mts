@@ -17,7 +17,7 @@ vi.mock("node:fs", () => ({
 }));
 
 import * as fs from "node:fs";
-import * as sys from "../deploy/lib/system.mjs";
+import * as sys from "../src/cli/system.ts";
 
 const f = vi.mocked(fs) as any;
 const ok = (stdout = "", stderr = "") => ({ status: 0, stdout, stderr });

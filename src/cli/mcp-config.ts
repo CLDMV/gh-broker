@@ -1,13 +1,13 @@
 /**
  *
  *	@Project: @cldmv/gh-broker
- *	@Filename: /deploy/lib/mcp-config.mjs
+ *	@Filename: /src/cli/mcp-config.ts
  *	@Date: 2026-11-02T09:12:00-08:00 (1793639520)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T09:12:00-08:00 (1793639520)
+ *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,9 +23,47 @@
  * read-back check) with every filesystem effect injected. Root does that work in a directory the
  * agent user owns, so `readOwnedFile` refuses anything but the user's own plain file.
  */
-import { closeSync, constants, fstatSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { basename } from "node:path";
-import { agentGroup, socketPath } from "./agents.mjs";
+import { agentGroup, socketPath } from "./agents.ts";
+
+/** A file's owner. */
+export interface FileOwner {
+	uid: number;
+	gid: number;
+}
+
+/** A file's owner and permission bits. */
+export interface FileStat extends FileOwner {
+	mode: number;
+}
+
+/** A file's text with who owns it. */
+export interface OwnedFile {
+	text: string;
+	stat: FileStat;
+	unsafe?: undefined;
+}
+
+/** The filesystem effects the MCP config functions use (see readOwnedFile; `write` replaces the file atomically). */
+export interface McpIo {
+	/** The user's file, or undefined when there is none. */
+	read: (path: string, uid: number) => OwnedFile | undefined;
+	write: (path: string, text: string, owner: FileStat) => void;
+}
+
+/** The broker's entry in `mcpServers`. */
+export interface McpEntry {
+	type: "stdio";
+	command: "sg";
+	args: string[];
+}
+
+/** The `mcpServers` object of a `.claude.json`. */
+type Servers = Record<string, unknown>;
+
+/** The MCP status of a file's broker entry. */
+export type McpStatus = "ok" | "missing" | "points elsewhere" | "unreadable";
 
 export const MCP_FILE = ".claude.json";
 export const MCP_BACKUP = ".claude.json.gh-broker.bak";
@@ -46,12 +84,12 @@ export const MAX_CMDLINE_BYTES = 64 * 1024;
 export const MAX_ENVIRON_BYTES = 1024 * 1024;
 
 /** Up to `max` bytes of `path`. */
-export function readHead(path, max) {
+export function readHead(path: string, max: number): string {
 	const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
 	try {
 		const buf = Buffer.alloc(max);
 		let length = 0;
-		for (let n; length < max && (n = readSync(fd, buf, length, max - length, null)) > 0; ) length += n;
+		for (let n: number; length < max && (n = readSync(fd, buf, length, max - length, null)) > 0; ) length += n;
 		return buf.toString("utf8", 0, length);
 	} finally {
 		closeSync(fd);
@@ -59,22 +97,22 @@ export function readHead(path, max) {
 }
 
 /** Whether a process's argv is a Claude Code session: the `claude` binary, or node running the claude-code package. */
-const isClaude = (argv) => argv.slice(0, 2).some((a) => basename(a) === "claude" || a.includes("/@anthropic-ai/claude-code/"));
+const isClaude = (argv: string[]): boolean => argv.slice(0, 2).some((a) => basename(a) === "claude" || a.includes("/@anthropic-ai/claude-code/"));
 
 /**
  * Read `path` as root on behalf of the user `uid`, without following a symlink: the file must be
  * a regular file owned by `uid` with a single link, and no larger than MAX_CONFIG_BYTES. Opened with O_NOFOLLOW (and O_NONBLOCK, so a
  * FIFO can't hang the read), then checked and read through the same descriptor, so it can't be
  * swapped between the check and the read.
- * @returns {{ text: string, stat: { uid: number, gid: number, mode: number } } | undefined} undefined when there is no file
+ * @returns undefined when there is no file
  */
-export function readOwnedFile(path, uid) {
-	let fd;
+export function readOwnedFile(path: string, uid: number): OwnedFile | undefined {
+	let fd: number;
 	try {
 		fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	} catch (err) {
-		if (err.code === "ENOENT") return undefined;
-		if (err.code === "ELOOP") throw new UnsafeFile(`${path} is a symlink`);
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		if ((err as NodeJS.ErrnoException).code === "ELOOP") throw new UnsafeFile(`${path} is a symlink`);
 		throw err;
 	}
 	try {
@@ -85,7 +123,7 @@ export function readOwnedFile(path, uid) {
 		// Read at most one byte past the limit ourselves: the owner can grow the file after fstat.
 		const buf = Buffer.alloc(MAX_CONFIG_BYTES + 1);
 		let length = 0;
-		for (let n; length < buf.length && (n = readSync(fd, buf, length, buf.length - length, null)) > 0; ) length += n;
+		for (let n: number; length < buf.length && (n = readSync(fd, buf, length, buf.length - length, null)) > 0; ) length += n;
 		if (length > MAX_CONFIG_BYTES) throw new UnsafeFile(`${path} is over the ${MAX_CONFIG_BYTES}-byte limit`);
 		return { text: buf.toString("utf8", 0, length), stat: { uid: st.uid, gid: st.gid, mode: st.mode } };
 	} finally {
@@ -94,7 +132,7 @@ export function readOwnedFile(path, uid) {
 }
 
 /** `io.read`, with an unsafe file turned into `{ unsafe: reason }`. */
-function load(io, path, uid) {
+function load(io: McpIo, path: string, uid: number): OwnedFile | { unsafe: string } | undefined {
 	try {
 		return io.read(path, uid);
 	} catch (err) {
@@ -104,39 +142,39 @@ function load(io, path, uid) {
 }
 
 /** The entry for `user`. `sg` makes the new group effective without a re-login. */
-export function mcpEntry(user, dir) {
+export function mcpEntry(user: string, dir: string): McpEntry {
 	return { type: "stdio", command: "sg", args: [agentGroup(user), "-c", `exec socat STDIO UNIX-CONNECT:${socketPath(dir, user)}`] };
 }
 
 /** Whether an entry points at a broker socket: the standard /run/gh-broker/ tree, or the configured agents directory. */
-const mentionsBroker = (entry, dir) => {
+const mentionsBroker = (entry: unknown, dir: string | undefined): boolean => {
 	const text = JSON.stringify(entry ?? null);
 	return text.includes(BROKER_PATH) || (dir !== undefined && text.includes(`${dir}/`));
 };
-const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** Keys of the entries that point at the broker (any /run/gh-broker/ socket, old or new, or one in `dir`). */
-export function brokerKeys(servers, dir) {
+export function brokerKeys(servers: Servers, dir?: string): string[] {
 	return Object.keys(servers).filter((k) => mentionsBroker(servers[k], dir));
 }
 
 /** The key to write: the existing broker entry's, else `github`, `gh-broker`, then `gh-broker-<user>` (first free). */
-export function chooseKey(servers, user, dir) {
+export function chooseKey(servers: Servers, user: string, dir?: string): string {
 	const existing = brokerKeys(servers, dir);
-	if (existing.length) return existing[0];
+	if (existing.length) return existing[0]!;
 	return ["github", "gh-broker", `gh-broker-${user}`].find((k) => !(k in servers)) ?? `gh-broker-${user}`;
 }
 
-const sameEntry = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const sameEntry = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /** Indentation of the file as written (tab or n spaces), so the edit doesn't reformat it. */
-function indentOf(text) {
+function indentOf(text: string): string {
 	const m = /^\{\r?\n([ \t]+)\S/.exec(text);
-	return m ? m[1] : "  ";
+	return m ? m[1]! : "  ";
 }
 
 /** Parse the file; `undefined` text (no file) is an empty config. Returns undefined when it isn't a JSON object. */
-function parse(text) {
+function parse(text: string | undefined): Record<string, unknown> | undefined {
 	if (text === undefined) return {};
 	try {
 		const v = JSON.parse(text);
@@ -147,10 +185,10 @@ function parse(text) {
 }
 
 /** Whether the file's broker entry for `user` is "ok", "missing", "points elsewhere" or "unreadable". */
-export function mcpStatus(text, user, dir) {
+export function mcpStatus(text: string | undefined, user: string, dir: string): McpStatus {
 	const cfg = parse(text);
 	if (cfg === undefined) return "unreadable";
-	const servers = isObject(cfg.mcpServers) ? cfg.mcpServers : {};
+	const servers: Servers = isObject(cfg["mcpServers"]) ? cfg["mcpServers"] : {};
 	const keys = brokerKeys(servers, dir);
 	if (keys.length === 0) return "missing";
 	return keys.some((k) => sameEntry(servers[k], mcpEntry(user, dir))) ? "ok" : "points elsewhere";
@@ -158,12 +196,15 @@ export function mcpStatus(text, user, dir) {
 
 /**
  * The file text with `user`'s entry set. Only the chosen key changes.
- * @returns {{ status: "unreadable" } | { status: "unchanged" | "changed", key: string, text: string }}
  */
-export function mergeEntry(text, user, dir) {
+export function mergeEntry(
+	text: string | undefined,
+	user: string,
+	dir: string
+): { status: "unreadable" } | { status: "unchanged" | "changed"; key: string; text: string } {
 	const cfg = parse(text);
 	if (cfg === undefined) return { status: "unreadable" };
-	const servers = isObject(cfg.mcpServers) ? cfg.mcpServers : {};
+	const servers: Servers = isObject(cfg["mcpServers"]) ? cfg["mcpServers"] : {};
 	const key = chooseKey(servers, user, dir);
 	const entry = mcpEntry(user, dir);
 	if (text !== undefined && sameEntry(servers[key], entry)) return { status: "unchanged", key, text };
@@ -173,12 +214,11 @@ export function mergeEntry(text, user, dir) {
 
 /**
  * The file text with every broker entry removed (an empty `mcpServers` is left in place).
- * @returns {{ status: "unreadable" | "absent" } | { status: "removed", keys: string[], text: string }}
  */
-export function dropEntries(text, dir) {
+export function dropEntries(text: string, dir: string): { status: "unreadable" | "absent" } | { status: "removed"; keys: string[]; text: string } {
 	const cfg = parse(text);
 	if (cfg === undefined) return { status: "unreadable" };
-	const servers = isObject(cfg.mcpServers) ? cfg.mcpServers : {};
+	const servers: Servers = isObject(cfg["mcpServers"]) ? cfg["mcpServers"] : {};
 	const keys = brokerKeys(servers, dir);
 	if (keys.length === 0) return { status: "absent" };
 	const rest = Object.fromEntries(Object.entries(servers).filter(([k]) => !keys.includes(k)));
@@ -187,57 +227,66 @@ export function dropEntries(text, dir) {
 
 /**
  * Set `user`'s entry in the `.claude.json` in `folder`.
- * @param {object} o
- * @param {string} o.folder  the folder holding the file: the agent user's home, or a Claude config folder
- * @param {string} o.user
- * @param {string} o.dir     the agents' socket directory
- * @param {{ uid: number, gid: number }} o.owner  the agent user; owner for a file that has to be created
- * @param {boolean} [o.create=true]  create the file when there is none; when false that is "no-file"
- * @param {object} io        { read(path, uid) -> { text, stat: { uid, gid, mode } } | undefined (see readOwnedFile), write(path, text, { uid, gid, mode }) }
- * @returns {{ status: "created" | "written" | "unchanged" | "unreadable" | "unsafe" | "no-file", key?: string, reason?: string, entry: object, path: string }}
+ * @param o.folder  the folder holding the file: the agent user's home, or a Claude config folder
+ * @param o.dir     the agents' socket directory
+ * @param o.owner   the agent user; owner for a file that has to be created
+ * @param o.create  create the file when there is none; when false that is "no-file" (default true)
+ * @param io        the filesystem effects (see McpIo, readOwnedFile)
  */
-export function applyMcpConfig({ folder, user, dir, owner, create = true }, io) {
+export function applyMcpConfig(
+	{ folder, user, dir, owner, create = true }: { folder: string; user: string; dir: string; owner: FileOwner; create?: boolean },
+	io: McpIo
+): { status: "created" | "written" | "unchanged" | "unreadable" | "unsafe" | "no-file"; key?: string; reason?: string; entry: McpEntry; path: string } {
 	const path = `${folder}/${MCP_FILE}`;
 	const entry = mcpEntry(user, dir);
 	const before = load(io, path, owner.uid);
 	if (before?.unsafe) return { status: "unsafe", reason: before.unsafe, entry, path };
-	if (before === undefined && !create) return { status: "no-file", entry, path };
-	const merged = mergeEntry(before?.text, user, dir);
+	const file = before as OwnedFile | undefined; // not unsafe past the check above
+	if (file === undefined && !create) return { status: "no-file", entry, path };
+	const merged = mergeEntry(file?.text, user, dir);
 	if (merged.status === "unreadable") return { status: "unreadable", entry, path };
 	if (merged.status === "unchanged") return { status: "unchanged", key: merged.key, entry, path };
-	let target = { ...owner, mode: 0o600 };
-	if (before !== undefined) {
-		target = { uid: before.stat.uid, gid: before.stat.gid, mode: before.stat.mode & 0o777 };
-		io.write(`${folder}/${MCP_BACKUP}`, before.text, target);
+	let target: FileStat = { ...owner, mode: 0o600 };
+	if (file !== undefined) {
+		target = { uid: file.stat.uid, gid: file.stat.gid, mode: file.stat.mode & 0o777 };
+		io.write(`${folder}/${MCP_BACKUP}`, file.text, target);
 	}
 	io.write(path, merged.text, target);
 	const after = load(io, path, owner.uid);
-	if (after?.unsafe || mcpStatus(after?.text, user, dir) !== "ok") throw new Error(`${path}: the broker entry is not there after writing; restore ${MCP_BACKUP} if the file looks wrong`);
-	return { status: before === undefined ? "created" : "written", key: merged.key, entry, path };
+	if (after?.unsafe || mcpStatus((after as OwnedFile | undefined)?.text, user, dir) !== "ok") throw new Error(`${path}: the broker entry is not there after writing; restore ${MCP_BACKUP} if the file looks wrong`);
+	return { status: file === undefined ? "created" : "written", key: merged.key, entry, path };
 }
 
 /**
  * Remove the broker entry from the `.claude.json` in `folder`, backing the file up first.
- * @returns {{ status: "removed" | "absent" | "no-file" | "unreadable" | "unsafe", keys?: string[], reason?: string, path: string }}
  */
-export function removeMcpConfig({ folder, dir, uid }, io) {
+export function removeMcpConfig(
+	{ folder, dir, uid }: { folder: string; dir: string; uid: number },
+	io: McpIo
+): { status: "removed" | "absent" | "no-file" | "unreadable" | "unsafe"; keys?: string[]; reason?: string; path: string } {
 	const path = `${folder}/${MCP_FILE}`;
 	const before = load(io, path, uid);
 	if (before === undefined) return { status: "no-file", path };
 	if (before.unsafe) return { status: "unsafe", reason: before.unsafe, path };
-	const dropped = dropEntries(before.text, dir);
+	const file = before as OwnedFile; // not unsafe past the check above
+	const dropped = dropEntries(file.text, dir);
 	if (dropped.status !== "removed") return { status: dropped.status, path };
-	const target = { uid: before.stat.uid, gid: before.stat.gid, mode: before.stat.mode & 0o777 };
-	io.write(`${folder}/${MCP_BACKUP}`, before.text, target);
+	const target = { uid: file.stat.uid, gid: file.stat.gid, mode: file.stat.mode & 0o777 };
+	io.write(`${folder}/${MCP_BACKUP}`, file.text, target);
 	io.write(path, dropped.text, target);
 	return { status: "removed", keys: dropped.keys, path };
 }
 
 /** The MCP status of the file in `folder` for `agent list`: mcpStatus, "unsafe (<reason>)", or `ifAbsent` when there is no file and that is given. */
-export function mcpFileStatus({ folder, user, dir, uid, ifAbsent }, io) {
+export function mcpFileStatus(args: { folder: string; user: string; dir: string; uid: number; ifAbsent?: undefined }, io: McpIo): string;
+export function mcpFileStatus(args: { folder: string; user: string; dir: string; uid: number; ifAbsent: string | null }, io: McpIo): string | null;
+export function mcpFileStatus(
+	{ folder, user, dir, uid, ifAbsent }: { folder: string; user: string; dir: string; uid: number; ifAbsent?: string | null },
+	io: McpIo
+): string | null {
 	const got = load(io, `${folder}/${MCP_FILE}`, uid);
 	if (got === undefined && ifAbsent !== undefined) return ifAbsent;
-	return got?.unsafe ? `unsafe (${got.unsafe})` : mcpStatus(got?.text, user, dir);
+	return got?.unsafe ? `unsafe (${got.unsafe})` : mcpStatus((got as OwnedFile | undefined)?.text, user, dir);
 }
 
 /**
@@ -245,8 +294,8 @@ export function mcpFileStatus({ folder, user, dir, uid, ifAbsent }, io) {
  * directories (a symlink is skipped; readdir's entry types don't follow it). Whether one holds a
  * `.claude.json` is decided when it's opened, through pinFolder.
  */
-export function scanConfigFolders(home, { readdir = readdirSync } = {}) {
-	let entries;
+export function scanConfigFolders(home: string, { readdir = readdirSync }: { readdir?: (path: string, options: { withFileTypes: true }) => Dirent[] } = {}): string[] {
+	let entries: Dirent[];
 	try {
 		entries = readdir(home, { withFileTypes: true });
 	} catch {
@@ -260,9 +309,15 @@ export function scanConfigFolders(home, { readdir = readdirSync } = {}) {
  * Only root can read another user's environ, which is the case here. The values come from the
  * agent, so pinFolder checks each one before anything is read there.
  */
-export function sessionConfigFolders(uid, { proc = "/proc", fs = { readdirSync, statSync, readHead } } = {}) {
-	const found = new Set();
-	let pids;
+export function sessionConfigFolders(
+	uid: number,
+	{
+		proc = "/proc",
+		fs = { readdirSync, statSync, readHead }
+	}: { proc?: string; fs?: { readdirSync: (path: string) => string[]; statSync: (path: string) => { uid: number }; readHead: (path: string, max: number) => string } } = {}
+): string[] {
+	const found = new Set<string>();
+	let pids: string[];
 	try {
 		pids = fs.readdirSync(proc).filter((n) => /^\d+$/.test(n));
 	} catch {
@@ -292,19 +347,36 @@ export function sessionConfigFolders(uid, { proc = "/proc", fs = { readdirSync, 
  * `..` or a symlinked parent), and root shouldn't write where the agent couldn't. Error messages
  * keep the folder's own path. Throws SkippedFolder for a folder root won't use; returns undefined
  * when there is no such folder.
- * @returns {{ io: object, close: () => void } | undefined}
  */
-export function pinFolder(folder, uid, io, { within, open = openSync, fstat = fstatSync, close = closeSync, readlink = readlinkSync } = {}) {
-	let fd;
+export function pinFolder(
+	folder: string,
+	uid: number,
+	io: McpIo,
+	{
+		within,
+		open = openSync,
+		fstat = fstatSync,
+		close = closeSync,
+		readlink = readlinkSync
+	}: {
+		within?: string | undefined;
+		open?: (path: string, flags: number) => number;
+		fstat?: (fd: number) => { uid: number };
+		close?: (fd: number) => void;
+		readlink?: (path: string) => string;
+	} = {}
+): PinnedFolder | undefined {
+	let fd: number;
 	try {
 		fd = open(folder, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
 	} catch (err) {
-		if (err.code === "ENOENT") return undefined;
-		if (err.code === "ELOOP" || err.code === "ENOTDIR") throw new SkippedFolder(`${folder} is a symlink or not a directory`);
+		const code = (err as NodeJS.ErrnoException).code;
+		if (code === "ENOENT") return undefined;
+		if (code === "ELOOP" || code === "ENOTDIR") throw new SkippedFolder(`${folder} is a symlink or not a directory`);
 		throw err;
 	}
 	const base = `/proc/self/fd/${fd}`;
-	const refuse = (why) => {
+	const refuse = (why: string): never => {
 		close(fd);
 		throw new SkippedFolder(why);
 	};
@@ -314,8 +386,8 @@ export function pinFolder(folder, uid, io, { within, open = openSync, fstat = fs
 		const real = readlink(base);
 		if (real !== within && !real.startsWith(`${within}/`)) refuse(`${folder} is outside the agent's home directory`);
 	}
-	const at = (p) => base + p.slice(folder.length);
-	const named = (fn) => {
+	const at = (p: string): string => base + p.slice(folder.length);
+	const named = <T>(fn: () => T): T => {
 		try {
 			return fn();
 		} catch (err) {
@@ -333,4 +405,16 @@ export function pinFolder(folder, uid, io, { within, open = openSync, fstat = fs
  * The `pin` effect for an io: pinFolder, held inside the real path of `home` when one is given
  * (a found folder) and not when it isn't (a folder root saved with --claude-config).
  */
-export const pinner = (io, { realpath = realpathSync } = {}) => (folder, uid, home) => pinFolder(folder, uid, io, { within: home === undefined ? undefined : realpath(home) });
+export const pinner =
+	(io: McpIo, { realpath = realpathSync }: { realpath?: (path: string) => string } = {}): PinFolder =>
+	(folder, uid, home) =>
+		pinFolder(folder, uid, io, { within: home === undefined ? undefined : realpath(home) });
+
+/** An io that reaches one opened folder's files, and the call that releases it. */
+export interface PinnedFolder {
+	io: McpIo;
+	close: () => void;
+}
+
+/** The `pin` effect: open a folder (checked against the agent's home when `home` is given). Returns undefined when there is no such folder. */
+export type PinFolder = (folder: string, uid: number, home?: string) => PinnedFolder | undefined;

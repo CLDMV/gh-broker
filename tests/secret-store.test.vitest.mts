@@ -11,7 +11,7 @@ vi.mock("node:fs", () => ({
 }));
 
 import { readFileSync, existsSync, writeFileSync, rmSync, chmodSync, chownSync } from "node:fs";
-import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "../deploy/lib/secret-store.mjs";
+import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "../src/cli/secret-store.ts";
 
 const mockRead = vi.mocked(readFileSync);
 const mockExists = vi.mocked(existsSync);

@@ -1,13 +1,13 @@
 /**
  *
  *	@Project: @cldmv/gh-broker
- *	@Filename: /deploy/lib/credentials.mjs
+ *	@Filename: /src/cli/credentials.ts
  *	@Date: 2026-10-31T12:53:32-07:00 (1793476412)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T12:58:15-07:00 (1793476695)
+ *	@Last modified time: 2026-11-06T06:12:13-08:00 (1793974333)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -15,7 +15,7 @@
 
 /**
  * Where each credential's value comes from, and what gets stored, for the installer's
- * secrets step. Kept out of install.mjs (which needs root and a systemd host) so the
+ * secrets step. Kept out of install.ts (which needs root and a systemd host) so the
  * decisions are testable; the filesystem and systemd operations are passed in.
  *
  * Precedence for a value: explicit (--secret, then --secrets-file, then env
@@ -23,43 +23,52 @@
  * plaintext secrets file → decrypting an existing .cred → an interactive prompt. An explicit
  * value, or a newly created token, replaces a stored one (rotation); otherwise a stored value
  * is kept. Optional credentials (their tools are hidden without them) can be skipped and never
- * fail the install. Every problem throws; install.mjs reports it and exits.
+ * fail the install. Every problem throws; install.ts reports it and exits.
  */
 
-import { envSecretKey } from "./install-args.mjs";
+import { envSecretKey } from "./install-args.ts";
 
-/**
- * @param {object} o
- * @param {string[]} o.needed                   every cred name the config references
- * @param {Set<string>} o.optional              the ones that may be missing
- * @param {Record<string, string>} o.cliSecrets --secret values
- * @param {Record<string, unknown>} o.imported  --secrets-file contents ({} when none)
- * @param {Record<string, string | undefined>} o.env
- * @param {Record<string, string>} o.existingFile current plaintext secrets file ({} when none)
- * @param {(name: string) => string | undefined} o.decrypt  an existing .cred's value, if any
- * @param {(name: string) => boolean} o.mints   whether this run creates `name` (the npm token)
- * @param {(name: string) => Promise<string>} o.mint
- * @param {string | undefined} o.appKeyName     the App private key (multi-line; can't be prompted)
- * @param {boolean} o.nonInteractive
- * @param {(q: string) => Promise<string>} o.promptHidden
- * @param {(m: string) => void} o.log
- */
-export function credentialPlan(o) {
+/** Inputs to {@link credentialPlan}. */
+export interface CredentialPlanOptions {
+	/** every cred name the config references */
+	needed: string[];
+	/** the ones that may be missing */
+	optional: Set<string>;
+	/** --secret values */
+	cliSecrets: Record<string, string>;
+	/** --secrets-file contents ({} when none) */
+	imported: Record<string, unknown>;
+	env: Record<string, string | undefined>;
+	/** current plaintext secrets file ({} when none) */
+	existingFile: Record<string, string>;
+	/** an existing .cred's value, if any */
+	decrypt: (name: string) => string | null | undefined;
+	/** whether this run creates `name` (the npm token) */
+	mints: (name: string) => boolean;
+	mint: (name: string) => Promise<string>;
+	/** the App private key (multi-line; can't be prompted) */
+	appKeyName: string | undefined;
+	nonInteractive: boolean;
+	promptHidden: (q: string) => Promise<string>;
+	log: (m: string) => void;
+}
+
+export function credentialPlan(o: CredentialPlanOptions) {
 	const unknown = Object.keys(o.cliSecrets).filter((n) => !o.needed.includes(n));
 	if (unknown.length) throw new Error(`--secret names no credential this config uses: ${unknown.join(", ")} (it uses: ${o.needed.join(", ")})`);
 
-	const explicit = (name) => {
+	const explicit = (name: string): string | undefined => {
 		for (const v of [o.cliSecrets[name], o.imported?.[name], o.env[envSecretKey(name)]]) {
 			if (typeof v === "string" && v) return v;
 		}
 		return undefined;
 	};
-	const minting = (name) => o.mints(name) && explicit(name) === undefined;
+	const minting = (name: string): boolean => o.mints(name) && explicit(name) === undefined;
 	/** A new value is supplied for this run, so a stored one is replaced. */
-	const replaces = (name) => explicit(name) !== undefined || minting(name);
+	const replaces = (name: string): boolean => explicit(name) !== undefined || minting(name);
 
 	/** The value for `name`, or undefined for a skipped optional credential. */
-	const resolve = async (name) => {
+	const resolve = async (name: string): Promise<string | undefined> => {
 		const given = explicit(name);
 		if (given) return given;
 		if (minting(name)) {
@@ -86,18 +95,17 @@ export function credentialPlan(o) {
 		return entered;
 	};
 
-	const skipped = (name) => o.log(`  ${name}: not stored — its tools stay hidden until it is (re-run the installer to add it)`);
-	const replacedNote = (name) => {
+	const skipped = (name: string): void => o.log(`  ${name}: not stored — its tools stay hidden until it is (re-run the installer to add it)`);
+	const replacedNote = (name: string): void => {
 		if (minting(name)) o.log(`  note: the previous ${name} is still valid until it expires — revoke it in your npm account's Access Tokens settings`);
 	};
 
 	/**
 	 * systemd-creds backend. Returns the names that end up stored: only those go into the
 	 * LoadCredentialEncrypted= drop-in, since a line for a missing file stops the unit.
-	 * @param {{ exists: (name: string) => boolean, encrypt: (name: string, value: string) => void }} io
 	 */
-	const storeSystemd = async (io) => {
-		const stored = [];
+	const storeSystemd = async (io: { exists: (name: string) => boolean; encrypt: (name: string, value: string) => void }): Promise<string[]> => {
+		const stored: string[] = [];
 		for (const name of o.needed) {
 			const existed = io.exists(name);
 			// A plaintext entry (file → creds migration) or a new value re-encrypts; otherwise keep.
@@ -122,8 +130,8 @@ export function credentialPlan(o) {
 	};
 
 	/** file backend: the token map to write. */
-	const storeFile = async () => {
-		const tokens = { ...o.existingFile };
+	const storeFile = async (): Promise<Record<string, string>> => {
+		const tokens: Record<string, string> = { ...o.existingFile };
 		for (const name of o.needed) {
 			if (tokens[name] && !replaces(name)) continue;
 			const had = Boolean(tokens[name]);

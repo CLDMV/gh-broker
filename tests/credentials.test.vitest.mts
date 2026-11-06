@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { credentialPlan } from "../deploy/lib/credentials.mjs";
+import { credentialPlan } from "../src/cli/credentials.ts";
 
 type Opts = Parameters<typeof credentialPlan>[0];
 

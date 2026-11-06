@@ -1,13 +1,13 @@
 /**
  *
  *	@Project: @cldmv/gh-broker
- *	@Filename: /deploy/lib/config-merge.mjs
+ *	@Filename: /src/cli/config-merge.ts
  *	@Date: 2026-09-06T10:05:35-07:00 (1788714335)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T21:30:45-08:00 (1793683845)
+ *	@Last modified time: 2026-11-06T06:12:13-08:00 (1793974333)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -40,36 +40,69 @@
  * The result is validated by the real loader (`--check`) before anything is deployed, and a
  * --config file may hold only `cred:` references, never token values.
  */
-import { assertAgentName, DEFAULT_LISTEN } from "./agents.mjs";
+import type { AppConfig, NpmConfig, OtpConfig, OwnerCreds, SecretsConfig, ToolRule } from "../types.ts";
+import type { GhcrConfig } from "../verbs/ghcr/config.ts";
+import type { InstallArgs } from "./install-args.ts";
+import { assertAgentName, DEFAULT_LISTEN } from "./agents.ts";
+
+/** Each agent user's extra Claude config folders (absolute paths). */
+export type ClaudeConfigDirs = Record<string, string[]>;
+
+/**
+ * A config as the installer handles it: the deployed config, the example, an operator --config
+ * file and the flags' fragment all have this shape, with every field optional because layers are
+ * partial. The merged result is checked by the daemon's own loader (`--check`) before deploying.
+ */
+export interface ConfigLayer {
+	listen?: string;
+	upstream?: string;
+	tools?: ToolRule[];
+	owners?: Record<string, Partial<OwnerCreds>>;
+	defaultOwner?: string;
+	app?: Partial<AppConfig>;
+	secrets?: SecretsConfig;
+	npm?: Partial<NpmConfig>;
+	ghcr?: Partial<GhcrConfig>;
+	otp?: Partial<OtpConfig>;
+	claudeConfigDirs?: ClaudeConfigDirs;
+}
+
+/** A built config: the layers merged, with `owners` present. */
+export type DeployConfig = ConfigLayer & { owners: Record<string, Partial<OwnerCreds>> };
+
+/** A config object indexed by a dynamic top-level key. */
+type Keyed = Record<string, unknown>;
 
 export const DEFAULT_GHCR_DROP_DIR = "/srv/gh-broker/ghcr-drop";
 
 const OPERATOR_KEYS = ["listen", "upstream", "defaultOwner", "owners", "app", "secrets", "npm", "ghcr", "otp", "claudeConfigDirs"];
-const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 /** Shapes of live GitHub / npm tokens (classic, fine-grained, app, npm granular). */
 const TOKEN_SHAPE = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|npm_[A-Za-z0-9]{30,})\b/;
 
-export function mergeConfig(example, current) {
+export function mergeConfig(example: ConfigLayer, current: ConfigLayer | null | undefined): ConfigLayer {
 	if (!example || typeof example !== "object" || Array.isArray(example)) throw new Error("mergeConfig: example config must be an object");
 	if (!current) return structuredClone(example);
 	if (typeof current !== "object" || Array.isArray(current)) throw new Error("mergeConfig: current config must be an object");
 
 	const out = structuredClone(example);
+	const outKeyed = out as Keyed;
+	const cur = current as Keyed;
 
 	// tools: the allowlist is authoritative from the example (already copied into out). The per-tool
 	// settings the operator owns are `otp` (gate a tool or ungate it, #143) and `enabled` (turn a
 	// shipped tool on or off, #146), so a boolean one on a deployed tool is carried onto the same
 	// tool in the new list. It never adds a tool.
-	const deployed = (Array.isArray(current.tools) ? current.tools : []).filter(isObject);
-	for (const key of ["otp", "enabled"]) {
-		const kept = new Map(deployed.filter((t) => typeof t[key] === "boolean").map((t) => [t.name, t[key]]));
+	const deployed = (Array.isArray(current.tools) ? current.tools : []).filter((t): t is ToolRule => isObject(t));
+	for (const key of ["otp", "enabled"] as const) {
+		const kept = new Map(deployed.filter((t) => typeof t[key] === "boolean").map((t): [string, boolean | undefined] => [t.name, t[key]]));
 		for (const t of out.tools ?? []) if (kept.has(t.name)) t[key] = kept.get(t.name);
 	}
 
 	// scalars: current wins when defined. An old `unix:` listen is the shared-socket form the
 	// per-agent sockets replaced, so it is not carried over (buildConfig sets the new default).
 	for (const k of ["listen", "upstream", "defaultOwner"]) {
-		if (current[k] !== undefined && !(k === "listen" && String(current[k]).startsWith("unix:"))) out[k] = current[k];
+		if (cur[k] !== undefined && !(k === "listen" && String(cur[k]).startsWith("unix:"))) outKeyed[k] = cur[k];
 	}
 
 	// owners: operator data. Current entries win per owner; any the example ships are kept.
@@ -77,7 +110,7 @@ export function mergeConfig(example, current) {
 
 	// optional blocks: current wins if present.
 	for (const k of ["app", "secrets", "npm", "ghcr", "claudeConfigDirs"]) {
-		if (current[k] !== undefined) out[k] = structuredClone(current[k]);
+		if (cur[k] !== undefined) outKeyed[k] = structuredClone(cur[k]);
 	}
 
 	// otp: the example ships the default seed ref; the deployed block wins per field, so a
@@ -91,25 +124,29 @@ export function mergeConfig(example, current) {
  * Lay `overlay` (a --config file or the flags' config fragment) on top of `base`. `tools` in the
  * overlay is ignored here (readOperatorConfig refuses it earlier). Returns a new object.
  */
-export function layerConfig(base, overlay) {
+export function layerConfig(base: ConfigLayer, overlay: ConfigLayer): ConfigLayer {
 	const out = structuredClone(base);
+	const outKeyed = out as Keyed;
+	const over = overlay as Keyed;
 	for (const k of ["listen", "upstream", "defaultOwner"]) {
-		if (overlay[k] !== undefined) out[k] = overlay[k];
+		if (over[k] !== undefined) outKeyed[k] = over[k];
 	}
 	for (const k of ["app", "secrets", "npm", "otp"]) {
-		if (overlay[k] !== undefined) out[k] = { ...(out[k] ?? {}), ...structuredClone(overlay[k]) };
+		if (over[k] !== undefined) outKeyed[k] = { ...((outKeyed[k] as object | undefined) ?? {}), ...structuredClone(over[k] as object) };
 	}
 	if (overlay.owners !== undefined) {
-		out.owners = { ...(out.owners ?? {}) };
-		for (const [name, creds] of Object.entries(overlay.owners)) out.owners[name] = { ...(out.owners[name] ?? {}), ...creds };
+		const owners: Record<string, Partial<OwnerCreds>> = { ...(out.owners ?? {}) };
+		out.owners = owners;
+		for (const [name, creds] of Object.entries(overlay.owners)) owners[name] = { ...(owners[name] ?? {}), ...creds };
 	}
 	if (overlay.claudeConfigDirs !== undefined) out.claudeConfigDirs = addClaudeConfigDirs(out.claudeConfigDirs, overlay.claudeConfigDirs);
 	if (overlay.ghcr !== undefined) {
 		const { owners: ghcrOwners, ...scalars } = overlay.ghcr;
-		const merged = { ...(out.ghcr ?? {}), ...structuredClone(scalars) };
+		const merged: Partial<GhcrConfig> = { ...(out.ghcr ?? {}), ...structuredClone(scalars) };
 		if (ghcrOwners !== undefined) {
-			merged.owners = { ...(merged.owners ?? {}) };
-			for (const [name, o] of Object.entries(ghcrOwners)) merged.owners[name] = { ...(merged.owners[name] ?? {}), ...structuredClone(o) };
+			const owners: GhcrConfig["owners"] = { ...(merged.owners ?? {}) };
+			merged.owners = owners;
+			for (const [name, o] of Object.entries(ghcrOwners)) owners[name] = { ...(owners[name] ?? {}), ...structuredClone(o) };
 		}
 		out.ghcr = merged;
 	}
@@ -120,8 +157,8 @@ export function layerConfig(base, overlay) {
  * `claudeConfigDirs` with `more` added: per agent, the folders of both, each once. The result is
  * a new object; neither argument is changed.
  */
-export function addClaudeConfigDirs(base, more) {
-	const out = structuredClone(isObject(base) ? base : {});
+export function addClaudeConfigDirs(base: ClaudeConfigDirs | undefined, more: ClaudeConfigDirs): ClaudeConfigDirs {
+	const out: ClaudeConfigDirs = structuredClone(isObject(base) ? base : {}) as ClaudeConfigDirs;
 	for (const [user, dirs] of Object.entries(more)) out[user] = [...new Set([...absoluteFolders(out[user]), ...absoluteFolders(dirs)])];
 	return out;
 }
@@ -130,23 +167,23 @@ export function addClaudeConfigDirs(base, more) {
  * The absolute folder paths in one agent's saved list. The deployed config can be hand-edited, so
  * a string instead of a list, or a relative entry, yields nothing rather than odd folders.
  */
-export function absoluteFolders(dirs) {
-	return Array.isArray(dirs) ? dirs.filter((d) => typeof d === "string" && d.startsWith("/")) : [];
+export function absoluteFolders(dirs: unknown): string[] {
+	return Array.isArray(dirs) ? dirs.filter((d): d is string => typeof d === "string" && d.startsWith("/")) : [];
 }
 
 /** Throw unless `v` is { "<agent user>": ["/absolute/dir", ...] }. `where` names it in the message. */
-export function checkClaudeConfigDirs(v, where) {
+export function checkClaudeConfigDirs(v: unknown, where: string): ClaudeConfigDirs {
 	if (!isObject(v)) throw new Error(`${where} must be an object of agent user -> list of folders`);
 	for (const [user, dirs] of Object.entries(v)) {
 		assertAgentName(user);
 		if (!Array.isArray(dirs) || !dirs.every((d) => typeof d === "string" && d.startsWith("/"))) throw new Error(`${where}.${user} must be a list of absolute paths`);
 	}
-	return v;
+	return v as ClaudeConfigDirs;
 }
 
 /** The config fragment the CLI flags describe (same shape as a config file), or {} when none were given. */
-export function overlayFromFlags(opts) {
-	const o = {};
+export function overlayFromFlags(opts: InstallArgs): ConfigLayer {
+	const o: ConfigLayer = {};
 	if (opts.listen !== undefined) o.listen = opts.listen;
 	if (opts.upstream !== undefined) o.upstream = opts.upstream;
 	if (opts.defaultOwner !== undefined) o.defaultOwner = opts.defaultOwner;
@@ -154,12 +191,12 @@ export function overlayFromFlags(opts) {
 	for (const [org, id] of Object.entries(opts.installationIds ?? {})) ((o.owners ??= {})[org] ??= {}).installationId = id;
 	if (opts.appId !== undefined) o.app = { appId: opts.appId, privateKey: `cred:${opts.appPrivateKey ?? "gh-app-key"}` };
 	if (opts.secretsPath !== undefined) o.secrets = { path: opts.secretsPath };
-	const g = {};
+	const g: Partial<GhcrConfig> = {};
 	if (opts.ghcrDropDir !== undefined) g.dropDir = opts.ghcrDropDir;
 	if (opts.ghcrMaxArchiveBytes !== undefined) g.maxArchiveBytes = opts.ghcrMaxArchiveBytes;
 	if (opts.protectReleaseTags !== undefined) g.protectReleaseTags = opts.protectReleaseTags;
 	if (opts.ghcrOwner !== undefined) {
-		g.owners = { [opts.ghcrOwner]: { username: opts.ghcrUsername, credential: `cred:${opts.ghcrOwner}-packages`, images: [...opts.ghcrImages] } };
+		g.owners = { [opts.ghcrOwner]: { username: opts.ghcrUsername!, credential: `cred:${opts.ghcrOwner}-packages`, images: [...opts.ghcrImages!] } };
 	}
 	if (Object.keys(g).length) o.ghcr = g;
 	for (const { user, dir } of opts.claudeConfigs ?? []) ((o.claudeConfigDirs ??= {})[user] ??= []).push(dir);
@@ -171,25 +208,25 @@ export function overlayFromFlags(opts) {
  * no `tools` (the allowlist ships with the code), no unknown top-level keys and no token values.
  * `read` is the file reader (injected so the check is testable). Throws on any problem.
  */
-export function readOperatorConfig(path, read) {
-	let raw;
+export function readOperatorConfig(path: string, read: (path: string) => string): ConfigLayer {
+	let raw: unknown;
 	try {
 		raw = JSON.parse(read(path));
 	} catch (err) {
-		throw new Error(`--config: cannot read/parse ${path}: ${err.message}`);
+		throw new Error(`--config: cannot read/parse ${path}: ${(err as Error).message}`);
 	}
 	if (!isObject(raw)) throw new Error(`--config: ${path} must be a JSON object`);
-	if (raw.tools !== undefined) throw new Error("--config: `tools` is the shipped allowlist and cannot be set from a config file");
+	if (raw["tools"] !== undefined) throw new Error("--config: `tools` is the shipped allowlist and cannot be set from a config file");
 	const unknown = Object.keys(raw).filter((k) => !OPERATOR_KEYS.includes(k));
 	if (unknown.length) throw new Error(`--config: unknown key(s) ${unknown.join(", ")} (allowed: ${OPERATOR_KEYS.join(", ")})`);
-	if (raw.claudeConfigDirs !== undefined) checkClaudeConfigDirs(raw.claudeConfigDirs, "--config: claudeConfigDirs");
+	if (raw["claudeConfigDirs"] !== undefined) checkClaudeConfigDirs(raw["claudeConfigDirs"], "--config: claudeConfigDirs");
 	const hit = findTokenShape(raw, "");
 	if (hit) throw new Error(`--config: ${hit} looks like a token. The config holds only "cred:<name>" references; pass the token with --secret, --secrets-file or env`);
-	return raw;
+	return raw as ConfigLayer;
 }
 
 /** Path of the first string in `v` shaped like a token, or undefined. */
-function findTokenShape(v, where) {
+function findTokenShape(v: unknown, where: string): string | undefined {
 	if (typeof v === "string") return TOKEN_SHAPE.test(v) ? where : undefined;
 	if (Array.isArray(v)) {
 		for (let i = 0; i < v.length; i++) {
@@ -209,40 +246,52 @@ function findTokenShape(v, where) {
  * The full pipeline: example -> deployed -> --config file -> flags, then the first-install
  * fix-ups. Returns { config, notes }.
  *
- * @param {object} o
- * @param {object} o.example           parsed config.example.json
- * @param {object | null} o.current    the deployed config, or null on a first install
- * @param {object | undefined} o.file  a parsed operator --config file (see readOperatorConfig)
- * @param {object} o.opts              parsed installer flags
- * @param {boolean} o.nonInteractive
- * @param {(q: string) => Promise<string>} o.ask  visible prompt, used only when no owner exists
+ * @param o.example   parsed config.example.json
+ * @param o.current   the deployed config, or null on a first install
+ * @param o.file      a parsed operator --config file (see readOperatorConfig)
+ * @param o.opts      parsed installer flags
+ * @param o.ask       visible prompt, used only when no owner exists
  */
-export async function buildConfig({ example, current, file, opts, nonInteractive, ask }) {
-	const notes = [];
+export async function buildConfig({
+	example,
+	current,
+	file,
+	opts,
+	nonInteractive,
+	ask
+}: {
+	example: ConfigLayer;
+	current: ConfigLayer | null;
+	file: ConfigLayer | undefined;
+	opts: InstallArgs;
+	nonInteractive: boolean;
+	ask: (q: string) => Promise<string>;
+}): Promise<{ config: DeployConfig; notes: string[] }> {
+	const notes: string[] = [];
 	let config = mergeConfig(example, current);
 	if (file) config = layerConfig(config, file);
 	config = layerConfig(config, overlayFromFlags(opts));
-	config.owners ??= {};
+	const owners: Record<string, Partial<OwnerCreds>> = (config.owners ??= {});
 	if (typeof config.listen !== "string" || config.listen.startsWith("unix:")) {
 		config.listen = DEFAULT_LISTEN;
 		notes.push(`listen set to ${DEFAULT_LISTEN} (one socket per agent; the shared unix: socket is gone)`);
 	}
 
-	if (Object.keys(config.owners).length === 0) {
+	if (Object.keys(owners).length === 0) {
 		if (nonInteractive) {
 			throw new Error("no GitHub owner configured — pass --owner <org> (repeatable) or --config <file> with an owners block");
 		}
 		const name = (await ask("GitHub owner (user or org) the broker serves, e.g. your-org: ")).trim().toLowerCase();
 		if (!/^[a-z0-9](?:[a-z0-9-]{0,38})$/.test(name)) throw new Error(`"${name}" is not a valid GitHub owner name — or pass --owner <org>`);
-		config.owners[name] = { read: `cred:${name}-read`, write: `cred:${name}-write` };
+		owners[name] = { read: `cred:${name}-read`, write: `cred:${name}-write` };
 	}
-	for (const [name, creds] of Object.entries(config.owners)) {
+	for (const [name, creds] of Object.entries(owners)) {
 		if (typeof creds.read !== "string" || typeof creds.write !== "string") {
 			throw new Error(`owner "${name}" has no credentials — add it with --owner ${name}, or give "read" and "write" cred refs in --config`);
 		}
 	}
 
-	const names = Object.keys(config.owners);
+	const names = Object.keys(owners);
 	if (current === null && config.defaultOwner === undefined && names.length === 1) {
 		config.defaultOwner = names[0];
 		notes.push(`defaultOwner set to "${names[0]}" (the only owner); change it with --default-owner`);
@@ -252,14 +301,14 @@ export async function buildConfig({ example, current, file, opts, nonInteractive
 		config.ghcr.dropDir = DEFAULT_GHCR_DROP_DIR;
 		notes.push(`ghcr.dropDir defaulted to ${DEFAULT_GHCR_DROP_DIR} (change it with --ghcr-drop-dir)`);
 	}
-	return { config, notes };
+	return { config: config as DeployConfig, notes };
 }
 
 /**
  * The `secrets` block for the chosen provider. A `path` only belongs to the "file" provider, and
  * the loader refuses the combination, so refuse it here before any credential is written.
  */
-export function secretsBlock(provider, existing) {
+export function secretsBlock(provider: "systemd-creds" | "file", existing: SecretsConfig | undefined): SecretsConfig {
 	if (existing?.path && provider !== "file") {
 		throw new Error(`secrets.path (${existing.path}) is only used by the "file" provider — use --secrets-provider file, or drop the path`);
 	}

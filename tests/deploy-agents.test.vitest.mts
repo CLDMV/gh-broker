@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import * as a from "../deploy/lib/agents.mjs";
+import * as a from "../src/cli/agents.ts";
 
 const GROUPS = `root:x:0:
 gh-broker:x:985:

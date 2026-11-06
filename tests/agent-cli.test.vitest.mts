@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { agentCommand, configureMcp, smokeAgent } from "../deploy/lib/agent-cli.mjs";
-import { mcpEntry, SkippedFolder, UnsafeFile } from "../deploy/lib/mcp-config.mjs";
-import { emptyState, emptyUser } from "../deploy/lib/otp.mjs";
+import { agentCommand, configureMcp, smokeAgent } from "../src/cli/agent-cli.ts";
+import { mcpEntry, SkippedFolder, UnsafeFile } from "../src/cli/mcp-config.ts";
+import { emptyState, emptyUser } from "../src/cli/otp.ts";
 import { makeDeps, config, NOW } from "./helpers/cli-deps.mjs";
 
 const DIR = "/run/gh-broker/agents";
