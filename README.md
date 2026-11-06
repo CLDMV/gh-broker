@@ -19,18 +19,18 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.10.1 (November 2026)
+### Latest: v0.10.2 (November 2026)
 
-- **The OTP gate says why it refused a code.** A wrong code now reads "not accepted", with the bad-code count and the lockout length, and a reused code says it's spent, so the agent can tell you what happened instead of just asking again.
-- **`report_dependents` lists dev branches on large orgs.** The GraphQL listing pages at 25 repos and backs off when GitHub times out, instead of failing with a raw 502.
-- [View full v0.10.1 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.1.md)
+- **The MCP entry reaches every Claude config folder an agent uses.** Sessions started with `CLAUDE_CONFIG_DIR` (like `~/.claude-secondary`) were left on the removed shared socket. `install` and `agent sync` now update every `~/.claude*` folder in the agent's home, the folder of each running session, and folders saved with `--claude-config`.
+- **Smaller package.** The 1.4 MB source map no longer ships, and the bundle is built minified with tsup, taking the package from 3.2 MB to about 780 kB unpacked. The Node.js floor is back to 22.0.0.
+- [View full v0.10.2 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.2.md)
 
 ### Recent Releases
 
+- **v0.10.1** (November 2026) — the OTP gate says why it refused a code, and `report_dependents` lists dev branches on large orgs without a 502 ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.1.md))
 - **v0.10.0** (November 2026) — OTP gate for risky write tools, one socket per agent with the `gh-broker` command, eleven new write tools and a built-in deny list ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.0.md))
 - **v0.9.0** (November 2026) — `report_alert_status`, `report_release_changes` and `report_dependents` for the release and fleet skills, `ciVerbosity` on `list_pull_requests`, and install from npm ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.9.0.md))
 - **v0.8.0** (November 2026) — `npm_scaffold` creates an npm package and its trusted publisher, `ghcr_push` pushes images without an agent-held token, and optional credentials hide their tools ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.8.0.md))
-- **v0.7.0** (October 2026) — `issue_labels` adds, removes or swaps single labels without replacing the set, and `issue_write` warns that its `labels` does ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.7.0.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
@@ -143,7 +143,7 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 ### Requirements
 
 - **Linux with systemd.** The broker runs as a hardened systemd service and listens on a Unix socket.
-- **Node.js 22.12.0 or later** (`engines.node` is `>=22.12.0`). The installer points `/usr/local/bin/node` at the node it runs under.
+- **Node.js 22.0.0 or later** (`engines.node` is `>=22.0.0`; development needs 22.22.0+). The installer points `/usr/local/bin/node` at the node it runs under.
 - **The agent runs as its own Linux user**, without passwordless sudo, so it can't read the broker's secrets. The model behind that is in [docs/agent-user-model.md](docs/agent-user-model.md).
 - **Two fine-grained PATs per org** (read and write). The scopes are listed in [deploy/README.md](deploy/README.md).
 

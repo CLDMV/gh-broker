@@ -28,7 +28,8 @@
  *     exception is each deployed tool's boolean `otp` and `enabled`, which carry onto the same
  *     tool in the new list (they never add a tool).
  *   - Everything else is operator data and the deployed copy wins over the example: `listen`,
- *     `upstream`, `defaultOwner`, `owners`, `ghcr`, `app`, `secrets`, `npm`, `otp`. The example ships
+ *     `upstream`, `defaultOwner`, `owners`, `ghcr`, `app`, `secrets`, `npm`, `otp`,
+ *     `claudeConfigDirs` (each agent's extra Claude config folders, #163; layers add to it). The example ships
  *     none of the owner-specific ones, so a fresh install has no owners until the operator
  *     supplies one (--owner, --config, or the interactive prompt).
  *   - Layers 3 and 4 are merged on top of what is deployed rather than replacing it: scalars are
@@ -39,11 +40,11 @@
  * The result is validated by the real loader (`--check`) before anything is deployed, and a
  * --config file may hold only `cred:` references, never token values.
  */
-import { DEFAULT_LISTEN } from "./agents.mjs";
+import { assertAgentName, DEFAULT_LISTEN } from "./agents.mjs";
 
 export const DEFAULT_GHCR_DROP_DIR = "/srv/gh-broker/ghcr-drop";
 
-const OPERATOR_KEYS = ["listen", "upstream", "defaultOwner", "owners", "app", "secrets", "npm", "ghcr", "otp"];
+const OPERATOR_KEYS = ["listen", "upstream", "defaultOwner", "owners", "app", "secrets", "npm", "ghcr", "otp", "claudeConfigDirs"];
 const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 /** Shapes of live GitHub / npm tokens (classic, fine-grained, app, npm granular). */
 const TOKEN_SHAPE = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|npm_[A-Za-z0-9]{30,})\b/;
@@ -75,7 +76,7 @@ export function mergeConfig(example, current) {
 	out.owners = { ...(example.owners ?? {}), ...(current.owners ?? {}) };
 
 	// optional blocks: current wins if present.
-	for (const k of ["app", "secrets", "npm", "ghcr"]) {
+	for (const k of ["app", "secrets", "npm", "ghcr", "claudeConfigDirs"]) {
 		if (current[k] !== undefined) out[k] = structuredClone(current[k]);
 	}
 
@@ -102,6 +103,7 @@ export function layerConfig(base, overlay) {
 		out.owners = { ...(out.owners ?? {}) };
 		for (const [name, creds] of Object.entries(overlay.owners)) out.owners[name] = { ...(out.owners[name] ?? {}), ...creds };
 	}
+	if (overlay.claudeConfigDirs !== undefined) out.claudeConfigDirs = addClaudeConfigDirs(out.claudeConfigDirs, overlay.claudeConfigDirs);
 	if (overlay.ghcr !== undefined) {
 		const { owners: ghcrOwners, ...scalars } = overlay.ghcr;
 		const merged = { ...(out.ghcr ?? {}), ...structuredClone(scalars) };
@@ -112,6 +114,34 @@ export function layerConfig(base, overlay) {
 		out.ghcr = merged;
 	}
 	return out;
+}
+
+/**
+ * `claudeConfigDirs` with `more` added: per agent, the folders of both, each once. The result is
+ * a new object; neither argument is changed.
+ */
+export function addClaudeConfigDirs(base, more) {
+	const out = structuredClone(isObject(base) ? base : {});
+	for (const [user, dirs] of Object.entries(more)) out[user] = [...new Set([...absoluteFolders(out[user]), ...absoluteFolders(dirs)])];
+	return out;
+}
+
+/**
+ * The absolute folder paths in one agent's saved list. The deployed config can be hand-edited, so
+ * a string instead of a list, or a relative entry, yields nothing rather than odd folders.
+ */
+export function absoluteFolders(dirs) {
+	return Array.isArray(dirs) ? dirs.filter((d) => typeof d === "string" && d.startsWith("/")) : [];
+}
+
+/** Throw unless `v` is { "<agent user>": ["/absolute/dir", ...] }. `where` names it in the message. */
+export function checkClaudeConfigDirs(v, where) {
+	if (!isObject(v)) throw new Error(`${where} must be an object of agent user -> list of folders`);
+	for (const [user, dirs] of Object.entries(v)) {
+		assertAgentName(user);
+		if (!Array.isArray(dirs) || !dirs.every((d) => typeof d === "string" && d.startsWith("/"))) throw new Error(`${where}.${user} must be a list of absolute paths`);
+	}
+	return v;
 }
 
 /** The config fragment the CLI flags describe (same shape as a config file), or {} when none were given. */
@@ -132,6 +162,7 @@ export function overlayFromFlags(opts) {
 		g.owners = { [opts.ghcrOwner]: { username: opts.ghcrUsername, credential: `cred:${opts.ghcrOwner}-packages`, images: [...opts.ghcrImages] } };
 	}
 	if (Object.keys(g).length) o.ghcr = g;
+	for (const { user, dir } of opts.claudeConfigs ?? []) ((o.claudeConfigDirs ??= {})[user] ??= []).push(dir);
 	return o;
 }
 
@@ -151,6 +182,7 @@ export function readOperatorConfig(path, read) {
 	if (raw.tools !== undefined) throw new Error("--config: `tools` is the shipped allowlist and cannot be set from a config file");
 	const unknown = Object.keys(raw).filter((k) => !OPERATOR_KEYS.includes(k));
 	if (unknown.length) throw new Error(`--config: unknown key(s) ${unknown.join(", ")} (allowed: ${OPERATOR_KEYS.join(", ")})`);
+	if (raw.claudeConfigDirs !== undefined) checkClaudeConfigDirs(raw.claudeConfigDirs, "--config: claudeConfigDirs");
 	const hit = findTokenShape(raw, "");
 	if (hit) throw new Error(`--config: ${hit} looks like a token. The config holds only "cred:<name>" references; pass the token with --secret, --secrets-file or env`);
 	return raw;

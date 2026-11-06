@@ -1,6 +1,6 @@
 {
 	"name": "@cldmv/gh-broker",
-	"version": "0.10.1",
+	"version": "0.10.2",
 	"description": "Local credential-routing MCP proxy: holds per-org GitHub PATs out of the agent's reach, routes by repo owner, exposes a config-driven default-deny toolset in front of GitHub's hosted MCP.",
 	"type": "module",
 	"license": "Apache-2.0",
@@ -10,16 +10,24 @@
 	"main": "./dist/index.mjs",
 	"files": [
 		"dist",
+		"!dist/**/*.map",
 		"deploy",
 		"config.example.json",
 		"config.sample.json"
 	],
 	"engines": {
-		"node": ">=22.12.0"
+		"node": ">=22.0.0"
+	},
+	"devEngines": {
+		"runtime": {
+			"name": "node",
+			"version": ">=22.22.0",
+			"onFail": "error"
+		}
 	},
 	"scripts": {
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"build": "npm run typecheck && rm -rf dist && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.mjs --sourcemap",
+		"build": "npm run typecheck && tsup",
 		"start": "node dist/index.mjs",
 		"dev": "node --experimental-strip-types --watch src/index.ts",
 		"build:ci": "npm run build",
@@ -28,7 +36,8 @@
 		"test:watch": "vitest --config .configs/vitest.config.mjs",
 		"coverage": "node tests/run-vitest.mjs --coverage-quiet",
 		"ci:coverage": "npm run coverage",
-		"fix:headers": "fix-headers --config .configs/fix-headers.json"
+		"fix:headers": "fix-headers --config .configs/fix-headers.json",
+		"prepack": "npm run build"
 	},
 	"author": {
 		"name": "Shinrai",
@@ -60,7 +69,7 @@
 		"@cldmv/vitest-runner": "^1.5.6",
 		"@types/node": "^26.6.6",
 		"@vitest/coverage-v8": "^5.0.5",
-		"esbuild": "^0.28.2",
+		"tsup": "^9.0.0",
 		"typescript": "^6.0.3",
 		"vitest": "^5.0.5"
 	},

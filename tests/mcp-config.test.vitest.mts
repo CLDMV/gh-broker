@@ -123,7 +123,7 @@ describe("applyMcpConfig / removeMcpConfig (real files in a scratch dir)", () =>
 	it("creates a missing file 0600 for the user", () => {
 		const h = home("new");
 		fchown.mockClear();
-		const r = m.applyMcpConfig({ home: h, user: "repo", dir: DIR, owner }, io);
+		const r = m.applyMcpConfig({ folder: h, user: "repo", dir: DIR, owner }, io);
 		expect(r).toMatchObject({ status: "created", key: "github", path: `${h}/.claude.json` });
 		expect(JSON.parse(readFileSync(`${h}/.claude.json`, "utf8"))).toEqual({ mcpServers: { github: entry("repo") } });
 		expect(statSync(`${h}/.claude.json`).mode & 0o777).toBe(0o600);
@@ -138,30 +138,30 @@ describe("applyMcpConfig / removeMcpConfig (real files in a scratch dir)", () =>
 		chmodSync(`${h}/.claude.json`, 0o640);
 		const st = statSync(`${h}/.claude.json`);
 		fchown.mockClear();
-		const r = m.applyMcpConfig({ home: h, user: "repo", dir: DIR, owner }, io);
+		const r = m.applyMcpConfig({ folder: h, user: "repo", dir: DIR, owner }, io);
 		expect(r.status).toBe("written");
 		expect(readFileSync(`${h}/.claude.json.gh-broker.bak`, "utf8")).toBe(original);
 		expect(JSON.parse(readFileSync(`${h}/.claude.json`, "utf8"))).toEqual({ keep: true, mcpServers: { github: entry("repo") } });
 		expect(statSync(`${h}/.claude.json`).mode & 0o777).toBe(0o640);
 		expect(fchown).toHaveBeenCalledWith(expect.any(Number), st.uid, st.gid);
-		const again = m.applyMcpConfig({ home: h, user: "repo", dir: DIR, owner }, io);
+		const again = m.applyMcpConfig({ folder: h, user: "repo", dir: DIR, owner }, io);
 		expect(again.status).toBe("unchanged");
 	});
 
 	it("leaves an unparseable file alone", () => {
 		const h = home("bad");
 		writeFileSync(`${h}/.claude.json`, "{nope");
-		const r = m.applyMcpConfig({ home: h, user: "repo", dir: DIR, owner }, io);
+		const r = m.applyMcpConfig({ folder: h, user: "repo", dir: DIR, owner }, io);
 		expect(r.status).toBe("unreadable");
 		expect(r.entry).toEqual(entry("repo"));
 		expect(readFileSync(`${h}/.claude.json`, "utf8")).toBe("{nope");
-		expect(m.removeMcpConfig({ home: h, uid: me.uid }, io).status).toBe("unreadable");
+		expect(m.removeMcpConfig({ folder: h, uid: me.uid }, io).status).toBe("unreadable");
 	});
 
 	it("fails when the entry is not there after writing", () => {
 		const h = home("lost");
 		const lossy = { ...io, write: (p: string) => { if (p.endsWith(".claude.json")) writeFileSync(p, "{}"); } };
-		expect(() => m.applyMcpConfig({ home: h, user: "repo", dir: DIR, owner }, lossy)).toThrow(/not there after writing/);
+		expect(() => m.applyMcpConfig({ folder: h, user: "repo", dir: DIR, owner }, lossy)).toThrow(/not there after writing/);
 	});
 
 	it("fails when the file is swapped for a symlink before the read-back", () => {
@@ -169,19 +169,19 @@ describe("applyMcpConfig / removeMcpConfig (real files in a scratch dir)", () =>
 		const target = join(h, "elsewhere.json");
 		writeFileSync(target, "{}");
 		const swap = { ...io, write: (p: string) => { if (p.endsWith(".claude.json")) symlinkSync(target, p); } };
-		expect(() => m.applyMcpConfig({ home: h, user: "repo", dir: DIR, owner }, swap)).toThrow(/not there after writing/);
+		expect(() => m.applyMcpConfig({ folder: h, user: "repo", dir: DIR, owner }, swap)).toThrow(/not there after writing/);
 	});
 
 	it("removes the broker entry with a backup, and reports absent / no file", () => {
 		const h = home("rm");
 		const original = JSON.stringify({ keep: 1, mcpServers: { github: entry("repo"), other: { command: "npx" } } }, null, 2) + "\n";
 		writeFileSync(`${h}/.claude.json`, original);
-		const r = m.removeMcpConfig({ home: h, dir: DIR, uid: me.uid }, io);
+		const r = m.removeMcpConfig({ folder: h, dir: DIR, uid: me.uid }, io);
 		expect(r).toMatchObject({ status: "removed", keys: ["github"] });
 		expect(readFileSync(`${h}/.claude.json.gh-broker.bak`, "utf8")).toBe(original);
 		expect(JSON.parse(readFileSync(`${h}/.claude.json`, "utf8"))).toEqual({ keep: 1, mcpServers: { other: { command: "npx" } } });
-		expect(m.removeMcpConfig({ home: h, dir: DIR, uid: me.uid }, io).status).toBe("absent");
-		expect(m.removeMcpConfig({ home: home("none"), dir: DIR, uid: me.uid }, io)).toMatchObject({ status: "no-file" });
+		expect(m.removeMcpConfig({ folder: h, dir: DIR, uid: me.uid }, io).status).toBe("absent");
+		expect(m.removeMcpConfig({ folder: home("none"), dir: DIR, uid: me.uid }, io)).toMatchObject({ status: "no-file" });
 	});
 
 	it("never follows a symlinked ~/.claude.json: apply, remove and the status leave it and its target alone", () => {
@@ -189,10 +189,10 @@ describe("applyMcpConfig / removeMcpConfig (real files in a scratch dir)", () =>
 		const secret = join(dir, "secret.json");
 		writeFileSync(secret, JSON.stringify({ token: "x", mcpServers: { github: entry("repo") } }));
 		symlinkSync(secret, `${h}/.claude.json`);
-		const r = m.applyMcpConfig({ home: h, user: "repo", dir: DIR, owner }, io);
+		const r = m.applyMcpConfig({ folder: h, user: "repo", dir: DIR, owner }, io);
 		expect(r).toMatchObject({ status: "unsafe", reason: expect.stringContaining("is a symlink") });
-		expect(m.removeMcpConfig({ home: h, dir: DIR, uid: me.uid }, io)).toMatchObject({ status: "unsafe" });
-		expect(m.mcpFileStatus({ home: h, user: "repo", dir: DIR, uid: me.uid }, io)).toMatch(/^unsafe \(.*is a symlink\)$/);
+		expect(m.removeMcpConfig({ folder: h, dir: DIR, uid: me.uid }, io)).toMatchObject({ status: "unsafe" });
+		expect(m.mcpFileStatus({ folder: h, user: "repo", dir: DIR, uid: me.uid }, io)).toMatch(/^unsafe \(.*is a symlink\)$/);
 		expect(lstatSync(`${h}/.claude.json`).isSymbolicLink()).toBe(true);
 		expect(existsSync(`${h}/.claude.json.gh-broker.bak`)).toBe(false);
 		expect(JSON.parse(readFileSync(secret, "utf8")).token).toBe("x");
@@ -201,13 +201,13 @@ describe("applyMcpConfig / removeMcpConfig (real files in a scratch dir)", () =>
 	it("mcpFileStatus reports the normal status for a plain file", () => {
 		const h = home("plain");
 		writeFileSync(`${h}/.claude.json`, JSON.stringify({ mcpServers: { github: entry("repo") } }));
-		expect(m.mcpFileStatus({ home: h, user: "repo", dir: DIR, uid: me.uid }, io)).toBe("ok");
-		expect(m.mcpFileStatus({ home: home("empty"), user: "repo", dir: DIR, uid: me.uid }, io)).toBe("missing");
+		expect(m.mcpFileStatus({ folder: h, user: "repo", dir: DIR, uid: me.uid }, io)).toBe("ok");
+		expect(m.mcpFileStatus({ folder: home("empty"), user: "repo", dir: DIR, uid: me.uid }, io)).toBe("missing");
 	});
 
 	it("passes on an unexpected read error", () => {
 		const boom = { ...io, read: () => { throw new Error("EIO"); } };
-		expect(() => m.applyMcpConfig({ home: home("eio"), user: "repo", dir: DIR, owner }, boom)).toThrow("EIO");
+		expect(() => m.applyMcpConfig({ folder: home("eio"), user: "repo", dir: DIR, owner }, boom)).toThrow("EIO");
 	});
 });
 
@@ -253,5 +253,139 @@ describe("readOwnedFile", () => {
 		writeFileSync(exact, "");
 		truncateSync(exact, m.MAX_CONFIG_BYTES);
 		expect(m.readOwnedFile(exact, uid)!.text.length).toBe(m.MAX_CONFIG_BYTES); // the limit itself is fine
+	});
+});
+
+describe("Claude config folders (#163)", () => {
+	let dir: string;
+	beforeAll(() => {
+		mkdirSync(join(process.cwd(), "tmp", "agents"), { recursive: true });
+		dir = mkdtempSync(join(process.cwd(), "tmp", "agents", "folders-test-"));
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	const uid = process.getuid!();
+	const gid = process.getgid!();
+	const io = { read: m.readOwnedFile, write: (p: string, text: string, owner: { uid: number; gid: number; mode?: number }) => writeFileAtomic(p, text, owner, { fchown: () => {} }) };
+
+	it("scanConfigFolders lists the real .claude* directories and skips files and symlinks", () => {
+		const h = join(dir, "scan");
+		mkdirSync(join(h, ".claude-secondary"), { recursive: true });
+		mkdirSync(join(h, ".claude"));
+		mkdirSync(join(h, ".config"));
+		writeFileSync(join(h, ".claude.json"), "{}");
+		symlinkSync(join(h, ".config"), join(h, ".claude-link"));
+		expect(m.scanConfigFolders(h)).toEqual([`${h}/.claude`, `${h}/.claude-secondary`]);
+		expect(m.scanConfigFolders(join(dir, "no-such-home"))).toEqual([]);
+	});
+
+	it("sessionConfigFolders reads CLAUDE_CONFIG_DIR from the user's claude processes only", () => {
+		const proc = join(dir, "proc");
+		const pid = (n: string, argv: string[], env: string[]) => {
+			mkdirSync(join(proc, n), { recursive: true });
+			writeFileSync(join(proc, n, "cmdline"), argv.join("\0") + "\0");
+			writeFileSync(join(proc, n, "environ"), env.join("\0") + "\0");
+		};
+		pid("10", ["/home/glm/.local/bin/claude", "--resume", "x"], ["HOME=/home/glm", "CLAUDE_CONFIG_DIR=/home/glm/.claude-vllm-dev2/"]);
+		pid("11", ["node", "/usr/lib/claude"], ["CLAUDE_CONFIG_DIR=/srv/claude-b"]);
+		pid("12", ["claude"], ["HOME=/home/glm"]); // no CLAUDE_CONFIG_DIR: uses ~/.claude.json
+		pid("13", ["claude"], ["CLAUDE_CONFIG_DIR=relative/dir"]); // not absolute: ignored
+		pid("14", ["/bin/bash", "-c", "claude"], ["CLAUDE_CONFIG_DIR=/home/glm/.claude-bash"]); // not a claude process
+		pid("17", ["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"], ["CLAUDE_CONFIG_DIR=/srv/claude-npx"]); // npx / npm install
+		pid("18", ["claude"], ["CLAUDE_CONFIG_DIR=/"]); // "/" strips to nothing: ignored
+		pid("15", ["claude"], ["CLAUDE_CONFIG_DIR=/home/glm/.claude-vllm-dev2"]); // same folder twice
+		mkdirSync(join(proc, "16")); // exited: no cmdline
+		mkdirSync(join(proc, "self"));
+		expect(m.sessionConfigFolders(uid, { proc })).toEqual(["/home/glm/.claude-vllm-dev2", "/srv/claude-b", "/srv/claude-npx"]);
+		expect(m.sessionConfigFolders(uid + 1, { proc })).toEqual([]);
+		expect(m.sessionConfigFolders(uid, { proc: join(dir, "no-proc") })).toEqual([]);
+	});
+
+	it("pinFolder writes through the open folder, and the file lands in the real folder", () => {
+		const f = join(dir, "pinned");
+		mkdirSync(f);
+		writeFileSync(join(f, ".claude.json"), JSON.stringify({ mcpServers: { github: OLD } }));
+		const pinned = m.pinFolder(f, uid, io)!;
+		try {
+			const r = m.applyMcpConfig({ folder: f, user: "repo", dir: DIR, owner: { uid, gid }, create: false }, pinned.io);
+			expect(r).toMatchObject({ status: "written", path: `${f}/.claude.json` });
+		} finally {
+			pinned.close();
+		}
+		expect(JSON.parse(readFileSync(join(f, ".claude.json"), "utf8")).mcpServers.github).toEqual(entry("repo"));
+		expect(existsSync(join(f, ".claude.json.gh-broker.bak"))).toBe(true);
+	});
+
+	it("pinFolder refuses a symlinked folder, a file and someone else's folder, and is undefined for a missing one", () => {
+		const real = join(dir, "real");
+		mkdirSync(real);
+		symlinkSync(real, join(dir, "linked"));
+		writeFileSync(join(dir, "plain"), "");
+		expect(() => m.pinFolder(join(dir, "linked"), uid, io)).toThrow(/is a symlink or not a directory/);
+		expect(() => m.pinFolder(join(dir, "plain"), uid, io)).toThrow(m.SkippedFolder);
+		const closed: number[] = [];
+		expect(() => m.pinFolder(real, uid + 1, io, { close: (fd: number) => closed.push(fd) } as any)).toThrow(/is owned by uid \d+, not the agent user/);
+		expect(closed).toHaveLength(1);
+		expect(m.pinFolder(join(dir, "gone"), uid, io)).toBeUndefined();
+		expect(() => m.pinFolder(join(dir, "plain", "x"), uid, io, { open: () => { throw Object.assign(new Error("EACCES"), { code: "EACCES" }); } } as any)).toThrow("EACCES");
+	});
+
+	it("pinFolder with `within` only takes a folder that resolves inside it", () => {
+		const home = join(dir, "home-w");
+		mkdirSync(join(home, ".claude-x"), { recursive: true });
+		mkdirSync(join(dir, "elsewhere"));
+		const inside = m.pinFolder(join(home, ".claude-x"), uid, io, { within: home })!;
+		inside.close();
+		m.pinFolder(home, uid, io, { within: home })!.close(); // the home itself is fine
+		expect(() => m.pinFolder(join(dir, "elsewhere"), uid, io, { within: home })).toThrow(/is outside the agent's home directory/);
+		expect(() => m.pinFolder(join(home, "..", "elsewhere"), uid, io, { within: home })).toThrow(/outside the agent's home/); // ".." resolves out
+		mkdirSync(join(dir, "home-wx"));
+		expect(() => m.pinFolder(join(dir, "home-wx"), uid, io, { within: home })).toThrow(/outside the agent's home/);
+	});
+
+	it("pinner holds a found folder inside the home's real path and lets a saved folder (no home) be anywhere", () => {
+		const home = join(dir, "home-p");
+		mkdirSync(join(home, ".claude-y"), { recursive: true });
+		mkdirSync(join(dir, "saved-p"));
+		symlinkSync(home, join(dir, "home-p-link"));
+		const pin = m.pinner(io);
+		pin(join(home, ".claude-y"), uid, join(dir, "home-p-link"))!.close(); // the home is resolved first
+		expect(() => pin(join(dir, "saved-p"), uid, home)).toThrow(/outside the agent's home/);
+		pin(join(dir, "saved-p"), uid, undefined)!.close();
+		const seen: unknown[] = [];
+		m.pinner(io, { realpath: (p: string) => { seen.push(p); return home; } })(join(home, ".claude-y"), uid, "/h")!.close();
+		expect(seen).toEqual(["/h"]);
+	});
+
+	it("readHead reads at most the limit", () => {
+		const p = join(dir, "head.txt");
+		writeFileSync(p, "abcdef");
+		expect(m.readHead(p, 4)).toBe("abcd");
+		expect(m.readHead(p, 100)).toBe("abcdef");
+	});
+
+	it("pinFolder names the folder, not the descriptor path, in errors", () => {
+		const f = join(dir, "named");
+		mkdirSync(f);
+		symlinkSync(join(dir, "real"), join(f, ".claude.json"));
+		const pinned = m.pinFolder(f, uid, io)!;
+		try {
+			expect(m.applyMcpConfig({ folder: f, user: "repo", dir: DIR, owner: { uid, gid }, create: false }, pinned.io)).toMatchObject({ status: "unsafe", reason: `${f}/.claude.json is a symlink` });
+			const failing = m.pinFolder(f, uid, { read: () => undefined, write: (p: string) => { throw new Error(`EISDIR ${p}`); } })!;
+			expect(() => failing.io.write(`${f}/x`, "", { uid, gid })).toThrow(`EISDIR ${f}/x`);
+			failing.close();
+			const odd = m.pinFolder(f, uid, { read: () => { throw "not an Error"; }, write: () => {} })!;
+			expect(() => odd.io.read(`${f}/x`, uid)).toThrow("not an Error");
+			odd.close();
+		} finally {
+			pinned.close();
+		}
+	});
+
+	it("applyMcpConfig with create:false leaves a folder without a .claude.json alone, and mcpFileStatus can say so", () => {
+		const f = join(dir, "empty-folder");
+		mkdirSync(f);
+		expect(m.applyMcpConfig({ folder: f, user: "repo", dir: DIR, owner: { uid, gid }, create: false }, io)).toMatchObject({ status: "no-file" });
+		expect(existsSync(join(f, ".claude.json"))).toBe(false);
+		expect(m.mcpFileStatus({ folder: f, user: "repo", dir: DIR, uid, ifAbsent: null }, io)).toBeNull();
 	});
 });
