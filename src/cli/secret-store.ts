@@ -1,18 +1,19 @@
 /**
  *
  *	@Project: @cldmv/gh-broker
- *	@Filename: /deploy/lib/secret-store.mjs
+ *	@Filename: /src/cli/secret-store.ts
  *	@Date: 2026-09-06T10:05:35-07:00 (1788714335)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T12:12:11-07:00 (1793473931)
+ *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
+import type { ConfigLayer } from "./config-merge.ts";
 import { writeFileSync, chmodSync, chownSync, readFileSync, existsSync, statSync, rmSync } from "node:fs";
 
 /**
@@ -21,7 +22,11 @@ import { writeFileSync, chmodSync, chownSync, readFileSync, existsSync, statSync
  * agent user (not in that group, dir 0750) cannot. The file provider counterpart
  * to src/secrets.ts. Never logs a value.
  */
-export function writeSecretsFile(path, secrets, { uid = 0, gid, mode = 0o640 } = {}) {
+export function writeSecretsFile(
+	path: string,
+	secrets: Record<string, string>,
+	{ uid = 0, gid, mode = 0o640 }: { uid?: number; gid?: number; mode?: number } = {}
+): void {
 	const json = JSON.stringify(secrets, null, "\t") + "\n";
 	writeFileSync(path, json, { mode });
 	chmodSync(path, mode);
@@ -32,14 +37,14 @@ export function writeSecretsFile(path, secrets, { uid = 0, gid, mode = 0o640 } =
  * Read an existing secrets file so an upgrade preserves tokens the operator isn't
  * re-entering. Returns {} if the file is absent or unreadable.
  */
-export function readSecretsFile(path) {
+export function readSecretsFile(path: string): Record<string, string> {
 	if (!existsSync(path)) return {};
 	try {
 		const v = JSON.parse(readFileSync(path, "utf8"));
 		if (!v || typeof v !== "object" || Array.isArray(v)) return {};
 		// Keep only non-empty string values — a non-string (number/object) must never
 		// be treated as a token (it would crash encryption or be written back invalid).
-		const out = {};
+		const out: Record<string, string> = {};
 		for (const [name, val] of Object.entries(v)) if (typeof val === "string" && val.length > 0) out[name] = val;
 		return out;
 	} catch {
@@ -52,7 +57,7 @@ export function readSecretsFile(path) {
  * systemd-creds provider, so the tokens don't linger on disk and defeat
  * "encrypted at rest". Best-effort zero-overwrite before unlink. No-op if absent.
  */
-export function removeSecretsFile(path) {
+export function removeSecretsFile(path: string): void {
 	if (!existsSync(path)) return;
 	try {
 		writeFileSync(path, Buffer.alloc(statSync(path).size, 0));
@@ -69,7 +74,7 @@ const SAFE_CRED_NAME = /^[A-Za-z0-9._-]+$/;
  * and is interpolated into a systemd drop-in line written as root, so a name with
  * path separators, "..", colons, or control characters must be rejected.
  */
-export function assertSafeCredName(name) {
+export function assertSafeCredName(name: string): string {
 	if (name === "." || name === ".." || !SAFE_CRED_NAME.test(name)) {
 		throw new Error(`gh-broker: unsafe credential name "${name}" (allowed: letters, digits, ".", "_", "-")`);
 	}
@@ -81,9 +86,9 @@ export function assertSafeCredName(name) {
  * prefix). Validates each name — this is the single source feeding the encrypted
  * `.cred` filenames and the systemd drop-in, so hardening here covers both.
  */
-export function referencedCredNames(config) {
-	const names = new Set();
-	const add = (ref) => {
+export function referencedCredNames(config: ConfigLayer): string[] {
+	const names = new Set<string>();
+	const add = (ref: unknown): void => {
 		if (typeof ref === "string" && ref.startsWith("cred:")) names.add(assertSafeCredName(ref.slice("cred:".length)));
 	};
 	for (const owner of Object.values(config.owners ?? {})) {
@@ -103,9 +108,9 @@ export function referencedCredNames(config) {
  * installer may skip them: the npm token and the GHCR credentials. The owners' PATs and
  * the App key stay required.
  */
-export function optionalCredNames(config) {
-	const names = [];
-	const add = (ref) => {
+export function optionalCredNames(config: ConfigLayer): string[] {
+	const names: string[] = [];
+	const add = (ref: unknown): void => {
 		if (typeof ref === "string" && ref.startsWith("cred:")) names.push(assertSafeCredName(ref.slice("cred:".length)));
 	};
 	add(config.npm?.token);
@@ -120,10 +125,13 @@ export function optionalCredNames(config) {
  * file → file). Returns undefined when it is a first install, or when both backends have
  * credentials and nothing is recorded (ambiguous — the caller should ask).
  *
- * @param {{ configured?: unknown, credNames?: string[], fileTokenNames?: string[] }} found
- * @returns {"systemd-creds" | "file" | undefined}
+ * @param found what is already configured / on disk
  */
-export function detectSecretsProvider({ configured, credNames = [], fileTokenNames = [] } = {}) {
+export function detectSecretsProvider({
+	configured,
+	credNames = [],
+	fileTokenNames = []
+}: { configured?: unknown; credNames?: string[]; fileTokenNames?: string[] } = {}): "systemd-creds" | "file" | undefined {
 	if (configured === "systemd-creds" || configured === "file") return configured;
 	const hasCreds = credNames.length > 0;
 	const hasFile = fileTokenNames.length > 0;

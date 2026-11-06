@@ -1,13 +1,13 @@
 /**
  *
  *	@Project: @cldmv/gh-broker
- *	@Filename: /deploy/lib/otp.mjs
+ *	@Filename: /src/cli/otp.ts
  *	@Date: 2026-11-01T20:43:03-08:00 (1793594583)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T20:43:03-08:00 (1793594583)
+ *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -21,10 +21,13 @@
  * file format (version 1, per-user counters under `users`).
  */
 import { randomBytes } from "node:crypto";
+import type { Stats } from "node:fs";
+import type { OtpConfig, SecretsConfig } from "../types.ts";
+import type { OtpState, UserState } from "../otp/state.ts";
 import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, fchmodSync, fchownSync, statSync, constants } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import QRCode from "qrcode";
-import { validAgentName } from "./agents.mjs";
+import { validAgentName } from "./agents.ts";
 
 export const DEFAULT_SEED_CRED = "otp-seed";
 export const DEFAULT_STATE_PATH = "/var/lib/gh-broker/otp-state.json";
@@ -34,7 +37,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 /** RFC 4648 base32 without padding. */
-export function base32Encode(bytes) {
+export function base32Encode(bytes: Iterable<number>): string {
 	let bits = 0;
 	let value = 0;
 	let out = "";
@@ -42,26 +45,26 @@ export function base32Encode(bytes) {
 		value = (value << 8) | byte;
 		bits += 8;
 		while (bits >= 5) {
-			out += BASE32[(value >>> (bits - 5)) & 31];
+			out += BASE32[(value >>> (bits - 5)) & 31]!;
 			bits -= 5;
 		}
 	}
-	if (bits > 0) out += BASE32[(value << (5 - bits)) & 31];
+	if (bits > 0) out += BASE32[(value << (5 - bits)) & 31]!;
 	return out;
 }
 
 /** A new TOTP seed: 20 random bytes as base32 (32 characters). `random` is injectable for tests. */
-export function generateSeed(random = randomBytes) {
+export function generateSeed(random: (size: number) => Uint8Array = randomBytes): string {
 	return base32Encode(random(20));
 }
 
 /** The otpauth URI an authenticator app imports (HMAC-SHA1, 6 digits, 30 s step). */
-export function otpauthUri(seed, host) {
+export function otpauthUri(seed: string, host: string): string {
 	return `otpauth://totp/gh-broker:${encodeURIComponent(host)}?secret=${seed}&issuer=gh-broker&algorithm=SHA1&digits=6&period=30`;
 }
 
 /** The URI as a terminal QR code. `toString` is the qrcode library's, injectable for tests. */
-export async function renderQr(uri, toString = QRCode.toString) {
+export async function renderQr(uri: string, toString: (text: string, options: { type: "terminal"; small: boolean }) => Promise<string> = QRCode.toString): Promise<string> {
 	return toString(uri, { type: "terminal", small: true });
 }
 
@@ -69,7 +72,17 @@ export async function renderQr(uri, toString = QRCode.toString) {
  * The one-time reveal: QR, the base32 key as text, and the URI. This is the only place the seed
  * is printed; callers hand it a `log` that writes to the operator's terminal and nowhere else.
  */
-export async function showSeed({ seed, host, log, qr = renderQr }) {
+export async function showSeed({
+	seed,
+	host,
+	log,
+	qr = renderQr
+}: {
+	seed: string;
+	host: string;
+	log: (line: string) => void;
+	qr?: (uri: string) => Promise<string>;
+}): Promise<void> {
 	const uri = otpauthUri(seed, host);
 	log("");
 	log("  OTP seed (shown once). Scan the QR code with an authenticator app, or enter the key by hand:");
@@ -82,14 +95,25 @@ export async function showSeed({ seed, host, log, qr = renderQr }) {
 }
 
 /** The cred name the config's `otp.seed` ref points at, or undefined when OTP isn't configured. */
-export function seedCredName(config) {
+export function seedCredName(config: { otp?: Partial<OtpConfig> } | undefined): string | undefined {
 	const ref = config?.otp?.seed;
 	return typeof ref === "string" && ref.startsWith("cred:") ? ref.slice("cred:".length) : undefined;
 }
 
 /** Whether a stored seed already exists in the active backend (an existing one is never overwritten on install). */
-export function seedExists({ name, existingFile, credFileExists }) {
+export function seedExists({ name, existingFile, credFileExists }: { name: string; existingFile: Record<string, string>; credFileExists: (name: string) => boolean }): boolean {
 	return Boolean(existingFile[name]) || credFileExists(name);
+}
+
+/** The effects {@link storeSeed} needs. */
+export interface SeedIo {
+	writeSecretsFile: (path: string, secrets: Record<string, string>) => void;
+	readSecretsFile: (path: string) => Record<string, string>;
+	removeFile: (path: string) => void;
+	encrypt: (name: string, seed: string, file: string) => void;
+	rename: (from: string, to: string) => void;
+	listCreds: (dir: string) => string[];
+	writeDropin: (names: string[], credsDir: string) => void;
 }
 
 /**
@@ -97,14 +121,21 @@ export function seedExists({ name, existingFile, credFileExists }) {
  * (atomically: the old one stays until the new one is written) and rewrites the unit drop-in so
  * the credential is delivered; the file backend sets the key in
  * the secrets file. `io` carries every effect.
- * @param {object} o
- * @param {{ secrets?: { provider?: string } }} o.config
- * @param {string} o.name         credential name
- * @param {string} o.seed
- * @param {{ secrets: string, credsDir: string }} o.paths
- * @param {object} o.io
+ * @param o.name   credential name
  */
-export function storeSeed({ config, name, seed, paths, io }) {
+export function storeSeed({
+	config,
+	name,
+	seed,
+	paths,
+	io
+}: {
+	config: { secrets?: SecretsConfig };
+	name: string;
+	seed: string;
+	paths: { secrets: string; credsDir: string };
+	io: SeedIo;
+}): "file" | "systemd-creds" {
 	if (config.secrets?.provider === "file") {
 		io.writeSecretsFile(paths.secrets, { ...io.readSecretsFile(paths.secrets), [name]: seed });
 		return "file";
@@ -123,53 +154,58 @@ export function storeSeed({ config, name, seed, paths, io }) {
 	return "systemd-creds";
 }
 
-const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-const isIso = (v) => typeof v === "string" && !Number.isNaN(Date.parse(v));
-const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const isIso = (v: unknown): v is string => typeof v === "string" && !Number.isNaN(Date.parse(v));
+const isCount = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 
 /** One user's counters, all zero (what a user with no entry has). */
-export function emptyUser() {
+export function emptyUser(): UserState {
 	return { failures: 0, lockedUntil: null, lockouts: [], hardLock: null };
 }
 
 /** All-zero state, the format the daemon writes (contract v2: version 1, counters per user). */
-export function emptyState() {
+export function emptyState(): OtpState {
 	return { version: 1, lastAcceptedStep: 0, users: {} };
 }
 
 /** Whether `v` is a well-formed per-user entry. */
-export function validUser(v) {
+export function validUser(v: unknown): v is UserState {
 	return (
 		isObject(v) &&
-		isCount(v.failures) &&
-		(v.lockedUntil === null || isIso(v.lockedUntil)) &&
-		Array.isArray(v.lockouts) &&
-		v.lockouts.every(isIso) &&
-		(v.hardLock === null || (isObject(v.hardLock) && isIso(v.hardLock.since) && isCount(v.hardLock.lockouts)))
+		isCount(v["failures"]) &&
+		(v["lockedUntil"] === null || isIso(v["lockedUntil"])) &&
+		Array.isArray(v["lockouts"]) &&
+		v["lockouts"].every(isIso) &&
+		(v["hardLock"] === null || (isObject(v["hardLock"]) && isIso(v["hardLock"]["since"]) && isCount(v["hardLock"]["lockouts"])))
 	);
 }
 
 /** Whether `v` is a well-formed version 1 state object, by the same rules as the daemon's parseState (src/otp/state.ts). */
-export function validState(v) {
-	return isObject(v) && v.version === 1 && isCount(v.lastAcceptedStep) && isObject(v.users) && Object.entries(v.users).every(([name, u]) => validAgentName(name) && validUser(u));
+export function validState(v: unknown): v is OtpState {
+	return isObject(v) && v["version"] === 1 && isCount(v["lastAcceptedStep"]) && isObject(v["users"]) && Object.entries(v["users"]).every(([name, u]) => validAgentName(name) && validUser(u));
 }
 
 /** A user's entry, or all-zero when it has none. */
-export function userOf(state, user) {
-	return Object.hasOwn(state.users, user) ? state.users[user] : emptyUser();
+export function userOf(state: OtpState, user: string): UserState {
+	return Object.hasOwn(state.users, user) ? state.users[user]! : emptyUser();
+}
+
+/** What {@link readState} returns: how the file stood, and the state to use. */
+export interface StateReading {
+	status: "ok" | "missing" | "corrupt";
+	state: OtpState;
 }
 
 /**
  * Read the state file. A missing file is all-zero; an unparseable or malformed one is "corrupt"
  * (the daemon fails closed on it: every user hard-locked, so status reports that).
- * @returns {{ status: "ok" | "missing" | "corrupt", state: object }}
  */
-export function readState(path, read = readFileSync) {
-	let text;
+export function readState(path: string, read: (path: string, encoding: "utf8") => string = readFileSync): StateReading {
+	let text: string;
 	try {
 		text = read(path, "utf8");
 	} catch (err) {
-		if (err.code === "ENOENT") return { status: "missing", state: emptyState() };
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing", state: emptyState() };
 		throw err;
 	}
 	try {
@@ -182,7 +218,7 @@ export function readState(path, read = readFileSync) {
 }
 
 /** The state with one user's entry cleared (no entry means all-zero). `lastAcceptedStep` is kept so a spent code can't be replayed. */
-export function withoutUser(state, user) {
+export function withoutUser(state: OtpState, user: string): OtpState {
 	const { [user]: _gone, ...users } = state.users;
 	return { ...state, users };
 }
@@ -194,18 +230,25 @@ export function withoutUser(state, user) {
  * The cost is that the code an authenticator shows now, and the one after it, can't open a
  * window; see secondsUntilFreshCode.
  */
-export function spendRecentCodes(state, now) {
+export function spendRecentCodes(state: OtpState, now: number): OtpState {
 	return { ...state, lastAcceptedStep: Math.max(state.lastAcceptedStep, Math.floor(now / 30000) + 1) };
 }
 
 /** Seconds from `now` until an authenticator shows a code spendRecentCodes(…, now) didn't spend (31 to 60). */
-export function secondsUntilFreshCode(now) {
+export function secondsUntilFreshCode(now: number): number {
 	return Math.ceil(((Math.floor(now / 30000) + 2) * 30000 - now) / 1000);
 }
 
 /** The state with every user cleared. */
-export function withoutUsers(state) {
+export function withoutUsers(state: OtpState): OtpState {
 	return { ...state, users: {} };
+}
+
+/** Injectable effects of {@link writeFileAtomic}. */
+export interface AtomicWriteIo {
+	fchown?: (fd: number, uid: number, gid: number) => void;
+	random?: (size: number) => Buffer;
+	beforeRename?: () => void;
 }
 
 /**
@@ -217,7 +260,12 @@ export function withoutUsers(state) {
  * just before the rename and can throw to abandon the write. `fchown` (it needs root) and
  * `random` are injectable for tests.
  */
-export function writeFileAtomic(path, text, { uid, gid, mode = 0o600 }, { fchown = fchownSync, random = randomBytes, beforeRename } = {}) {
+export function writeFileAtomic(
+	path: string,
+	text: string,
+	{ uid, gid, mode = 0o600 }: { uid: number; gid: number; mode?: number },
+	{ fchown = fchownSync, random = randomBytes, beforeRename }: AtomicWriteIo = {}
+): void {
 	const tmp = join(dirname(path), `.${basename(path)}.${random(8).toString("hex")}.tmp`);
 	const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
 	try {
@@ -238,37 +286,50 @@ export function writeFileAtomic(path, text, { uid, gid, mode = 0o600 }, { fchown
 }
 
 /** Write the state file atomically as 0600, chowned to the service user. */
-export function writeStateAtomic(path, state, owner, io) {
+export function writeStateAtomic(path: string, state: OtpState, owner: { uid: number; gid: number }, io?: AtomicWriteIo): void {
 	writeFileAtomic(path, JSON.stringify(state, null, "\t") + "\n", { ...owner, mode: 0o600 }, io);
 }
 
 /** Identity of one version of a file on disk ("missing" when there is none); the daemon uses the same test. */
-export function fileSignature(path, stat = statSync) {
+export function fileSignature(path: string, stat: (path: string) => Pick<Stats, "ino" | "mtimeMs" | "size"> = statSync): string {
 	try {
 		const st = stat(path);
 		return `${st.ino}:${st.mtimeMs}:${st.size}`;
 	} catch (err) {
-		if (err.code === "ENOENT") return "missing";
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return "missing";
 		throw err;
 	}
+}
+
+/** The CLI's state-file reader and writer (see {@link stateStore}). */
+export interface StateStore {
+	read: (path: string) => StateReading;
+	write: (path: string, state: OtpState) => void;
 }
 
 /**
  * The CLI's state-file reader and writer, as a compare-and-swap: a write is abandoned when the
  * file changed after this store read it (the daemon wrote a lockout or a step meanwhile), so a
  * CLI edit never puts back data the daemon just replaced. The command then fails and is run again.
- * @param {{ uid: number, gid: number }} owner  the service user
+ * @param owner  the service user
  */
-export function stateStore(owner, { read = readFileSync, stat = statSync, ...io } = {}) {
-	const seen = new Map();
+export function stateStore(
+	owner: { uid: number; gid: number },
+	{
+		read = readFileSync,
+		stat = statSync,
+		...io
+	}: { read?: (path: string, encoding: "utf8") => string; stat?: (path: string) => Pick<Stats, "ino" | "mtimeMs" | "size"> } & AtomicWriteIo = {}
+): StateStore {
+	const seen = new Map<string, string>();
 	return {
-		read(path) {
+		read(path: string): StateReading {
 			seen.set(path, fileSignature(path, stat)); // before reading: a change in between fails the write, which is the safe side
 			return readState(path, read);
 		},
-		write(path, state) {
+		write(path: string, state: OtpState): void {
 			const expected = seen.get(path);
-			const beforeRename = () => {
+			const beforeRename = (): void => {
 				if (fileSignature(path, stat) !== expected) throw new Error(`${path} changed while this command ran (the broker wrote to it); nothing was changed, run the command again`);
 			};
 			writeStateAtomic(path, state, owner, { ...io, beforeRename });
@@ -277,8 +338,35 @@ export function stateStore(owner, { read = readFileSync, stat = statSync, ...io 
 	};
 }
 
+/** The lockout limits the CLI reports against. */
+export interface OtpLimits {
+	maxFailures?: number;
+	maxLockouts?: number;
+}
+
+/** One user's lock facts, as {@link describeUser} computes them. */
+export interface UserFacts {
+	locked: boolean;
+	failures: number | null;
+	maxFailures: number;
+	lockedUntil: string | null;
+	lockoutsLast24h: number | null;
+	maxLockouts: number;
+	hardLock: UserState["hardLock"];
+}
+
+/** A {@link UserFacts} with the user it is about; `corrupt` marks a user locked by an unreadable state file. */
+export interface UserStatus extends UserFacts {
+	user: string;
+	corrupt?: true;
+}
+
 /** One user's facts for `status`, from their entry and the config's limits. */
-export function describeUser(user, { maxFailures = DEFAULT_MAX_FAILURES, maxLockouts = DEFAULT_MAX_LOCKOUTS } = {}, now = Date.now()) {
+export function describeUser(
+	user: UserState,
+	{ maxFailures = DEFAULT_MAX_FAILURES, maxLockouts = DEFAULT_MAX_LOCKOUTS }: OtpLimits = {},
+	now = Date.now()
+): UserFacts {
 	const lockedUntil = user.lockedUntil && Date.parse(user.lockedUntil) > now ? user.lockedUntil : null;
 	return {
 		locked: Boolean(user.hardLock) || lockedUntil !== null,
@@ -294,11 +382,10 @@ export function describeUser(user, { maxFailures = DEFAULT_MAX_FAILURES, maxLock
 /**
  * The per-user facts for the given users (registered agents plus any user the file mentions).
  * A corrupt file locks every one of them, as the daemon does.
- * @returns {Array<{ user: string, corrupt?: true } & ReturnType<typeof describeUser>>}
  */
-export function describeUsers({ status, state }, users, limits = {}, now = Date.now()) {
+export function describeUsers({ status, state }: StateReading, users: string[], limits: OtpLimits = {}, now = Date.now()): UserStatus[] {
 	const names = [...new Set([...users, ...Object.keys(state.users)])].sort();
-	return names.map((user) =>
+	return names.map((user): UserStatus =>
 		status === "corrupt"
 			? { user, corrupt: true, locked: true, failures: null, maxFailures: limits.maxFailures ?? DEFAULT_MAX_FAILURES, lockedUntil: null, lockoutsLast24h: null, maxLockouts: limits.maxLockouts ?? DEFAULT_MAX_LOCKOUTS, hardLock: null }
 			: { user, ...describeUser(userOf(state, user), limits, now) }
@@ -306,7 +393,15 @@ export function describeUsers({ status, state }, users, limits = {}, now = Date.
 }
 
 /** Human-readable lines for `describeUsers`'s result. */
-export function formatStatus(users, { statePath, fileStatus, configured, unlockCommand = "sudo gh-broker otp unlock" }) {
+export function formatStatus(
+	users: UserStatus[],
+	{
+		statePath,
+		fileStatus,
+		configured,
+		unlockCommand = "sudo gh-broker otp unlock"
+	}: { statePath: string; fileStatus: StateReading["status"]; configured: boolean; unlockCommand?: string }
+): string[] {
 	const lines = [`OTP configured: ${configured ? "yes" : "no (re-run the installer to set it up)"}`, `state file: ${statePath} (${fileStatus})`];
 	if (fileStatus === "corrupt") lines.push("LOCKED: the state file is unreadable, so the broker treats every user as hard-locked.", `Clear it with: ${unlockCommand} --all`);
 	if (users.length === 0) lines.push("no agents registered");

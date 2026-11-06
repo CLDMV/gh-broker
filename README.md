@@ -19,18 +19,18 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.10.2 (November 2026)
+### Latest: v0.10.3 (November 2026)
 
-- **The MCP entry reaches every Claude config folder an agent uses.** Sessions started with `CLAUDE_CONFIG_DIR` (like `~/.claude-secondary`) were left on the removed shared socket. `install` and `agent sync` now update every `~/.claude*` folder in the agent's home, the folder of each running session, and folders saved with `--claude-config`.
-- **Smaller package.** The 1.4 MB source map no longer ships, and the bundle is built minified with tsup, taking the package from 3.2 MB to about 780 kB unpacked. The Node.js floor is back to 22.0.0.
-- [View full v0.10.2 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.2.md)
+- **The command and installer are built from `src/`.** The `gh-broker` CLI and installer moved from plain JavaScript in `deploy/` to TypeScript in `src/cli/`, bundled to `bin/gh-broker.mjs` next to the daemon. npm no longer warns about the bin path on publish, and a global install works exactly as before.
+- **Installing from a checkout is `sudo ./deploy/install.sh`.** It builds as the checkout's owner, never as root, and rebuilds on every run so a pulled checkout never deploys a stale bundle.
+- [View full v0.10.3 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.3.md)
 
 ### Recent Releases
 
+- **v0.10.2** (November 2026) — the MCP entry reaches every Claude config folder an agent uses, and the package drops from 3.2 MB to about 780 kB ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.2.md))
 - **v0.10.1** (November 2026) — the OTP gate says why it refused a code, and `report_dependents` lists dev branches on large orgs without a 502 ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.1.md))
 - **v0.10.0** (November 2026) — OTP gate for risky write tools, one socket per agent with the `gh-broker` command, eleven new write tools and a built-in deny list ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.0.md))
 - **v0.9.0** (November 2026) — `report_alert_status`, `report_release_changes` and `report_dependents` for the release and fleet skills, `ciVerbosity` on `list_pull_requests`, and install from npm ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.9.0.md))
-- **v0.8.0** (November 2026) — `npm_scaffold` creates an npm package and its trusted publisher, `ghcr_push` pushes images without an agent-held token, and optional credentials hide their tools ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.8.0.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
@@ -132,7 +132,7 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ### 📦 **One-Command Install & Upgrade**
 
-`sudo gh-broker install` (or `sudo node deploy/install.mjs` from a checkout) handles first install and every upgrade: builds under the checkout's own owner (no `chown`, ever), merges shipped config defaults over the deployed config, lets you choose how PATs are stored at rest, and runs a post-deploy smoke test.
+`sudo gh-broker install` (or `sudo ./deploy/install.sh` from a checkout, which builds as the checkout's own owner first, no `chown` ever) handles first install and every upgrade: merges shipped config defaults over the deployed config, lets you choose how PATs are stored at rest, and runs a post-deploy smoke test.
 
 📦 **Full prerequisites, PAT scopes, and flags: [deploy/README.md](deploy/README.md)**
 
@@ -163,10 +163,10 @@ From a checkout:
 ```sh
 git clone https://github.com/CLDMV/gh-broker.git
 cd gh-broker
-sudo node deploy/install.mjs <agent-user>
+sudo ./deploy/install.sh <agent-user>
 ```
 
-Both take the same flags. The installer creates the service user, registers each agent user (its own group, socket and MCP config; see `gh-broker agent`), builds as the checkout's owner when there's no bundle yet, merges the shipped defaults with the deployed config, stores the PATs in the backend you pick, installs the unit and runs a smoke test. Prerequisites, PAT scopes, unattended installs and every flag: [deploy/README.md](deploy/README.md).
+Both take the same flags. From a checkout, `deploy/install.sh` first installs node if there is none, then builds `dist/` and `bin/` as the checkout's owner, then runs `bin/gh-broker.mjs install`. The installer creates the service user, registers each agent user (its own group, socket and MCP config; see `gh-broker agent`), merges the shipped defaults with the deployed config, stores the PATs in the backend you pick, installs the unit and runs a smoke test. Prerequisites, PAT scopes, unattended installs and every flag: [deploy/README.md](deploy/README.md).
 
 ---
 
@@ -202,6 +202,13 @@ src/
   server.ts         Unix-socket MCP server toward the agent (StdioServerTransport)
   audit.ts          structured audit log (never tokens)
   denylist.ts       tools refused at config load, gated or not (file writes, repo deletion, repo configuration)
+  bin/
+    gh-broker.ts    the `gh-broker` command (package bin, built to bin/gh-broker.mjs)
+  cli/
+    cli.ts          `gh-broker otp` / `gh-broker agent` dispatch (otp-cli.ts, agent-cli.ts)
+    install.ts      the installer — first install AND upgrade (`gh-broker install`)
+    real-deps.ts    the real host effects the CLI modules take as deps
+    *.ts            installer and CLI pieces (config merge, secret store, system ops, MCP config, OTP, smoke test, npm token setup)
   verbs/
     report_unlabeled.ts  issues/PRs with no labels, one repo or org-wide
     report_security_alerts.ts  open Dependabot/CodeQL/secret alerts, one repo or org-wide
@@ -224,9 +231,7 @@ src/
     ghcr/                config policy, tar + image-archive reader, OCI registry client, push, job queue
     link_issue.ts         addClosingIssueReference (App token) — DEFERRED, not wired in
 deploy/
-  install.mjs       interactive installer — first install AND upgrade (sudo node)
-  install.sh        optional Linux bootstrap — set up node, then hand off to install.mjs
-  lib/              installer pieces (config merge, secret store, system ops, smoke test, npm token setup)
+  install.sh        install from a checkout — set up node if missing, build as the checkout's owner, run the installer
   gh-broker.service systemd unit (hardened)
   README.md         prerequisites + PAT scopes + install/upgrade/wiring
 docs/

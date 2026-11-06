@@ -3,7 +3,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { smokeTest } from "../deploy/lib/smoke.mjs";
+import { smokeTest } from "../src/cli/smoke.ts";
 
 // Real node:net, except connect() lets a test grab the client socket (to inject an error on it).
 const hook = vi.hoisted(() => ({ onSock: null as null | ((s: any) => void) }));

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mergeConfig, layerConfig, overlayFromFlags, readOperatorConfig, buildConfig, secretsBlock, addClaudeConfigDirs, checkClaudeConfigDirs, DEFAULT_GHCR_DROP_DIR } from "../deploy/lib/config-merge.mjs";
+import { mergeConfig, layerConfig, overlayFromFlags, readOperatorConfig, buildConfig, secretsBlock, addClaudeConfigDirs, checkClaudeConfigDirs, DEFAULT_GHCR_DROP_DIR } from "../src/cli/config-merge.ts";
 
 const example = {
 	listen: "agents:/run/gh-broker/agents",

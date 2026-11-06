@@ -4,7 +4,7 @@ One interactive installer does first-install and upgrade. Design and rationale: 
 
 ## 0. Host prerequisites
 
-- **Node ≥ 20** — the only real prerequisite; the installer runs under it (`sudo gh-broker install`, or `sudo node deploy/install.mjs` from a checkout). If node isn't installed yet, the optional Linux bootstrap `sudo ./deploy/install.sh` sets up a system-wide nvm + node + the `/usr/local/bin/node` symlink, then hands off to the Node installer.
+- **Node ≥ 22** — the only real prerequisite; the installer runs under it (`sudo gh-broker install`). From a checkout, `sudo ./deploy/install.sh` sets up a system-wide nvm + node + the `/usr/local/bin/node` symlink if node isn't installed yet, builds the checkout as its owner, then hands off to the installer (`bin/gh-broker.mjs install`).
 - **`socat`** — the agent's stdio↔socket bridge. **`rsync`** — used to sync the build (falls back to a plain copy if absent). **`systemd`** with `systemctl`. **`sudo`** — used internally to build as the checkout's own owner (see step 5 below), not just to invoke the installer itself. Install what's missing (`apt install socat rsync sudo` etc.).
 
 The installer maintains `/usr/local/bin/node` as the single node indirection (CLI and service resolve the same link). Bumping node is re-pointing that symlink — which the installer does on every run.
@@ -31,7 +31,7 @@ sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker   # in
 sudo gh-broker install [agent-user]
 ```
 
-`--prefix /usr/local` puts the package in `/usr/local/lib/node_modules/@cldmv/gh-broker` and the command at `/usr/local/bin/gh-broker`, independent of the Node version and on `sudo`'s PATH. `--ignore-scripts` because a global install runs as root on the box that holds the tokens. The package ships a prebuilt `dist/`, so there is nothing to build. A copy installed under an nvm version folder breaks when Node is upgraded; `gh-broker install` warns if it finds one. One-offs still work: `sudo npx @cldmv/gh-broker install [agent-user]`, and from a checkout `sudo node deploy/install.mjs [agent-user]`.
+`--prefix /usr/local` puts the package in `/usr/local/lib/node_modules/@cldmv/gh-broker` and the command at `/usr/local/bin/gh-broker`, independent of the Node version and on `sudo`'s PATH. `--ignore-scripts` because a global install runs as root on the box that holds the tokens. The package ships a prebuilt `dist/`, so there is nothing to build. A copy installed under an nvm version folder breaks when Node is upgraded; `gh-broker install` warns if it finds one. One-offs still work: `sudo npx @cldmv/gh-broker install [agent-user]`, and from a checkout `sudo ./deploy/install.sh [agent-user]`.
 
 `gh-broker install` takes the same flags either way. `agent-user` registers that user as an agent (see [Agents](#3-agents-one-socket-and-one-mcp-config-each)); on an upgrade with agents already registered it is optional and adds nobody. A first install with no agent asks for one (`--non-interactive` needs `--agent-user`); it never takes `$SUDO_USER`, the admin running sudo. The installer walks the whole thing and is idempotent:
 
@@ -39,7 +39,7 @@ sudo gh-broker install [agent-user]
 2. **registers the agents**: members of the old shared `gh-broker-clients` group become registered agents (the group itself is left alone), the user named on the command line is added (and created if missing), and each one gets its own group `gh-broker-agent-<user>`,
 3. creates the `gh-broker` service user and, when the config has a `ghcr` block, the GHCR drop directory (owned by the agent named on the command line, else the first registered one),
 4. points `/usr/local/bin/node` at the running node,
-5. builds `dist/` if it isn't already built, or rebuilds it if a prior run left it (or `node_modules/`) owned by someone other than the checkout's owner — the build itself runs via `sudo -u '#<uid>'` as whoever owns `deploy/install.mjs`, not as root, so the installer never leaves root-owned files behind in your checkout,
+5. checks the daemon bundle `dist/index.mjs` is there (the npm package ships it; from a checkout, `deploy/install.sh` builds it first via `sudo -u '#<uid>'` as whoever owns the checkout's `package.json`, not as root, removing any `dist/`, `bin/` or `node_modules/` a root-run build left behind, so nothing root-owned stays in your checkout),
 6. regenerates the config (replacing an old `unix:` `listen` with `agents:/run/gh-broker/agents`) by layering `config.example.json`, whatever is deployed, your `--config` file and your flags (your data is preserved; allowlist changes from the repo arrive; see [Configuring the install](#configuring-the-install)); a first install with no owner asks for one,
 7. sets up the optional **npm integration** when asked (offered on a first install, or `--npm`): an npm web login it waits on, then the token it creates for `npm_scaffold` (see [npm integration](#npm-integration-npm_scaffold)),
 8. **asks how to store the credentials** — `systemd-creds` (encrypted at rest, host-bound; recommended) or a plaintext `file` (`0640 root:gh-broker`; portable) — then stores the tokens in the chosen backend: it keeps existing creds, decrypts a legacy `systemd-creds` token when you switch to `file`, and **prompts only for what it can't find** (input hidden); when no OTP seed is stored it also generates one and shows it once (see [OTP gate](#otp-gate-gh-broker-otp)),
@@ -53,7 +53,7 @@ Pass flags plus `--non-interactive` (`-y`) to skip every prompt: `--agent-user <
 
 ```sh
 sudo GH_BROKER_SECRET_ACME_READ=… GH_BROKER_SECRET_ACME_WRITE=… \
-  /usr/local/bin/node deploy/install.mjs --agent-user repo --owner acme \
+  gh-broker install --agent-user repo --owner acme \
   --secrets-provider systemd-creds --non-interactive
 ```
 

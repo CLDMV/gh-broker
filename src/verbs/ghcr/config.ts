@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T00:40:55-07:00 (1793518855)
+ *	@Last modified time: 2026-11-06T06:12:16-08:00 (1793974336)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -21,7 +21,7 @@
  * PAT with `write:packages`, and that token must only ever reach `ghcr.io`. Keeping it in
  * its own block (rather than a third ref on `owners.<o>`) keeps the existing owner
  * credentials untouched and lets the installer treat the whole block as operator data, set with
- * `--ghcr-*` flags or a `--config` file (see deploy/lib/config-merge.mjs).
+ * `--ghcr-*` flags or a `--config` file (see src/cli/config-merge.ts).
  *
  *   "ghcr": {
  *     "dropDir": "/srv/gh-broker/ghcr-drop",

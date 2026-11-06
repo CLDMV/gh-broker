@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { emptyState } from "../../deploy/lib/otp.mjs";
+import { emptyState } from "../../src/cli/otp.ts";
 
 export const NOW = Date.parse("2026-11-01T12:05:00.000Z");
 export const GROUPS = [
@@ -8,7 +8,7 @@ export const GROUPS = [
 ];
 export const config = { listen: "agents:/run/gh-broker/agents", otp: { seed: "cred:otp-seed" } };
 
-/** Fake effects for the CLI (deploy/lib/cli.mjs). `files` is the agent users' ~/.claude.json contents by path. */
+/** Fake effects for the CLI (src/cli/cli.ts). `files` is the agent users' ~/.claude.json contents by path. */
 export function makeDeps(over: Record<string, unknown> = {}, files: Record<string, string> = {}) {
 	const out: string[] = [];
 	const err: string[] = [];

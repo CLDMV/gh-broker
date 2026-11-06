@@ -1,13 +1,13 @@
 /**
  *
  *	@Project: @cldmv/gh-broker
- *	@Filename: /deploy/lib/prompt.mjs
+ *	@Filename: /src/cli/prompt.ts
  *	@Date: 2026-09-06T10:05:35-07:00 (1788714335)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -28,11 +28,11 @@ const BS = 8; // Backspace
  * visible prompts echo them, secret prompts don't. Handles Enter, Ctrl-C (abort),
  * Ctrl-D, and Backspace. Falls back to non-raw when stdin isn't a TTY.
  */
-function readLine(question, echo) {
-	return new Promise((resolve, reject) => {
+function readLine(question: string, echo: boolean): Promise<string> {
+	return new Promise<string>((resolve, reject) => {
 		stdout.write(question);
 		let input = "";
-		const onData = (chunk) => {
+		const onData = (chunk: Buffer): void => {
 			const s = chunk.toString("utf8");
 			for (const ch of s) {
 				const code = ch.charCodeAt(0);
@@ -57,7 +57,7 @@ function readLine(question, echo) {
 				if (echo) stdout.write(ch);
 			}
 		};
-		const cleanup = () => {
+		const cleanup = (): void => {
 			stdin.removeListener("data", onData);
 			if (stdin.isTTY) stdin.setRawMode(false);
 			stdin.pause();
@@ -69,17 +69,17 @@ function readLine(question, echo) {
 }
 
 /** Ask a visible question; typed characters are echoed. Returns the trimmed answer. */
-export function promptLine(question) {
+export function promptLine(question: string): Promise<string> {
 	return readLine(question, true);
 }
 
 /** Ask for a secret; typed characters are NOT echoed. Never prints the value. */
-export function promptHidden(question) {
+export function promptHidden(question: string): Promise<string> {
 	return readLine(question, false);
 }
 
 /** Yes/no confirmation. Defaults to no unless the answer starts with y/Y. */
-export async function confirm(question) {
+export async function confirm(question: string): Promise<boolean> {
 	const a = await promptLine(`${question} [y/N] `);
 	return /^y(es)?$/i.test(a);
 }
@@ -88,11 +88,11 @@ export async function confirm(question) {
  * Present numbered options ({ key, label }) and return the chosen key.
  * Empty input picks the 1-based default `def`.
  */
-export async function choose(question, options, def = 1) {
+export async function choose<K extends string>(question: string, options: { key: K; label: string }[], def = 1): Promise<K> {
 	stdout.write(`${question}\n`);
 	options.forEach((o, i) => stdout.write(`  ${i + 1}) ${o.label}\n`));
 	const a = await promptLine(`Choose [${def}]: `);
 	const n = a === "" ? def : parseInt(a, 10);
 	const idx = Number.isInteger(n) && n >= 1 && n <= options.length ? n - 1 : def - 1;
-	return options[idx].key;
+	return options[idx]!.key;
 }

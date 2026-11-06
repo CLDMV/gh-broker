@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { otpCommand } from "../deploy/lib/otp-cli.mjs";
-import { emptyState, emptyUser } from "../deploy/lib/otp.mjs";
+import { otpCommand } from "../src/cli/otp-cli.ts";
+import { emptyState, emptyUser } from "../src/cli/otp.ts";
 import { makeDeps, config, NOW } from "./helpers/cli-deps.mjs";
 
 /** What a CLI write sets lastAcceptedStep to at NOW: every code up to one step ahead is spent. */
