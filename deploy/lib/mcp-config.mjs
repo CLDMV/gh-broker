@@ -15,13 +15,16 @@
 
 /**
  * Writing an agent user's Claude Code MCP config (#143, contract v2). The broker's entry goes in
- * the top-level `mcpServers` of `<home>/.claude.json`; nothing else in that file is touched. The
+ * the top-level `mcpServers` of `<home>/.claude.json`, and of the `.claude.json` in each other
+ * Claude config folder the user has (#163: a session started with `CLAUDE_CONFIG_DIR` reads only
+ * that folder's file); nothing else in those files is touched. The
  * pure functions build the entry, pick its key and edit the JSON text; `applyMcpConfig` and
  * `removeMcpConfig` do the file work (backup, atomic write that keeps the owner and mode, and a
  * read-back check) with every filesystem effect injected. Root does that work in a directory the
  * agent user owns, so `readOwnedFile` refuses anything but the user's own plain file.
  */
-import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
+import { basename } from "node:path";
 import { agentGroup, socketPath } from "./agents.mjs";
 
 export const MCP_FILE = ".claude.json";
@@ -33,6 +36,30 @@ export const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 
 /** A file root must not read or replace: a symlink, not a regular file, not the user's, hard-linked, or oversized. */
 export class UnsafeFile extends Error {}
+
+/** A config folder root won't work in (a symlink, not the agent's, outside the agent's home). It is skipped with a warning, not an error. */
+export class SkippedFolder extends Error {}
+
+/** Most of `/proc/<pid>/cmdline` read (only argv[0] and argv[1] are looked at). */
+export const MAX_CMDLINE_BYTES = 64 * 1024;
+/** Most of `/proc/<pid>/environ` read: the agent sets its own environment's size, and root reads it. */
+export const MAX_ENVIRON_BYTES = 1024 * 1024;
+
+/** Up to `max` bytes of `path`. */
+export function readHead(path, max) {
+	const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+	try {
+		const buf = Buffer.alloc(max);
+		let length = 0;
+		for (let n; length < max && (n = readSync(fd, buf, length, max - length, null)) > 0; ) length += n;
+		return buf.toString("utf8", 0, length);
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/** Whether a process's argv is a Claude Code session: the `claude` binary, or node running the claude-code package. */
+const isClaude = (argv) => argv.slice(0, 2).some((a) => basename(a) === "claude" || a.includes("/@anthropic-ai/claude-code/"));
 
 /**
  * Read `path` as root on behalf of the user `uid`, without following a symlink: the file must be
@@ -159,27 +186,29 @@ export function dropEntries(text, dir) {
 }
 
 /**
- * Set `user`'s entry in their `.claude.json`.
+ * Set `user`'s entry in the `.claude.json` in `folder`.
  * @param {object} o
- * @param {string} o.home  the agent user's home directory
+ * @param {string} o.folder  the folder holding the file: the agent user's home, or a Claude config folder
  * @param {string} o.user
- * @param {string} o.dir   the agents' socket directory
+ * @param {string} o.dir     the agents' socket directory
  * @param {{ uid: number, gid: number }} o.owner  the agent user; owner for a file that has to be created
- * @param {object} io      { read(path, uid) -> { text, stat: { uid, gid, mode } } | undefined (see readOwnedFile), write(path, text, { uid, gid, mode }) }
- * @returns {{ status: "created" | "written" | "unchanged" | "unreadable" | "unsafe", key?: string, reason?: string, entry: object, path: string }}
+ * @param {boolean} [o.create=true]  create the file when there is none; when false that is "no-file"
+ * @param {object} io        { read(path, uid) -> { text, stat: { uid, gid, mode } } | undefined (see readOwnedFile), write(path, text, { uid, gid, mode }) }
+ * @returns {{ status: "created" | "written" | "unchanged" | "unreadable" | "unsafe" | "no-file", key?: string, reason?: string, entry: object, path: string }}
  */
-export function applyMcpConfig({ home, user, dir, owner }, io) {
-	const path = `${home}/${MCP_FILE}`;
+export function applyMcpConfig({ folder, user, dir, owner, create = true }, io) {
+	const path = `${folder}/${MCP_FILE}`;
 	const entry = mcpEntry(user, dir);
 	const before = load(io, path, owner.uid);
 	if (before?.unsafe) return { status: "unsafe", reason: before.unsafe, entry, path };
+	if (before === undefined && !create) return { status: "no-file", entry, path };
 	const merged = mergeEntry(before?.text, user, dir);
 	if (merged.status === "unreadable") return { status: "unreadable", entry, path };
 	if (merged.status === "unchanged") return { status: "unchanged", key: merged.key, entry, path };
 	let target = { ...owner, mode: 0o600 };
 	if (before !== undefined) {
 		target = { uid: before.stat.uid, gid: before.stat.gid, mode: before.stat.mode & 0o777 };
-		io.write(`${home}/${MCP_BACKUP}`, before.text, target);
+		io.write(`${folder}/${MCP_BACKUP}`, before.text, target);
 	}
 	io.write(path, merged.text, target);
 	const after = load(io, path, owner.uid);
@@ -188,24 +217,120 @@ export function applyMcpConfig({ home, user, dir, owner }, io) {
 }
 
 /**
- * Remove the broker entry from `user`'s `.claude.json`, backing the file up first.
+ * Remove the broker entry from the `.claude.json` in `folder`, backing the file up first.
  * @returns {{ status: "removed" | "absent" | "no-file" | "unreadable" | "unsafe", keys?: string[], reason?: string, path: string }}
  */
-export function removeMcpConfig({ home, dir, uid }, io) {
-	const path = `${home}/${MCP_FILE}`;
+export function removeMcpConfig({ folder, dir, uid }, io) {
+	const path = `${folder}/${MCP_FILE}`;
 	const before = load(io, path, uid);
 	if (before === undefined) return { status: "no-file", path };
 	if (before.unsafe) return { status: "unsafe", reason: before.unsafe, path };
 	const dropped = dropEntries(before.text, dir);
 	if (dropped.status !== "removed") return { status: dropped.status, path };
 	const target = { uid: before.stat.uid, gid: before.stat.gid, mode: before.stat.mode & 0o777 };
-	io.write(`${home}/${MCP_BACKUP}`, before.text, target);
+	io.write(`${folder}/${MCP_BACKUP}`, before.text, target);
 	io.write(path, dropped.text, target);
 	return { status: "removed", keys: dropped.keys, path };
 }
 
-/** The MCP status of `user`'s file for `agent list`: mcpStatus, or "unsafe (<reason>)". */
-export function mcpFileStatus({ home, user, dir, uid }, io) {
-	const got = load(io, `${home}/${MCP_FILE}`, uid);
+/** The MCP status of the file in `folder` for `agent list`: mcpStatus, "unsafe (<reason>)", or `ifAbsent` when there is no file and that is given. */
+export function mcpFileStatus({ folder, user, dir, uid, ifAbsent }, io) {
+	const got = load(io, `${folder}/${MCP_FILE}`, uid);
+	if (got === undefined && ifAbsent !== undefined) return ifAbsent;
 	return got?.unsafe ? `unsafe (${got.unsafe})` : mcpStatus(got?.text, user, dir);
 }
+
+/**
+ * The folders in `home` that may be Claude config folders: `.claude*` entries that are real
+ * directories (a symlink is skipped; readdir's entry types don't follow it). Whether one holds a
+ * `.claude.json` is decided when it's opened, through pinFolder.
+ */
+export function scanConfigFolders(home, { readdir = readdirSync } = {}) {
+	let entries;
+	try {
+		entries = readdir(home, { withFileTypes: true });
+	} catch {
+		return []; // no home directory, or root can't list it: only ~/.claude.json is tried
+	}
+	return entries.filter((e) => e.isDirectory() && e.name.startsWith(".claude")).map((e) => `${home}/${e.name}`).sort();
+}
+
+/**
+ * The absolute `CLAUDE_CONFIG_DIR` of every `claude` process `uid` is running, read from `proc`.
+ * Only root can read another user's environ, which is the case here. The values come from the
+ * agent, so pinFolder checks each one before anything is read there.
+ */
+export function sessionConfigFolders(uid, { proc = "/proc", fs = { readdirSync, statSync, readHead } } = {}) {
+	const found = new Set();
+	let pids;
+	try {
+		pids = fs.readdirSync(proc).filter((n) => /^\d+$/.test(n));
+	} catch {
+		return [];
+	}
+	for (const pid of pids) {
+		try {
+			if (fs.statSync(`${proc}/${pid}`).uid !== uid) continue;
+			const argv = fs.readHead(`${proc}/${pid}/cmdline`, MAX_CMDLINE_BYTES).split("\0");
+			if (!isClaude(argv)) continue;
+			const env = fs.readHead(`${proc}/${pid}/environ`, MAX_ENVIRON_BYTES).split("\0");
+			const value = env.find((e) => e.startsWith("CLAUDE_CONFIG_DIR="))?.slice("CLAUDE_CONFIG_DIR=".length).replace(/\/+$/, "");
+			if (value?.startsWith("/")) found.add(value);
+		} catch {
+			// the process exited while being read
+		}
+	}
+	return [...found].sort();
+}
+
+/**
+ * Open `folder` as a directory owned by `uid`, without following a symlink, and return an io that
+ * reaches the files in it through the open descriptor (`/proc/self/fd/<n>/...`), so the agent
+ * can't swap the folder for a symlink between the check and the write. With `within` (the real
+ * path of the agent's home), the opened folder must also resolve inside it: owning a folder
+ * doesn't mean the agent can reach it (one inside another user's private directory, named through
+ * `..` or a symlinked parent), and root shouldn't write where the agent couldn't. Error messages
+ * keep the folder's own path. Throws SkippedFolder for a folder root won't use; returns undefined
+ * when there is no such folder.
+ * @returns {{ io: object, close: () => void } | undefined}
+ */
+export function pinFolder(folder, uid, io, { within, open = openSync, fstat = fstatSync, close = closeSync, readlink = readlinkSync } = {}) {
+	let fd;
+	try {
+		fd = open(folder, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+	} catch (err) {
+		if (err.code === "ENOENT") return undefined;
+		if (err.code === "ELOOP" || err.code === "ENOTDIR") throw new SkippedFolder(`${folder} is a symlink or not a directory`);
+		throw err;
+	}
+	const base = `/proc/self/fd/${fd}`;
+	const refuse = (why) => {
+		close(fd);
+		throw new SkippedFolder(why);
+	};
+	const uidOf = fstat(fd).uid;
+	if (uidOf !== uid) refuse(`${folder} is owned by uid ${uidOf}, not the agent user (uid ${uid})`);
+	if (within !== undefined) {
+		const real = readlink(base);
+		if (real !== within && !real.startsWith(`${within}/`)) refuse(`${folder} is outside the agent's home directory`);
+	}
+	const at = (p) => base + p.slice(folder.length);
+	const named = (fn) => {
+		try {
+			return fn();
+		} catch (err) {
+			if (err instanceof Error) err.message = err.message.split(base).join(folder);
+			throw err;
+		}
+	};
+	return {
+		io: { read: (p, u) => named(() => io.read(at(p), u)), write: (p, text, owner) => named(() => io.write(at(p), text, owner)) },
+		close: () => close(fd)
+	};
+}
+
+/**
+ * The `pin` effect for an io: pinFolder, held inside the real path of `home` when one is given
+ * (a found folder) and not when it isn't (a folder root saved with --claude-config).
+ */
+export const pinner = (io, { realpath = realpathSync } = {}) => (folder, uid, home) => pinFolder(folder, uid, io, { within: home === undefined ? undefined : realpath(home) });

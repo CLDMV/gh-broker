@@ -24,7 +24,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseGroups, parsePasswd } from "./lib/agents.mjs";
 import { stateStore, writeFileAtomic, storeSeed } from "./lib/otp.mjs";
-import { readOwnedFile } from "./lib/mcp-config.mjs";
+import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./lib/mcp-config.mjs";
 import { readSecretsFile, writeSecretsFile } from "./lib/secret-store.mjs";
 import { smokeTest } from "./lib/smoke.mjs";
 import { run, isRoot, requireUid, requireGid, systemdCredsEncrypt, writeCredsDropin, restartService, ensureAgentGroup, removeAgentGroup } from "./lib/system.mjs";
@@ -62,6 +62,8 @@ export function realDeps() {
 		isRoot,
 		host: () => hostname(),
 		readConfig: () => JSON.parse(readFileSync(configPath(), "utf8")),
+		// Atomic: agent commands now write the live config, and a torn file would stop the daemon.
+		writeConfig: (cfg) => writeFileAtomic(configPath(), JSON.stringify(cfg, null, "\t") + "\n", { uid: 0, gid: requireGid(SVC), mode: 0o640 }),
 		groups: () => parseGroups(readText("/etc/group") ?? ""),
 		userInfo: (user) => {
 			const r = run("getent", ["passwd", user], { allowFail: true });
@@ -69,7 +71,10 @@ export function realDeps() {
 		},
 		ensureGroup: (user) => ensureAgentGroup(user, SVC),
 		removeGroup: removeAgentGroup,
-		mcpIO: { read: readOwnedFile, write: (p, text, owner) => writeFileAtomic(p, text, owner) },
+		mcpIO: (() => {
+			const io = { read: readOwnedFile, write: (p, text, owner) => writeFileAtomic(p, text, owner) };
+			return { ...io, scan: (home) => scanConfigFolders(home), sessions: (uid) => sessionConfigFolders(uid), pin: pinner(io) };
+		})(),
 		socketExists: existsSync,
 		smoke: smokeTest,
 		versions: () => ({ pkg: JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version, deployed: deployedVersion() }),

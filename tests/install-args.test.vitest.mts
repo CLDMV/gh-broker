@@ -146,6 +146,20 @@ describe("parseArgs", () => {
 	});
 });
 
+describe("--claude-config (#163)", () => {
+	it("takes <user>:<absolute folder>, repeatable, without a trailing slash", () => {
+		expect(parseArgs(["--claude-config", "glmtest:/srv/claude/", "--claude-config", "repo:/x"]).claudeConfigs).toEqual([{ user: "glmtest", dir: "/srv/claude" }, { user: "repo", dir: "/x" }]);
+		expect(parseArgs(["--claude-config", "repo:/"]).claudeConfigs).toEqual([{ user: "repo", dir: "/" }]);
+	});
+	it("refuses a missing user, a relative folder or a bad name", () => {
+		expect(() => parseArgs(["--claude-config", "/srv/claude"])).toThrow('--claude-config takes <agent user>:<absolute folder>, got "/srv/claude"');
+		expect(() => parseArgs(["--claude-config", ":/srv"])).toThrow(/takes <agent user>:<absolute folder>/);
+		expect(() => parseArgs(["--claude-config", "repo:rel"])).toThrow(/takes <agent user>:<absolute folder>/);
+		expect(() => parseArgs(["--claude-config", "Bad:/x"])).toThrow(/not a valid agent user name/);
+		expect(() => parseArgs(["--claude-config"])).toThrow(/requires a value/);
+	});
+});
+
 describe("envSecretKey", () => {
 	it("upper-cases and replaces non-alphanumerics", () => {
 		expect(envSecretKey("npm-token")).toBe("GH_BROKER_SECRET_NPM_TOKEN");
