@@ -1,6 +1,6 @@
 {
 	"name": "@cldmv/gh-broker",
-	"version": "0.10.3",
+	"version": "0.10.4",
 	"description": "Local credential-routing MCP proxy: holds per-org GitHub PATs out of the agent's reach, routes by repo owner, exposes a config-driven default-deny toolset in front of GitHub's hosted MCP.",
 	"type": "module",
 	"license": "Apache-2.0",
@@ -28,12 +28,11 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"build": "npm run typecheck && tsup",
+		"types:check": "tsc -p tsconfig.json --noEmit",
+		"build": "npm run types:check && tsup",
 		"start": "node dist/index.mjs",
 		"dev": "node --experimental-strip-types --watch src/index.ts",
 		"build:ci": "npm run build",
-		"test:types": "npm run typecheck",
 		"test": "node tests/run-vitest.mjs",
 		"test:watch": "vitest --config .configs/vitest.config.mjs",
 		"coverage": "node tests/run-vitest.mjs --coverage-quiet",
