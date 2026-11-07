@@ -21,6 +21,7 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { UpstreamPool } from "../src/upstream.ts";
+import pkg from "../package.json" with { type: "json" };
 
 const config: any = { listen: "unix:/x", upstream: "https://api.githubcopilot.com/mcp/", tools: [], owners: {} };
 
@@ -58,6 +59,7 @@ describe("UpstreamPool", () => {
 		await pool.forward("get_me", {}, "TOK");
 		await pool.forward("list_issues", {}, "TOK");
 		expect(vi.mocked(Client)).toHaveBeenCalledTimes(1); // connection created once, then reused
+		expect(vi.mocked(Client)).toHaveBeenCalledWith({ name: "cldmv-gh-broker", version: pkg.version });
 	});
 
 	it("evicts the stale client and retries ONCE on a failed op", async () => {

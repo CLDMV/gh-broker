@@ -16,10 +16,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import pkg from "../package.json" with { type: "json" };
 import type { Config } from "./types.ts";
 import type { Upstream } from "./router.ts";
 
-const CLIENT_INFO = { name: "cldmv-gh-broker", version: "0.1.0" };
+const CLIENT_INFO = { name: "cldmv-gh-broker", version: pkg.version };
 
 /**
  * Pool of MCP client connections to the hosted GitHub MCP — one per bearer token,
