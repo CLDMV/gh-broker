@@ -19,11 +19,12 @@ import { join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import pkg from "../package.json" with { type: "json" };
 import type { Config } from "./types.ts";
 import type { Router } from "./router.ts";
 import { agentsDir, parseAgentGroups, type Agent } from "./agents.ts";
 
-const SERVER_INFO = { name: "gh-broker", version: "0.1.0" };
+const SERVER_INFO = { name: "gh-broker", version: pkg.version };
 
 export interface ServerOptions {
 	/** The group database to read agents from. Defaults to /etc/group. */
