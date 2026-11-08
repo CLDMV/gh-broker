@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
 import { join } from "node:path";
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { startServer } from "../src/server.ts";
+import pkg from "../package.json" with { type: "json" };
 
 // Real node:net, except createServer remembers the server-side sockets so a test can inject events on them.
 const seen = vi.hoisted(() => ({ sockets: [] as any[] }));
@@ -113,6 +114,7 @@ describe("startServer", () => {
 		const repo = await client(join(h.dir, "repo.sock"));
 		const init = await repo.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "1" } });
 		expect(init.result.serverInfo.name).toBe("gh-broker");
+		expect(init.result.serverInfo.version).toBe(pkg.version);
 		expect((await repo.request("tools/list", {})).result.tools).toEqual(catalog);
 		expect((await repo.request("tools/call", { name: "get_me", arguments: { a: 1 } })).result.content[0].text).toBe('repo:get_me:{"a":1}');
 		// arguments omitted → router receives {}
