@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T23:50:03-08:00 (1793692203)
+ *	@Last modified time: 2026-11-13T07:15:50-08:00 (1794582950)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -39,14 +39,14 @@ import { audit } from "../audit.ts";
 import { hostname } from "node:os";
 import type { Config, SecretStore } from "../types.ts";
 import { OTP_ARG, isGated, otpSettings, readSeed, windowText, type OtpSettings } from "./policy.ts";
+import { isEnabled } from "../availability.ts";
+import { OtpStateFile, emptyUser, userState, type HardLock, type OtpState, type UserState } from "./state.ts";
+import { matchStep, safeEqual } from "./totp.ts";
 
 // windowText is pure prose formatting and lives in the gating-policy module (src/otp/policy.ts);
 // the catalog imports it from there, so this file's fs/audit/os imports stay out of its graph.
 // Re-exported so the old import path keeps working.
 export { windowText };
-import { isEnabled } from "../availability.ts";
-import { OtpStateFile, emptyUser, userState, type HardLock, type OtpState, type UserState } from "./state.ts";
-import { matchStep, safeEqual } from "./totp.ts";
 
 export type OtpOutcome = "window" | "opened" | "refused" | "locked" | "hard-locked";
 
