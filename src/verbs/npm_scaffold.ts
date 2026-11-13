@@ -43,7 +43,8 @@ import { buildTarball, tarballDigests } from "./npm-tarball.ts";
  * not an error either: the result is `needs_otp` naming what is left.
  */
 
-export const PLACEHOLDER_VERSION = "0.0.0-stage";
+/** npm refuses any version whose core is 0.0.0 (it used to accept 0.0.0-stage). A prerelease of 0.0.1 sorts below every real release. */
+export const PLACEHOLDER_VERSION = "0.0.1-stage";
 export const SCAFFOLD_MARKER = "gh-broker";
 const DEFAULT_WORKFLOW = "publish.yml";
 const INPUT_KEYS = new Set(["owner", "repo", "package", "npm_otp", "workflow"]);
