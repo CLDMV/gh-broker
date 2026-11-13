@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
+ *	@Last modified time: 2026-11-13T07:51:56-08:00 (1794585116)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -43,6 +43,12 @@ export interface CreateNpmTokenOptions {
 }
 
 export const DEFAULT_NPM_REGISTRY = "https://registry.npmjs.org";
+/**
+ * Token lifetime in days. 90 is npm's ceiling for a granular token with write access
+ * (npm defaults those to 7 days), so the default is the longest npm accepts and rotation
+ * (`gh-broker install --npm` again) is needed at most once a quarter. A shorter
+ * `--npm-token-days` is fine: the token is only used by npm_scaffold, for new packages.
+ */
 export const DEFAULT_TOKEN_DAYS = 90;
 const MAX_ATTEMPTS = 3;
 
