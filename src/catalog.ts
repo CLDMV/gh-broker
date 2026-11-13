@@ -34,8 +34,7 @@ import { OTP_STATUS_DESCRIPTION, OTP_STATUS_SCHEMA } from "./verbs/otp_status.ts
 import { MINIMIZE_COMMENT_DESCRIPTION, MINIMIZE_COMMENT_SCHEMA } from "./verbs/minimize_comment.ts";
 import { DELETE_BRANCH_DESCRIPTION, DELETE_BRANCH_SCHEMA } from "./verbs/delete_branch.ts";
 import { DISMISS_ALERT_DESCRIPTION, DISMISS_ALERT_SCHEMA } from "./verbs/dismiss_alert.ts";
-import { OTP_ARG, OTP_STATUS, isGated, otpSettings } from "./otp/policy.ts";
-import { windowText } from "./otp/gate.ts";
+import { OTP_ARG, OTP_STATUS, isGated, otpSettings, windowText } from "./otp/policy.ts";
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
