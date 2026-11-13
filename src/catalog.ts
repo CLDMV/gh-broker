@@ -34,8 +34,7 @@ import { OTP_STATUS_DESCRIPTION, OTP_STATUS_SCHEMA } from "./verbs/otp_status.ts
 import { MINIMIZE_COMMENT_DESCRIPTION, MINIMIZE_COMMENT_SCHEMA } from "./verbs/minimize_comment.ts";
 import { DELETE_BRANCH_DESCRIPTION, DELETE_BRANCH_SCHEMA } from "./verbs/delete_branch.ts";
 import { DISMISS_ALERT_DESCRIPTION, DISMISS_ALERT_SCHEMA } from "./verbs/dismiss_alert.ts";
-import { OTP_ARG, OTP_STATUS, isGated, otpSettings } from "./otp/policy.ts";
-import { windowText } from "./otp/gate.ts";
+import { OTP_ARG, OTP_STATUS, isGated, otpSettings, windowText } from "./otp/policy.ts";
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
@@ -108,7 +107,7 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 				tools.push({
 					name: "npm_scaffold",
 					description:
-						"Create a new npm package and register its GitHub Actions trusted publisher, so the repo's publish workflow can release it through OIDC from then on. Publishes a broker-built placeholder (0.0.0-stage, no code) and never publishes a version of an existing package. Every npm write needs its own one-time password from the user, passed as npm_otp, so it takes two calls: the first publishes the placeholder and returns status needs_otp; ask the user for the next npm code and call again with it in npm_otp to add the trusted publisher. Ask for each code right before the call. A refused or expired code also returns needs_otp with the remaining steps. Checks first that the repo's package.json names the package and that the workflow file exists. Uses the broker's npm token (no 2FA bypass) and the read PAT.",
+						"Create a new npm package and register its GitHub Actions trusted publisher, so the repo's publish workflow can release it through OIDC from then on. Publishes a broker-built placeholder (0.0.1-stage, no code) and never publishes a version of an existing package. Every npm write needs its own one-time password from the user, passed as npm_otp, so it takes two calls: the first publishes the placeholder and returns status needs_otp; ask the user for the next npm code and call again with it in npm_otp to add the trusted publisher. Ask for each code right before the call. A refused or expired code also returns needs_otp with the remaining steps. Checks first that the repo's package.json names the package and that the workflow file exists. Uses the broker's npm token (no 2FA bypass) and the read PAT.",
 					inputSchema: NPM_SCAFFOLD_SCHEMA
 				});
 			} else if (rule.name === "report_unlabeled") {

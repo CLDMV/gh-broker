@@ -15,7 +15,7 @@
 
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import type { Config, Mode, OtpConfig, ToolRule } from "./types.ts";
+import type { Config, Mode, OtpConfig, SecretsConfig, ToolRule } from "./types.ts";
 import { parseGhcrConfig } from "./verbs/ghcr/config.ts";
 import { OTP_STATUS } from "./otp/policy.ts";
 import { agentsDir } from "./agents.ts";
@@ -23,26 +23,27 @@ import { deniedReason } from "./denylist.ts";
 
 const MODES: readonly Mode[] = ["read", "write"];
 
-/** Load and validate the JSON config. Throws with a precise message on any problem. */
-export function loadConfig(path: string): Config {
-	let raw: unknown;
-	try {
-		raw = JSON.parse(readFileSync(path, "utf8"));
-	} catch (err) {
-		throw new Error(`config: cannot read/parse ${path}: ${(err as Error).message}`);
-	}
+/**
+ * The library half of a parsed config: everything {@link parseConfigLib} validates. The
+ * daemon-only fields — listen, upstream, the secrets provider and all of config.otp — are
+ * the host's (see {@link loadConfig}).
+ */
+export type ConfigLib = Omit<Config, "listen" | "upstream" | "secrets" | "otp">;
+
+/**
+ * Validate the library half of a config: tools, owners, defaultOwner, app, npm and ghcr —
+ * the pure-data fields, with every error prefixed `config.<field>:` exactly as
+ * {@link loadConfig} reports it. The daemon-only fields (listen, upstream, the secrets
+ * provider and all of config.otp) are the host's. `host` is how {@link loadConfig} keeps
+ * today's validation order: its `afterApp` hook runs where config.secrets is validated and
+ * its `afterNpm` hook where config.otp is, so a config invalid in several sections reports
+ * the same error it always did. Library callers omit `host` and get the lib fields in one
+ * pass, in the order tools, owners, defaultOwner, app, npm, ghcr.
+ */
+export function parseConfigLib(raw: unknown, host: { afterApp?: () => void; afterNpm?: () => void } = {}): ConfigLib {
 	if (typeof raw !== "object" || raw === null) throw new Error("config: root must be an object");
 	const c = raw as Record<string, unknown>;
 
-	if (typeof c.listen === "string" && c.listen.startsWith("unix:")) {
-		throw new Error('config.listen: the shared "unix:" socket was replaced by one socket per agent; re-run the installer (sudo gh-broker install) to set listen to "agents:/run/gh-broker/agents"');
-	}
-	if (typeof c.listen !== "string" || !agentsDir(c.listen)) {
-		throw new Error('config.listen: must be "agents:<absolute directory>", e.g. "agents:/run/gh-broker/agents"');
-	}
-	if (typeof c.upstream !== "string" || !/^https?:\/\//.test(c.upstream)) {
-		throw new Error("config.upstream: must be an http(s) URL");
-	}
 	if (!Array.isArray(c.tools) || c.tools.length === 0) {
 		throw new Error("config.tools: must be a non-empty array");
 	}
@@ -107,29 +108,7 @@ export function loadConfig(path: string): Config {
 		app = { appId: a.appId, privateKey: a.privateKey };
 	}
 
-	let secrets: Config["secrets"];
-	if (c.secrets !== undefined) {
-		if (typeof c.secrets !== "object" || c.secrets === null || Array.isArray(c.secrets)) throw new Error("config.secrets: must be an object");
-		const s = c.secrets as Record<string, unknown>;
-		if (s.provider !== undefined && s.provider !== "file" && s.provider !== "systemd-creds") {
-			throw new Error('config.secrets.provider: must be "systemd-creds" or "file"');
-		}
-		// Reject an empty path: resolveSecretsPath treats a falsy explicit path as
-		// "not provided" and falls back to env/default, so "" would be silently ignored.
-		if (s.path !== undefined && (typeof s.path !== "string" || s.path.length === 0)) {
-			throw new Error("config.secrets.path: must be a non-empty string");
-		}
-		// path only means anything to the file provider; the systemd-creds provider
-		// (the default) reads $CREDENTIALS_DIRECTORY and would silently ignore it.
-		// Reject the combination so an operator can't think a file path is in effect.
-		if (s.path !== undefined && (s.provider ?? "systemd-creds") !== "file") {
-			throw new Error('config.secrets.path is only used by the "file" provider — set provider to "file" or remove path');
-		}
-		secrets = {
-			...(s.provider === "file" || s.provider === "systemd-creds" ? { provider: s.provider } : {}),
-			...(typeof s.path === "string" ? { path: s.path } : {})
-		};
-	}
+	host.afterApp?.();
 
 	let npm: Config["npm"];
 	if (c.npm !== undefined) {
@@ -155,19 +134,88 @@ export function loadConfig(path: string): Config {
 		};
 	}
 
-	const otp = c.otp !== undefined ? parseOtpConfig(c.otp) : undefined;
+	host.afterNpm?.();
+
+	return {
+		tools,
+		owners,
+		...(app ? { app } : {}),
+		...(defaultOwner ? { defaultOwner } : {}),
+		...(npm ? { npm } : {}),
+		...(c.ghcr !== undefined ? { ghcr: parseGhcrConfig(c.ghcr) } : {})
+	};
+}
+
+/** Load and validate the JSON config. Throws with a precise message on any problem. */
+export function loadConfig(path: string): Config {
+	let raw: unknown;
+	try {
+		raw = JSON.parse(readFileSync(path, "utf8"));
+	} catch (err) {
+		throw new Error(`config: cannot read/parse ${path}: ${(err as Error).message}`);
+	}
+	if (typeof raw !== "object" || raw === null) throw new Error("config: root must be an object");
+	const c = raw as Record<string, unknown>;
+
+	if (typeof c.listen === "string" && c.listen.startsWith("unix:")) {
+		throw new Error('config.listen: the shared "unix:" socket was replaced by one socket per agent; re-run the installer (sudo gh-broker install) to set listen to "agents:/run/gh-broker/agents"');
+	}
+	if (typeof c.listen !== "string" || !agentsDir(c.listen)) {
+		throw new Error('config.listen: must be "agents:<absolute directory>", e.g. "agents:/run/gh-broker/agents"');
+	}
+	if (typeof c.upstream !== "string" || !/^https?:\/\//.test(c.upstream)) {
+		throw new Error("config.upstream: must be an http(s) URL");
+	}
+
+	// The lib fields validate in one pass (parseConfigLib); the two hooks drop the daemon-only
+	// validations in at the exact points they run today, so a config invalid in several
+	// sections reports the same error it always did.
+	let secrets: SecretsConfig | undefined;
+	let otp: OtpConfig | undefined;
+	const lib = parseConfigLib(raw, {
+		afterApp: () => {
+			if (c.secrets !== undefined) secrets = parseSecretsConfig(c.secrets);
+		},
+		afterNpm: () => {
+			otp = c.otp !== undefined ? parseOtpConfig(c.otp) : undefined;
+		}
+	});
 
 	return {
 		listen: c.listen,
 		upstream: c.upstream,
-		tools,
-		owners,
-		...(app ? { app } : {}),
+		tools: lib.tools,
+		owners: lib.owners,
+		...(lib.app ? { app: lib.app } : {}),
 		...(secrets ? { secrets } : {}),
-		...(defaultOwner ? { defaultOwner } : {}),
-		...(npm ? { npm } : {}),
-		...(c.ghcr !== undefined ? { ghcr: parseGhcrConfig(c.ghcr) } : {}),
+		...(lib.defaultOwner ? { defaultOwner: lib.defaultOwner } : {}),
+		...(lib.npm ? { npm: lib.npm } : {}),
+		...(lib.ghcr !== undefined ? { ghcr: lib.ghcr } : {}),
 		...(otp ? { otp } : {})
+	};
+}
+
+/** Validate config.secrets: where the actual token values live (the daemon's provider selection). */
+function parseSecretsConfig(raw: unknown): SecretsConfig {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("config.secrets: must be an object");
+	const s = raw as Record<string, unknown>;
+	if (s.provider !== undefined && s.provider !== "file" && s.provider !== "systemd-creds") {
+		throw new Error('config.secrets.provider: must be "systemd-creds" or "file"');
+	}
+	// Reject an empty path: resolveSecretsPath treats a falsy explicit path as
+	// "not provided" and falls back to env/default, so "" would be silently ignored.
+	if (s.path !== undefined && (typeof s.path !== "string" || s.path.length === 0)) {
+		throw new Error("config.secrets.path: must be a non-empty string");
+	}
+	// path only means anything to the file provider; the systemd-creds provider
+	// (the default) reads $CREDENTIALS_DIRECTORY and would silently ignore it.
+	// Reject the combination so an operator can't think a file path is in effect.
+	if (s.path !== undefined && (s.provider ?? "systemd-creds") !== "file") {
+		throw new Error('config.secrets.path is only used by the "file" provider — set provider to "file" or remove path');
+	}
+	return {
+		...(s.provider === "file" || s.provider === "systemd-creds" ? { provider: s.provider } : {}),
+		...(typeof s.path === "string" ? { path: s.path } : {})
 	};
 }
 

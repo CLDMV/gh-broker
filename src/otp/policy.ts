@@ -95,3 +95,9 @@ export function otpSetupProblem(config: Config, secrets: SecretStore): string | 
 	const seed = readSeed(config, secrets);
 	return "problem" in seed ? seed.problem : undefined;
 }
+
+/** Window length for tool descriptions, e.g. "5 minutes" or "90 seconds". */
+export function windowText(seconds: number): string {
+	if (seconds % 60 === 0) return `${seconds / 60} minute${seconds === 60 ? "" : "s"}`;
+	return `${seconds} seconds`;
+}

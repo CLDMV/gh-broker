@@ -307,7 +307,7 @@ describe("npm_scaffold", () => {
 		expect(reg.calls.every((c) => c.method === "GET")).toBe(true);
 	});
 
-	it("refuses an existing single 0.0.0-stage version that lacks the scaffold marker", async () => {
+	it("refuses an existing single 0.0.1-stage version that lacks the scaffold marker", async () => {
 		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { [PLACEHOLDER_VERSION]: { name: PKG } } } } });
 		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/was not created by npm_scaffold/);
 	});

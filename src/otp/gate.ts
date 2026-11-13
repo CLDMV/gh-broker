@@ -38,7 +38,12 @@ import { createHmac, randomBytes } from "node:crypto";
 import { audit } from "../audit.ts";
 import { hostname } from "node:os";
 import type { Config, SecretStore } from "../types.ts";
-import { OTP_ARG, isGated, otpSettings, readSeed, type OtpSettings } from "./policy.ts";
+import { OTP_ARG, isGated, otpSettings, readSeed, windowText, type OtpSettings } from "./policy.ts";
+
+// windowText is pure prose formatting and lives in the gating-policy module (src/otp/policy.ts);
+// the catalog imports it from there, so this file's fs/audit/os imports stay out of its graph.
+// Re-exported so the old import path keeps working.
+export { windowText };
 import { isEnabled } from "../availability.ts";
 import { OtpStateFile, emptyUser, userState, type HardLock, type OtpState, type UserState } from "./state.ts";
 import { matchStep, safeEqual } from "./totp.ts";
@@ -320,10 +325,4 @@ export class OtpGate {
 			host: this.host
 		};
 	}
-}
-
-/** Window length for tool descriptions, e.g. "5 minutes" or "90 seconds". */
-export function windowText(seconds: number): string {
-	if (seconds % 60 === 0) return `${seconds / 60} minute${seconds === 60 ? "" : "s"}`;
-	return `${seconds} seconds`;
 }
