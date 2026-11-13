@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-12T22:39:10-08:00 (1794551950)
+ *	@Last modified time: 2026-11-13T07:15:50-08:00 (1794582950)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -80,7 +80,9 @@ export function emptyUser(): UserState {
 /** `user`'s counters (a fresh copy), all zero/null when the user has no entry. */
 export function userState(state: OtpState, user: string): UserState {
 	const u = Object.hasOwn(state.users, user) ? state.users[user]! : emptyUser();
-	return { ...u, lockouts: [...u.lockouts] };
+	// Every field is a fresh copy — hardLock included, so a caller mutating the returned
+	// snapshot can never reach the shared state.
+	return { ...u, lockouts: [...u.lockouts], hardLock: u.hardLock === null ? null : { ...u.hardLock } };
 }
 
 /** `user`'s entry, or all-zero when it has none — an alias of {@link userState}: always a fresh copy. */
