@@ -166,3 +166,40 @@ export interface SecretStore {
 	/** Whether an optional credential is stored (non-empty). Never throws for a missing one. */
 	has(ref: string): boolean;
 }
+
+/**
+ * Structured audit log. One JSON line per decision/call to stdout (journald
+ * captures it). NEVER include token values or OTP codes — only tool, owner, mode, repo, result.
+ */
+export interface AuditEntry {
+	tool: string;
+	/** The agent user whose socket the call came in on. */
+	user?: string;
+	owner?: string;
+	mode?: "read" | "write";
+	repo?: string;
+	/** fork_repository only: the repo that was forked (owner/repo are the new copy). */
+	source?: string;
+	decision: "forward" | "custom" | "augment" | "deny" | "error";
+	ok?: boolean;
+	detail?: string;
+	/** OTP gate outcome, on gated and hard-locked calls (src/otp/gate.ts). */
+	otp?: "window" | "opened" | "refused" | "locked" | "hard-locked" | "lockout" | "hard-lock";
+	/** When a window opened by this call closes, or when a short lockout started by it ends. */
+	until?: string;
+	/** Window id (an HMAC of the code under a per-process key), for window/opened. Never the code. */
+	window?: string;
+}
+
+/**
+ * A security-relevant OTP event, distinct from the per-call {@link AuditEntry}: the OTP
+ * machine's audit surface is one optional sink carrying these (design #175 §2c). Type-only
+ * for now — the slices that rebuild the gate and the router wire the sink.
+ */
+export type SecurityEvent =
+	| { kind: "code-bad"; tool: string; person: string; failures: number }
+	| { kind: "lock"; tool: string; person: string; until: string }
+	| { kind: "hard-lock"; tool: string; person: string; since: string; lockouts: number }
+	| { kind: "unlock"; person: string; by: string }
+	| { kind: "refused-mode"; tool: string; person: string; mode: Mode }
+	| { kind: "protected-write"; tool: string; person: string; detail: string };
