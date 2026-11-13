@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
+ *	@Last modified time: 2026-11-12T22:39:10-08:00 (1794551950)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -26,6 +26,7 @@ import { randomBytes } from "node:crypto";
 import type { Stats } from "node:fs";
 import type { OtpConfig, SecretsConfig } from "../types.ts";
 import { emptyState, validState, type OtpState, type StateReading } from "../otp/state.ts";
+import { OTP_DEFAULTS } from "../otp/policy.ts";
 import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, fchmodSync, fchownSync, statSync, constants } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import QRCode from "qrcode";
@@ -49,7 +50,8 @@ export {
 export type { OtpLimits, StateReading, UserFacts, UserStatus } from "../otp/state.ts";
 
 export const DEFAULT_SEED_CRED = "otp-seed";
-export const DEFAULT_STATE_PATH = "/var/lib/gh-broker/otp-state.json";
+/** The state file's default location — OTP_DEFAULTS.statePath is its one home (src/otp/policy.ts). */
+export const DEFAULT_STATE_PATH = OTP_DEFAULTS.statePath;
 const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 /** RFC 4648 base32 without padding. */

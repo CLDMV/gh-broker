@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T20:43:25-08:00 (1793594605)
+ *	@Last modified time: 2026-11-12T22:39:10-08:00 (1794551950)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -35,6 +35,7 @@ import { closeSync, fstatSync, fsyncSync, openSync, readFileSync, renameSync, st
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { isAgentUser } from "../agents.ts";
+import { STEP_SECONDS } from "./totp.ts";
 
 export interface HardLock {
 	since: string;
@@ -146,12 +147,12 @@ export function withoutUsers(state: OtpState): OtpState {
  * window; see secondsUntilFreshCode.
  */
 export function spendRecentCodes(state: OtpState, now: number): OtpState {
-	return { ...state, lastAcceptedStep: Math.max(state.lastAcceptedStep, Math.floor(now / 30000) + 1) };
+	return { ...state, lastAcceptedStep: Math.max(state.lastAcceptedStep, Math.floor(now / (STEP_SECONDS * 1000)) + 1) };
 }
 
 /** Seconds from `now` until an authenticator shows a code spendRecentCodes(…, now) didn't spend (31 to 60). */
 export function secondsUntilFreshCode(now: number): number {
-	return Math.ceil(((Math.floor(now / 30000) + 2) * 30000 - now) / 1000);
+	return Math.ceil(((Math.floor(now / (STEP_SECONDS * 1000)) + 2) * STEP_SECONDS * 1000 - now) / 1000);
 }
 
 /** The lockout limits the CLI reports against when config.otp doesn't set them (OTP_DEFAULTS in src/otp/policy.ts). */
