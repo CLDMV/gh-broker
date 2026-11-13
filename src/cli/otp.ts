@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-12T22:39:10-08:00 (1794551950)
+ *	@Last modified time: 2026-11-12T22:42:56-08:00 (1794552176)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -27,6 +27,7 @@ import type { Stats } from "node:fs";
 import type { OtpConfig, SecretsConfig } from "../types.ts";
 import { emptyState, validState, type OtpState, type StateReading } from "../otp/state.ts";
 import { OTP_DEFAULTS } from "../otp/policy.ts";
+import { base32Encode } from "../otp/totp.ts";
 import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, fchmodSync, fchownSync, statSync, constants } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import QRCode from "qrcode";
@@ -52,24 +53,9 @@ export type { OtpLimits, StateReading, UserFacts, UserStatus } from "../otp/stat
 export const DEFAULT_SEED_CRED = "otp-seed";
 /** The state file's default location — OTP_DEFAULTS.statePath is its one home (src/otp/policy.ts). */
 export const DEFAULT_STATE_PATH = OTP_DEFAULTS.statePath;
-const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-
-/** RFC 4648 base32 without padding. */
-export function base32Encode(bytes: Iterable<number>): string {
-	let bits = 0;
-	let value = 0;
-	let out = "";
-	for (const byte of bytes) {
-		value = (value << 8) | byte;
-		bits += 8;
-		while (bits >= 5) {
-			out += BASE32[(value >>> (bits - 5)) & 31]!;
-			bits -= 5;
-		}
-	}
-	if (bits > 0) out += BASE32[(value << (5 - bits)) & 31]!;
-	return out;
-}
+// base32Encode moved to src/otp/totp.ts (the one RFC 4648 encoder); re-exported below
+// at this path for the existing import sites.
+export { base32Encode };
 
 /** A new TOTP seed: 20 random bytes as base32 (32 characters). `random` is injectable for tests. */
 export function generateSeed(random: (size: number) => Uint8Array = randomBytes): string {
