@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T20:43:25-08:00 (1793594605)
+ *	@Last modified time: 2026-11-12T22:42:56-08:00 (1794552176)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -26,8 +26,8 @@ const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 /** TOTP time step, in seconds. */
 export const STEP_SECONDS = 30;
 
-/** Encode bytes as unpadded RFC 4648 base32. */
-export function base32Encode(bytes: Uint8Array): string {
+/** Encode bytes as unpadded RFC 4648 base32. Accepts any iterable of bytes. */
+export function base32Encode(bytes: Iterable<number>): string {
 	let out = "";
 	let bits = 0;
 	let value = 0;

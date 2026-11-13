@@ -18,25 +18,10 @@
  * captures it). NEVER include token values or OTP codes — only tool, owner, mode, repo, result.
  */
 
-export interface AuditEntry {
-	tool: string;
-	/** The agent user whose socket the call came in on. */
-	user?: string;
-	owner?: string;
-	mode?: "read" | "write";
-	repo?: string;
-	/** fork_repository only: the repo that was forked (owner/repo are the new copy). */
-	source?: string;
-	decision: "forward" | "custom" | "augment" | "deny" | "error";
-	ok?: boolean;
-	detail?: string;
-	/** OTP gate outcome, on gated and hard-locked calls (src/otp/gate.ts). */
-	otp?: "window" | "opened" | "refused" | "locked" | "hard-locked" | "lockout" | "hard-lock";
-	/** When a window opened by this call closes, or when a short lockout started by it ends. */
-	until?: string;
-	/** Window id (an HMAC of the code under a per-process key), for window/opened. Never the code. */
-	window?: string;
-}
+import type { AuditEntry } from "./types.ts";
+
+// The entry shape is shared vocabulary (src/types.ts, next to SecurityEvent); this is its sink.
+export type { AuditEntry };
 
 export function audit(entry: AuditEntry): void {
 	// eslint-disable-next-line no-console -- journald is the sink

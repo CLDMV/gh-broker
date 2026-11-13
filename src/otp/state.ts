@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T20:43:25-08:00 (1793594605)
+ *	@Last modified time: 2026-11-12T22:39:10-08:00 (1794551950)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -25,12 +25,17 @@
  *   that can't be read or parsed, or that doesn't have the expected shape, fails closed: it
  *   reads as corrupt, which the gate treats as a hard lock for every user, so tampering with
  *   the file can never unlock anything.
+ *
+ * The state-format helpers both sides share live here too — the validators, the copy
+ * accessor, the CLI's spend/clear transforms and the `otp status` prose — so the file
+ * contract has exactly one implementation (the CLI re-exports them at its old path).
  */
 
 import { closeSync, fstatSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { isAgentUser } from "../agents.ts";
+import { STEP_SECONDS } from "./totp.ts";
 
 export interface HardLock {
 	since: string;
@@ -58,6 +63,12 @@ export interface OtpState {
 /** What a read returns: the state, or a marker that the file is unusable. */
 export type StateRead = { ok: true; state: OtpState } | { ok: false; since: string };
 
+/** What the CLI's {@link readState} (src/cli/otp.ts) returns: how the file stood, and the state to use. */
+export interface StateReading {
+	status: "ok" | "missing" | "corrupt";
+	state: OtpState;
+}
+
 export function emptyState(): OtpState {
 	return { version: 1, lastAcceptedStep: 0, users: {} };
 }
@@ -71,6 +82,9 @@ export function userState(state: OtpState, user: string): UserState {
 	const u = Object.hasOwn(state.users, user) ? state.users[user]! : emptyUser();
 	return { ...u, lockouts: [...u.lockouts] };
 }
+
+/** `user`'s entry, or all-zero when it has none — an alias of {@link userState}: always a fresh copy. */
+export const userOf = userState;
 
 const isIso = (v: unknown): v is string => typeof v === "string" && !Number.isNaN(Date.parse(v));
 const isCount = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
@@ -102,6 +116,126 @@ export function parseState(raw: unknown): OtpState | undefined {
 		users[name] = u;
 	}
 	return { version: 1, lastAcceptedStep: raw.lastAcceptedStep, users };
+}
+
+/** Whether `v` is a well-formed per-user entry: the same acceptance as {@link parseState}. */
+export function validUser(v: unknown): v is UserState {
+	return parseUser(v) !== undefined;
+}
+
+/** Whether `v` is a well-formed version 1 state object: the same acceptance as {@link parseState}. */
+export function validState(v: unknown): v is OtpState {
+	return parseState(v) !== undefined;
+}
+
+/** The state with one user's entry cleared (no entry means all-zero). `lastAcceptedStep` is kept so a spent code can't be replayed. */
+export function withoutUser(state: OtpState, user: string): OtpState {
+	const { [user]: _gone, ...users } = state.users;
+	return { ...state, users };
+}
+
+/** The state with every user cleared. */
+export function withoutUsers(state: OtpState): OtpState {
+	return { ...state, users: {} };
+}
+
+/**
+ * `state` ready to be written by the CLI: every code up to one step ahead of `now` counts as
+ * spent. The CLI rewrites the whole file while the daemon may be accepting a code (it accepts
+ * at most one step ahead), so this keeps a write from handing back a code the daemon just used.
+ * The cost is that the code an authenticator shows now, and the one after it, can't open a
+ * window; see secondsUntilFreshCode.
+ */
+export function spendRecentCodes(state: OtpState, now: number): OtpState {
+	return { ...state, lastAcceptedStep: Math.max(state.lastAcceptedStep, Math.floor(now / (STEP_SECONDS * 1000)) + 1) };
+}
+
+/** Seconds from `now` until an authenticator shows a code spendRecentCodes(…, now) didn't spend (31 to 60). */
+export function secondsUntilFreshCode(now: number): number {
+	return Math.ceil(((Math.floor(now / (STEP_SECONDS * 1000)) + 2) * STEP_SECONDS * 1000 - now) / 1000);
+}
+
+/** The lockout limits the CLI reports against when config.otp doesn't set them (OTP_DEFAULTS in src/otp/policy.ts). */
+export const DEFAULT_MAX_FAILURES = 5;
+export const DEFAULT_MAX_LOCKOUTS = 3;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The lockout limits the CLI reports against. */
+export interface OtpLimits {
+	maxFailures?: number;
+	maxLockouts?: number;
+}
+
+/** One user's lock facts, as {@link describeUser} computes them. */
+export interface UserFacts {
+	locked: boolean;
+	failures: number | null;
+	maxFailures: number;
+	lockedUntil: string | null;
+	lockoutsLast24h: number | null;
+	maxLockouts: number;
+	hardLock: UserState["hardLock"];
+}
+
+/** A {@link UserFacts} with the user it is about; `corrupt` marks a user locked by an unreadable state file. */
+export interface UserStatus extends UserFacts {
+	user: string;
+	corrupt?: true;
+}
+
+/** One user's facts for `status`, from their entry and the config's limits. */
+export function describeUser(user: UserState, { maxFailures = DEFAULT_MAX_FAILURES, maxLockouts = DEFAULT_MAX_LOCKOUTS }: OtpLimits = {}, now = Date.now()): UserFacts {
+	const lockedUntil = user.lockedUntil && Date.parse(user.lockedUntil) > now ? user.lockedUntil : null;
+	return {
+		locked: Boolean(user.hardLock) || lockedUntil !== null,
+		failures: user.failures,
+		maxFailures,
+		lockedUntil,
+		lockoutsLast24h: user.lockouts.filter((t) => Date.parse(t) > now - DAY_MS).length,
+		maxLockouts,
+		hardLock: user.hardLock
+	};
+}
+
+/**
+ * The per-user facts for the given users (registered agents plus any user the file mentions).
+ * A corrupt file locks every one of them, as the daemon does.
+ */
+export function describeUsers({ status, state }: StateReading, users: string[], limits: OtpLimits = {}, now = Date.now()): UserStatus[] {
+	const names = [...new Set([...users, ...Object.keys(state.users)])].sort();
+	return names.map((user): UserStatus =>
+		status === "corrupt"
+			? { user, corrupt: true, locked: true, failures: null, maxFailures: limits.maxFailures ?? DEFAULT_MAX_FAILURES, lockedUntil: null, lockoutsLast24h: null, maxLockouts: limits.maxLockouts ?? DEFAULT_MAX_LOCKOUTS, hardLock: null }
+			: { user, ...describeUser(userOf(state, user), limits, now) }
+	);
+}
+
+/** Human-readable lines for `describeUsers`'s result. */
+export function formatStatus(
+	users: UserStatus[],
+	{
+		statePath,
+		fileStatus,
+		configured,
+		unlockCommand = "sudo gh-broker otp unlock"
+	}: { statePath: string; fileStatus: StateReading["status"]; configured: boolean; unlockCommand?: string }
+): string[] {
+	const lines = [`OTP configured: ${configured ? "yes" : "no (re-run the installer to set it up)"}`, `state file: ${statePath} (${fileStatus})`];
+	if (fileStatus === "corrupt") lines.push("LOCKED: the state file is unreadable, so the broker treats every user as hard-locked.", `Clear it with: ${unlockCommand} --all`);
+	if (users.length === 0) lines.push("no agents registered");
+	for (const d of users) {
+		lines.push(`${d.user}:`);
+		if (d.corrupt) {
+			lines.push("  locked (state file unreadable)");
+			continue;
+		}
+		lines.push(`  bad codes so far: ${d.failures} of ${d.maxFailures}`, `  short lockouts in the last 24 h: ${d.lockoutsLast24h} of ${d.maxLockouts}`);
+		if (d.hardLock) lines.push(`  HARD LOCK since ${d.hardLock.since} after ${d.hardLock.lockouts} lockouts. Clear it with: ${unlockCommand} ${d.user}`);
+		else if (d.lockedUntil) lines.push(`  short lockout until ${d.lockedUntil}`);
+		else lines.push("  not locked");
+	}
+	return lines;
 }
 
 /** Identity of one version of the file on disk; any change means re-read. */
