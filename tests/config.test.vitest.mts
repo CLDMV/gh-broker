@@ -444,9 +444,14 @@ describe("loadConfig — otp", () => {
 		[{ seed: "cred:s", lockoutSeconds: "600" }, /config\.otp\.lockoutSeconds: must be a positive integer/],
 		[{ seed: "cred:s", maxLockouts: -1 }, /config\.otp\.maxLockouts: must be a positive integer/],
 		[{ seed: "cred:s", statePath: "relative.json" }, /config\.otp\.statePath: must be an absolute path/],
-		[{ seed: "cred:s", statePath: 5 }, /config\.otp\.statePath: must be an absolute path/]
+		[{ seed: "cred:s", statePath: 5 }, /config\.otp\.statePath: must be an absolute path/],
+		[{ seed: "cred:s", lockoutSeconds: 8_640_000_000_001 }, /config\.otp\.lockoutSeconds: must be at most 8640000000000/]
 	] as Array<[unknown, RegExp]>)("rejects a bad otp block (%#)", (otp, msg) => {
 		expect(() => loadConfig(writeConfig({ ...baseConfig(), otp }))).toThrow(msg);
+	});
+
+	it("accepts a lockoutSeconds exactly at the Date-range bound", () => {
+		expect(loadConfig(writeConfig({ ...baseConfig(), otp: { seed: "cred:s", lockoutSeconds: 8_640_000_000_000 } })).otp).toEqual({ seed: "cred:s", lockoutSeconds: 8_640_000_000_000 });
 	});
 
 	it("carries a tool's otp flag only when it is set, and rejects a non-boolean", () => {

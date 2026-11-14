@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T23:50:03-08:00 (1793692203)
+ *	@Last modified time: 2026-11-14T08:30:09-08:00 (1794673809)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -29,6 +29,13 @@
  * `maxLockouts` short lockouts in a rolling 24 h set a hard lock that blocks every tool except
  * otp_status for that user until root runs `gh-broker otp unlock <user>`.
  *
+ * The lockout machine itself is `@cldmv/lib-otp`'s (design #175): this file is the daemon's
+ * host shell over it. The machine is identity-free and store-free — it sees one person's
+ * record and returns reason codes; everything identity-shaped (the users map, the file, the
+ * per-process code↔window map, the refusal prose, the audit rows) stays here. The machine's
+ * windows carry only `{ id, expiresAt }`; the plaintext codes live in this file's per-person
+ * map and never reach machine state or disk.
+ *
  * Nothing here ever logs or returns a code, the seed, or anything derived from them except
  * the window id: an HMAC of the code under a per-process random key, which correlates audit
  * lines within one run and means nothing outside it.
@@ -37,16 +44,29 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { audit } from "../audit.ts";
 import { hostname } from "node:os";
-import type { Config, SecretStore } from "../types.ts";
+import type { AuditEntry, Config, SecretStore } from "../types.ts";
 import { OTP_ARG, isGated, otpSettings, readSeed, windowText, type OtpSettings } from "./policy.ts";
+import { isEnabled } from "../availability.ts";
+import { OtpStateFile, emptyUser, personOf, userState, type HardLock, type MachinePerson, type OtpState, type UserState } from "./state.ts";
+import {
+	base32Encode,
+	lockStatus,
+	parseOtpOptions,
+	safeEqual,
+	stepOtp,
+	verifyCode,
+	STEP_SECONDS
+} from "@cldmv/lib-otp";
+
+// The machine's vocabulary, derived from the package's function types (its index doesn't
+// re-export the type aliases itself).
+type MachineOutcome = NonNullable<ReturnType<typeof stepOtp>["outcome"]>;
+type MachineConfig = ReturnType<typeof parseOtpOptions>;
 
 // windowText is pure prose formatting and lives in the gating-policy module (src/otp/policy.ts);
 // the catalog imports it from there, so this file's fs/audit/os imports stay out of its graph.
 // Re-exported so the old import path keeps working.
 export { windowText };
-import { isEnabled } from "../availability.ts";
-import { OtpStateFile, emptyUser, userState, type HardLock, type OtpState, type UserState } from "./state.ts";
-import { matchStep, safeEqual } from "./totp.ts";
 
 export type OtpOutcome = "window" | "opened" | "refused" | "locked" | "hard-locked";
 
@@ -79,13 +99,6 @@ export interface OtpGateOptions {
 	host?: string;
 }
 
-interface OpenWindow {
-	user: string;
-	code: string;
-	expiresAt: number;
-	id: string;
-}
-
 /** The root command that clears `user`'s counters and locks. */
 /** What clears a corrupt state file (a single-user unlock refuses one). */
 export const UNLOCK_ALL_COMMAND = "sudo gh-broker otp unlock --all";
@@ -94,16 +107,84 @@ export function unlockCommand(user: string): string {
 	return `${UNLOCK_COMMAND} ${user}`;
 }
 
+/**
+ * The machine config the daemon runs, mapped explicitly from config.otp's validated fields
+ * (design §2g — no raw config.otp pass-through): today's fixed numbers (6 digits, SHA1, 30 s
+ * steps, ±1 skew), no lockout escalation, and the hard lock keyed to maxLockouts short
+ * lockouts in a rolling 24 h.
+ */
+export function machineConfig(settings: OtpSettings): MachineConfig {
+	return parseOtpOptions({
+		digits: 6,
+		periodSeconds: STEP_SECONDS,
+		algorithm: "SHA1",
+		skewSteps: 1,
+		windowSeconds: settings.windowSeconds,
+		maxFailures: settings.maxFailures,
+		failureCounting: { mode: "since-accept-or-lockout" },
+		lockoutSeconds: settings.lockoutSeconds,
+		lockoutEscalation: { factor: 1, maxSeconds: settings.lockoutSeconds },
+		spendOnUnlock: true,
+		hardLockEnabled: true,
+		hardLockTrigger: { lockouts: settings.maxLockouts, windowMs: DAY_MS },
+		refuseReused: true,
+		windowEnabled: true
+	});
+}
+
+/**
+ * The security row a machine outcome adds to the audit log, or undefined when the per-call
+ * row covers it: `locked-out` → the `otp: "lockout"` row, `hard-locked-now` → the
+ * `otp: "hard-lock"` row (one row — the hard lock replaces the lockout on that transition).
+ * Every other outcome writes no extra row: a plain bad code is covered by the router's call
+ * row, and the plain locked/hard-locked refusals (row 10) write none, as before. The host
+ * supplies its limits and the unlock command; the row comes before the state write and the
+ * router's call row.
+ */
+export function otpAuditRow(
+	tool: string,
+	user: string,
+	outcome: MachineOutcome,
+	opts: { maxFailures: number; unlockCommand: string }
+): AuditEntry | undefined {
+	if (outcome.reason === "locked-out") {
+		return { tool, user, decision: "deny", otp: "lockout", until: outcome.until, detail: `${opts.maxFailures} bad codes` };
+	}
+	if (outcome.reason === "hard-locked-now") {
+		return {
+			tool,
+			user,
+			decision: "deny",
+			otp: "hard-lock",
+			detail: `${outcome.lockouts} lockouts in 24 h; every tool except otp_status is refused until "${opts.unlockCommand}"`
+		};
+	}
+	return undefined;
+}
+
+/** The file's per-user record for a machine state: the machine's memory-tier fields (its windows, the per-person counter and period, failureTimes) never reach disk. */
+function userRecord(person: MachinePerson): UserState {
+	return {
+		failures: person.failures,
+		lockedUntil: person.lockedUntil,
+		lockouts: [...person.lockouts],
+		hardLock: person.hardLock === null ? null : { ...person.hardLock }
+	};
+}
+
 export class OtpGate {
 	private readonly config: Config;
 	private readonly secrets: SecretStore;
 	private readonly settings: OtpSettings;
+	/** The machine, built once from config.otp's mapped fields (see machineConfig). */
+	private readonly machine: MachineConfig;
 	private readonly now: () => number;
 	private readonly host: string;
 	private readonly state: OtpStateFile;
 	/** Per-process key for window ids. */
 	private readonly idKey = randomBytes(32);
-	private windows: OpenWindow[] = [];
+	/** Each user's open windows by id: the code stays host-side, never in machine state. */
+	private readonly windows = new Map<string, Map<string, { code: string; expiresAt: number }>>();
 	/** Users whose latest bad-code count is only in memory because the state file couldn't be written. */
 	private readonly unsaved = new Set<string>();
 
@@ -111,6 +192,7 @@ export class OtpGate {
 		this.config = config;
 		this.secrets = secrets;
 		this.settings = otpSettings(config);
+		this.machine = machineConfig(this.settings);
 		this.now = options.now ?? Date.now;
 		this.host = options.host ?? hostname();
 		this.state = new OtpStateFile(this.settings.statePath, this.now);
@@ -144,9 +226,35 @@ export class OtpGate {
 	}
 
 	/**
+	 * The machine record for `user` at `now`: the file's persisted fields padded with the
+	 * memory-tier ones, the global step threaded into the per-person counter (a code is spent
+	 * for everyone once any user has spent it), and this user's unexpired windows merged back —
+	 * they never reach disk, so the map is their only home between calls.
+	 */
+	private personFor(state: OtpState, user: string, now: number): MachinePerson {
+		const base = personOf(userState(state, user));
+		const windows = [...(this.windows.get(user) ?? [])]
+			.filter(([, w]) => w.expiresAt > now)
+			.map(([id, w]) => ({ id, expiresAt: w.expiresAt }));
+		return { ...base, lastCounter: Math.max(state.lastAcceptedStep, base.lastCounter), windows };
+	}
+
+	/** The refusal for a call while locked (row 10) or hard-locked, worded as before. */
+	private lockRefusal(locked: "locked" | "hard-locked", person: MachinePerson, user: string, now: number): OtpRefusal {
+		if (locked === "hard-locked") return this.hardLockRefusal(user)!;
+		const minutes = Math.max(1, Math.ceil((Date.parse(person.lockedUntil!) - now) / 60000));
+		return new OtpRefusal(`OTP is locked for ${minutes} more minute(s) after too many bad codes. Nothing was run.`, { otp: "locked" });
+	}
+
+	/**
 	 * Decide `user`'s call to the gated tool `tool` carrying `code` (the raw `otp` argument).
 	 * Returns the audit fields when the call may run; throws OtpRefusal when it may not.
 	 * Only call this after hardLockRefusal() and the availability check passed (OTP is set up).
+	 *
+	 * The call protocol is today's, in order (design §3.3b): hard lock → short lockout →
+	 * unsaved flush → missing/malformed code → window scan → TOTP match. The machine enforces
+	 * its own lock on every event too, so a host that forgets the first check can neither
+	 * accept a code nor reuse a window mid-lockout.
 	 */
 	authorize(tool: string, code: unknown, user: string): OtpAudit {
 		const now = this.now();
@@ -155,13 +263,10 @@ export class OtpGate {
 		// public) and fail closed.
 		if (!read.ok || userState(read.state, user).hardLock) throw this.hardLockRefusal(user)!;
 		const state = read.state;
-		const mine = userState(state, user);
+		const person = this.personFor(state, user, now);
 
-		const lockedUntil = mine.lockedUntil ? Date.parse(mine.lockedUntil) : 0;
-		if (lockedUntil > now) {
-			const minutes = Math.max(1, Math.ceil((lockedUntil - now) / 60000));
-			throw new OtpRefusal(`OTP is locked for ${minutes} more minute(s) after too many bad codes. Nothing was run.`, { otp: "locked" });
-		}
+		const locked = lockStatus(person, now);
+		if (locked !== "clear") throw this.lockRefusal(locked, person, user, now);
 
 		const unsavedRefusal = (): OtpRefusal => new OtpRefusal(`OTP could not be checked: the broker could not save its OTP state. Nothing was run.`, { otp: "refused" });
 		// A bad code this user sent couldn't be saved (disk full, say): check nothing more for them
@@ -185,81 +290,89 @@ export class OtpGate {
 		if (typeof code === "number" && Number.isInteger(code) && code >= 0 && code <= 999999) code = String(code).padStart(6, "0");
 		if (typeof code !== "string") throw refusal();
 
-		this.windows = this.windows.filter((w) => w.expiresAt > now);
-		let hit: OpenWindow | undefined;
+		// Expired windows drop out of both holdings the gate keeps: this map, and the machine
+		// state's windows array rebuilt from it in personFor.
+		const mine = this.windows.get(user);
+		if (mine) {
+			for (const [id, w] of mine) if (w.expiresAt <= now) mine.delete(id);
+			if (mine.size === 0) this.windows.delete(user);
+		}
+		let hit: string | undefined;
 		// Only this user's windows: a code another agent opened a window with is no use here.
-		for (const w of this.windows) if (w.user === user && safeEqual(w.code, code)) hit = w; // no early exit
-		if (hit) return { otp: "window", window: hit.id };
+		for (const [id, w] of this.windows.get(user) ?? []) if (safeEqual(w.code, code)) hit = id; // no early exit
+		if (hit) {
+			const { outcome } = stepOtp(person, { kind: "window-use", id: hit, now }, this.machine);
+			if (outcome?.reason === "window") return { otp: "window", window: hit };
+			// Unreachable: the id was matched unexpired above and the lock was clear. Fall through
+			// to the TOTP match (which refuses a spent code) rather than inventing an outcome.
+		}
 
-		const step = matchStep((readSeed(this.config, this.secrets) as { key: Buffer }).key, code, now);
-		if (step !== undefined && step > state.lastAcceptedStep) {
-			// Persist the step before anything runs: if it can't be saved, a restart could let
-			// this code open a second window, so refuse instead.
-			try {
-				this.state.write(this.compact({ ...state, lastAcceptedStep: step, users: { ...state.users, [user]: { ...mine, failures: 0 } } }, now));
-			} catch (err) {
-				console.error(`gh-broker: ${(err as Error).message}`);
-				throw unsavedRefusal();
+		const counter = verifyCode(base32Encode((readSeed(this.config, this.secrets) as { key: Buffer }).key), code, now, this.machine);
+		const id = createHmac("sha256", this.idKey).update(`${user}\0${code}`).digest("hex").slice(0, 16);
+		const { state: after, outcome } = stepOtp(person, counter === undefined ? { kind: "code-bad", now } : { kind: "code-ok", counter, windowId: id, now }, this.machine);
+		switch (outcome?.reason) {
+			case "opened": {
+				// Persist the step before anything runs: if it can't be saved, a restart could let
+				// this code open a second window, so refuse instead.
+				try {
+					this.state.write(this.compact({ ...state, lastAcceptedStep: outcome.counter, users: { ...state.users, [user]: userRecord(after) } }, now));
+				} catch (err) {
+					console.error(`gh-broker: ${(err as Error).message}`);
+					throw unsavedRefusal();
+				}
+				// The window exists only once the write landed: a failed write opens no window, and
+				// the cached step refuses the retry as spent.
+				const map = this.windows.get(user) ?? this.windows.set(user, new Map()).get(user)!;
+				map.set(id, { code, expiresAt: Date.parse(outcome.expiresAt!) });
+				return { otp: "opened", window: id, until: outcome.expiresAt! };
 			}
-			const id = createHmac("sha256", this.idKey).update(`${user}\0${code}`).digest("hex").slice(0, 16);
-			const expiresAt = now + this.settings.windowSeconds * 1000;
-			this.windows.push({ user, code, expiresAt, id });
-			return { otp: "opened", window: id, until: new Date(expiresAt).toISOString() };
+			case "spent-code":
+				// A real code whose step is already spent (reused, or spent by an unlock) is refused but isn't
+				// a guess, so it doesn't count toward a lockout.
+				throw new OtpRefusal(
+					`OTP code for ${tool} is spent (it, or a newer code, was already used): ask the user for the next code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
+					{ otp: "refused" }
+				);
+			case "bad-code":
+			case "locked-out":
+			case "hard-locked-now": {
+				// The security row (when this code started a lockout or the hard lock) comes before
+				// the state write and the router's call row, as before.
+				const row = otpAuditRow(tool, user, outcome, { maxFailures: this.settings.maxFailures, unlockCommand: unlockCommand(user) });
+				if (row) audit(row);
+				try {
+					this.state.write(this.compact({ ...state, users: { ...state.users, [user]: userRecord(after) } }, now));
+				} catch (err) {
+					// The counters still advance in memory and the refusal stands; authorize() refuses this
+					// user's gated calls until they can be saved.
+					this.unsaved.add(user);
+					console.error(`gh-broker: ${(err as Error).message}`);
+				}
+				throw this.rejection(tool, user, outcome);
+			}
+			default:
+				// Unreachable: the lock was checked above, so the machine cannot return
+				// locked/hard-locked here, and every counted outcome is handled above. Fail closed
+				// with a fixed string — computing minutes off a null lockedUntil would print NaN.
+				throw new OtpRefusal("OTP could not be checked. Nothing was run.", { otp: "refused" });
 		}
-
-		// A real code whose step is already spent (reused, or spent by an unlock) is refused but isn't
-		// a guess, so it doesn't count toward a lockout.
-		if (step !== undefined) {
-			throw new OtpRefusal(
-				`OTP code for ${tool} is spent (it, or a newer code, was already used): ask the user for the next code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
-				{ otp: "refused" }
-			);
-		}
-		throw this.rejection(tool, user, this.recordFailure(tool, state, mine, user, now));
 	}
 
 	/** The refusal for a wrong code, saying how close `user` now is to a lockout. */
-	private rejection(tool: string, user: string, after: UserState): OtpRefusal {
+	private rejection(tool: string, user: string, outcome: Extract<MachineOutcome, { reason: "bad-code" | "locked-out" | "hard-locked-now" }>): OtpRefusal {
 		const lead = `OTP code for ${tool} was not accepted`;
-		if (after.hardLock) {
+		if (outcome.reason === "hard-locked-now") {
 			return new OtpRefusal(`${lead}, and that was the last lockout allowed: gh-broker is now locked for ${user}. Ask the user to run "${unlockCommand(user)}" on ${this.host}. Nothing was run.`, {
 				otp: "refused"
 			});
 		}
 		const lockout = windowText(this.settings.lockoutSeconds);
-		// recordFailure resets the count to 0 exactly when this code started a short lockout.
-		if (after.failures === 0) return new OtpRefusal(`${lead}, and that was too many bad codes: OTP is locked for ${lockout}. Nothing was run.`, { otp: "refused" });
+		// The machine resets the count to 0 exactly when this code started a short lockout.
+		if (outcome.reason === "locked-out") return new OtpRefusal(`${lead}, and that was too many bad codes: OTP is locked for ${lockout}. Nothing was run.`, { otp: "refused" });
 		return new OtpRefusal(
-			`${lead} (${after.failures} of ${this.settings.maxFailures} bad codes before a lockout of ${lockout}): ask the user for a fresh code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
+			`${lead} (${outcome.failures} of ${this.settings.maxFailures} bad codes before a lockout of ${lockout}): ask the user for a fresh code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
 			{ otp: "refused" }
 		);
-	}
-
-	/** Count one bad code for `user`, starting a short lockout (and maybe the hard lock) at the limit. Returns the user's new counters. */
-	private recordFailure(tool: string, state: OtpState, mine: UserState, user: string, now: number): UserState {
-		const next = { ...mine, lockouts: mine.lockouts.filter((t) => Date.parse(t) > now - DAY_MS) };
-		next.failures += 1;
-		if (next.failures >= this.settings.maxFailures) {
-			const at = new Date(now).toISOString();
-			next.failures = 0;
-			next.lockedUntil = new Date(now + this.settings.lockoutSeconds * 1000).toISOString();
-			next.lockouts.push(at);
-			if (next.lockouts.length >= this.settings.maxLockouts) next.hardLock = { since: at, lockouts: next.lockouts.length };
-			audit(
-				next.hardLock
-					? { tool, user, decision: "deny", otp: "hard-lock", detail: `${next.lockouts.length} lockouts in 24 h; every tool except otp_status is refused until "${unlockCommand(user)}"` }
-					: { tool, user, decision: "deny", otp: "lockout", until: next.lockedUntil, detail: `${this.settings.maxFailures} bad codes` }
-			);
-		}
-		try {
-			this.state.write(this.compact({ ...state, users: { ...state.users, [user]: next } }, now));
-		} catch (err) {
-			// The counters still advance in memory and the refusal stands; authorize() refuses this
-			// user's gated calls until they can be saved.
-			this.unsaved.add(user);
-			console.error(`gh-broker: ${(err as Error).message}`);
-		}
-		return next;
 	}
 
 	/**
@@ -304,7 +417,7 @@ export class OtpGate {
 				lockedUsers = [{ user, since: read.since, lockouts: 0, unlockCommand: UNLOCK_ALL_COMMAND }];
 			}
 		}
-		const open = this.windows.filter((w) => w.user === user && w.expiresAt > now);
+		const open = [...(this.windows.get(user)?.values() ?? [])].filter((w) => w.expiresAt > now);
 		const next = open.length ? Math.min(...open.map((w) => w.expiresAt)) : undefined;
 		const lockedUntil = mine.lockedUntil && Date.parse(mine.lockedUntil) > now ? mine.lockedUntil : null;
 		return {

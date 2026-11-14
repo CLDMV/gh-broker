@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
+ *	@Last modified time: 2026-11-14T08:30:08-08:00 (1794673808)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -22,8 +22,17 @@ import type { OtpState } from "../otp/state.ts";
 import type { ConfigLayer } from "./config-merge.ts";
 import type { Group } from "./agents.ts";
 import type { StateReading } from "./otp.ts";
-import { DEFAULT_STATE_PATH, DEFAULT_MAX_FAILURES, DEFAULT_MAX_LOCKOUTS, describeUsers, emptyState, formatStatus, generateSeed, secondsUntilFreshCode, seedCredName, showSeed, spendRecentCodes, userOf, withoutUser, withoutUsers } from "./otp.ts";
+import { parseOtpOptions, stepOtp } from "@cldmv/lib-otp";
+import { DEFAULT_STATE_PATH, DEFAULT_MAX_FAILURES, DEFAULT_MAX_LOCKOUTS, describeUsers, emptyState, formatStatus, generateSeed, personOf, secondsUntilFreshCode, seedCredName, showSeed, spendRecentCodes, userOf, withoutUser, withoutUsers } from "./otp.ts";
 import { assertAgentName, registeredAgents, versionWarning } from "./agents.ts";
+
+/**
+ * The machine the CLI drives its unlock event through. The daemon's own machine config maps
+ * config.otp explicitly (src/otp/gate.ts machineConfig); the unlock's outcome and the global
+ * spend don't read any of the mapped limits — the period and skew are the daemon's fixed
+ * 30 s/±1 — so the defaults are the same machine.
+ */
+const UNLOCK_MACHINE = parseOtpOptions();
 
 /** The effects the `otp` commands use. */
 export interface OtpDeps {
@@ -97,7 +106,7 @@ function list(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 /** Record an unlock in the journal next to the daemon's audit log (never fatal). */
 function auditUnlock(d: OtpDeps, user: string, detail?: string): void {
 	try {
-		d.audit({ ts: new Date(d.now()).toISOString(), decision: "otp-unlock", user, by: d.sudoUser() ?? "root", ...(detail ? { detail } : {}) });
+		d.audit({ ts: new Date(d.now()).toISOString(), decision: "otp-unlock", user, by: d.sudoUser() || "root", ...(detail ? { detail } : {}) });
 	} catch (err) {
 		d.error(`warning: the unlock could not be written to the journal: ${(err as Error).message}`);
 	}
@@ -136,10 +145,16 @@ function unlock(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 		d.log(`${user} has no lock state; nothing to clear`);
 		return 0;
 	}
-	const wasLocked = Boolean(userOf(read.state, user!).hardLock);
+	// The unlock runs through the machine's admin-unlock event (its spend lands on the record's
+	// own counter, which is discarded here — the entry is deleted outright — and the global step
+	// is spent below, which is the spend that matters across users). Today's outcome keys off the
+	// entry's existence rather than the record's emptiness, so a machine "no-entry" for an
+	// all-zero entry still clears it.
+	const { outcome } = stepOtp(personOf(userOf(read.state, user!)), { kind: "admin-unlock", by: d.sudoUser() || "root", now }, UNLOCK_MACHINE);
+	const result = outcome?.reason === "unlocked" ? `unlocked ${user}` : `cleared ${user}'s counters (not hard-locked)`;
 	d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user!), now));
 	auditUnlock(d, user!);
-	d.log(`${wasLocked ? `unlocked ${user}` : `cleared ${user}'s counters (not hard-locked)`}. ${afterUnlock(now)}`);
+	d.log(`${result}. ${afterUnlock(now)}`);
 	return 0;
 }
 

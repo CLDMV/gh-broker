@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T21:27:13-08:00 (1793683633)
+ *	@Last modified time: 2026-11-14T08:30:09-08:00 (1794673809)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -229,6 +229,11 @@ function parseOtpConfig(raw: unknown): OtpConfig {
 		const v = o[key];
 		if (v === undefined) continue;
 		if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error(`config.otp.${key}: must be a positive integer`);
+		// The lockout length becomes an ISO timestamp (`lockedUntil`); beyond ~8.64e12 s the
+		// ms value leaves the Date range and toISOString throws. The lib-otp option set caps
+		// it there too — bounding it here keeps the error naming the config key instead of an
+		// OtpError from the gate's constructor at startup.
+		if (key === "lockoutSeconds" && v > 8_640_000_000_000) throw new Error("config.otp.lockoutSeconds: must be at most 8640000000000 (the largest lockout that fits a Date)");
 		out[key] = v;
 	}
 	if (o.statePath !== undefined) {
