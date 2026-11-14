@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:02:54-08:00 (1794682974)
+ *	@Last modified time: 2026-11-14T11:08:19-08:00 (1794683299)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -185,6 +185,15 @@ export interface TokenRequest {
  * the library turns it into a typed error.
  */
 export type TokenResolver = (req: TokenRequest) => Promise<string | null>;
+
+/**
+ * The person field's no-person marker (design #175 §2a/§2g): the catalog's schema fetch
+ * is owner-independent — any valid read token works — so it requests a token with this
+ * marker in TokenRequest.person and a resolver ignores it (the daemon's resolver does).
+ * Not a valid agent user: agent users are non-empty names (src/agents.ts), so "" can
+ * never collide with a real person.
+ */
+export const NO_PERSON = "";
 
 /**
  * Structured audit log. One JSON line per decision/call to stdout (journald

@@ -7,32 +7,37 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:43:26-08:00 (1794678206)
+ *	@Last modified time: 2026-11-14T11:08:17-08:00 (1794683297)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { Config, SecretStore, TokenResolver, ToolRule } from "./types.ts";
+import { NO_PERSON, type Config, type SecretStore, type TokenResolver, type ToolRule } from "./types.ts";
 import type { UpstreamPool } from "./upstream.ts";
 import { MANIFEST } from "./manifest.ts";
-import { legacyCatalogOpts } from "./catalog-compat.ts";
-import { OTP_ARG, isGated, otpSettings, windowText } from "./otp/policy.ts";
+import { unavailableReason } from "./availability.ts";
+import { OTP_ARG, isGated, otpSetupProblem, otpSettings, windowText } from "./otp/policy.ts";
 
 /**
  * Where buildCatalog's credentials and availability facts come from. The library shape
  * is a {@link TokenResolver} (design #175 §2a) — the only credential path, per call,
- * never cached. A SecretStore is still accepted so today's daemon-side call sites (and
- * the suite's pins of that exact behavior) run unchanged; the store never reaches the
- * catalog core — src/catalog-compat.ts adapts it. Slice 4 drops the store shape.
+ * never cached. A SecretStore is still accepted ONLY for the suite's pre-slice-3 catalog
+ * pins (tests/catalog.test.vitest.mts calls buildCatalog with a store and pins that
+ * exact behavior: the first owner's read PAT, the env-derived timeout with NaN, the
+ * stderr sink, availability over the store); those tests must pass unedited, so the
+ * store shape is duck-typed here and adapted by legacyCatalogAuth below. The daemon
+ * itself stopped passing a store in slice 4 — src/index.ts wires the real resolver and
+ * opts explicitly — and the shape dies with the first authorized test edit (slice 6's
+ * packaging re-cut). The store never reaches the logic below the adapter.
  */
 export type CatalogAuth = TokenResolver | SecretStore;
 
 export interface CatalogOpts {
 	/**
 	 * The upstream schema-fetch timeout in ms. Absent: 10000 for a TokenResolver caller;
-	 * a SecretStore caller (the daemon-compat shape) gets today's env-derived value
+	 * a SecretStore caller (the legacy-suite shape) gets the env-derived value
 	 * (GH_BROKER_CATALOG_TIMEOUT_MS, NaN included) instead.
 	 */
 	upstreamTimeoutMs?: number;
@@ -51,10 +56,28 @@ export interface CatalogOpts {
 	unavailable?: (rule: ToolRule) => string | undefined;
 }
 
-/** A SecretStore (the daemon-compat shape) is detectable by its two methods. */
+/** A SecretStore (the legacy-suite shape) is detectable by its two methods. */
 function asSecretStore(auth: CatalogAuth): SecretStore | undefined {
 	const a = auth as Partial<SecretStore> | undefined;
 	return typeof a?.resolve === "function" && typeof a?.has === "function" ? (auth as SecretStore) : undefined;
+}
+
+/**
+ * The legacy defaults behind the store shape (moved here when src/catalog-compat.ts was
+ * deleted — the daemon no longer uses them): the first configured owner's read PAT for
+ * the schema fetch (tool schemas are owner-independent; the person is irrelevant), the
+ * env-derived timeout (NaN included, pinned as-is), stderr for catalog messages, and
+ * the availability check over the store. The env read and the console sink live ONLY
+ * behind this legacy shape — the resolver shape stays env-free and silent.
+ */
+function legacyCatalogAuth(config: Config, store: SecretStore): { resolveToken: TokenResolver; upstreamTimeoutMs: number; log: (message: string) => void; unavailable: (rule: ToolRule) => string | undefined } {
+	const firstOwner = Object.values(config.owners)[0];
+	return {
+		resolveToken: async () => (firstOwner ? store.resolve(firstOwner.read) : null),
+		upstreamTimeoutMs: Number(process.env.GH_BROKER_CATALOG_TIMEOUT_MS ?? 10000),
+		log: (message) => console.error(message),
+		unavailable: (rule) => unavailableReason(rule, config, (ref) => store.has(ref), (c) => otpSetupProblem(c, store))
+	};
 }
 
 /**
@@ -69,7 +92,7 @@ function asSecretStore(auth: CatalogAuth): SecretStore | undefined {
  */
 export async function buildCatalog(config: Config, auth: CatalogAuth, upstream: UpstreamPool, opts: CatalogOpts = {}): Promise<Tool[]> {
 	const store = asSecretStore(auth);
-	const legacy = store ? legacyCatalogOpts(config, store) : undefined;
+	const legacy = store ? legacyCatalogAuth(config, store) : undefined;
 	const resolveToken: TokenResolver = legacy?.resolveToken ?? (auth as TokenResolver);
 	// Absent opts keep today's daemon behavior for the compat shape, and stay
 	// env-free + silent for a resolver caller (a library host is Quack-safe).
@@ -88,8 +111,10 @@ export async function buildCatalog(config: Config, auth: CatalogAuth, upstream: 
 	if (firstOwner) {
 		try {
 			// The library's only credential path: the resolver decides what the schema fetch
-			// may use. The catalog has no person of its own (schemas are owner-independent).
-			const token = await resolveToken({ person: "", owner: Object.keys(config.owners)[0], mode: "read", kind: "github" });
+			// may use. The catalog has no person of its own (schemas are owner-independent):
+			// the request carries the NO_PERSON marker (src/types.ts) and the first configured
+			// owner as the owner, so the daemon's owner-honoring resolver yields its read PAT.
+			const token = await resolveToken({ person: NO_PERSON, owner: Object.keys(config.owners)[0], mode: "read", kind: "github" });
 			if (!token) throw new Error("the token resolver returned no token");
 			// Never let a slow/unreachable upstream hang startup — fall back to minimal schemas.
 			const tools = await Promise.race([

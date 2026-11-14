@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { buildCatalog } from "../src/catalog.ts";
-import type { TokenResolver } from "../src/types.ts";
+import { NO_PERSON, type TokenResolver } from "../src/types.ts";
 
 function makeConfig(tools: any[]): any {
 	return { listen: "unix:/x", upstream: "https://api.githubcopilot.com/mcp/", tools, owners: { cldmv: { read: "cred:r", write: "cred:w" } } };
@@ -70,5 +70,15 @@ describe("buildCatalog's library call shape (design #175 §2a/§2g)", () => {
 		);
 		expect(catalog.map((t) => t.name)).toEqual(["get_me"]);
 		expect(log).toHaveBeenCalledWith('catalog: "npm_scaffold" is not exposed: the npm integration is not configured (enable it with the installer\'s --npm)');
+	});
+});
+
+describe("the no-person marker (design #175 §2a/§2g)", () => {
+	it("NO_PERSON is the empty string, and the schema fetch dispatches it as the request's person", async () => {
+		expect(NO_PERSON).toBe("");
+		const upstream = { listToolsFor: vi.fn().mockResolvedValue([]) };
+		const resolveToken = vi.fn(async () => "tok");
+		await buildCatalog(makeConfig([{ name: "get_me", mode: "read" }]), resolveToken as unknown as TokenResolver, upstream as any);
+		expect(resolveToken).toHaveBeenCalledWith({ person: NO_PERSON, owner: "cldmv", mode: "read", kind: "github" });
 	});
 });
