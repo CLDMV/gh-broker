@@ -7,19 +7,20 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:20:16-08:00 (1793679616)
+ *	@Last modified time: 2026-11-14T11:01:08-08:00 (1794682868)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { Caller, Config, SecretStore, ToolRule } from "./types.ts";
+import type { Caller, Config, SecretStore, TokenResolver, ToolRule } from "./types.ts";
 import type { AppAuth } from "./appauth.ts";
 import { Octokit } from "@octokit/core";
 import { indexTools } from "./config.ts";
 import { audit } from "./audit.ts";
 import { unavailableReason } from "./availability.ts";
+import { permissivePolicy } from "./manifest.ts";
 // DEFERRED: link_issue is App-token-only and not wired in — see docs.
 // import { linkIssue, type LinkIssueInput } from "./verbs/link_issue.ts";
 import {
@@ -53,6 +54,29 @@ export interface Upstream {
 }
 
 /**
+ * The daemon host's {@link TokenResolver} (design #175 §2a) — the owner+mode→PAT lookup
+ * over `config.owners` + the {@link SecretStore}. This is the only credential path the
+ * routing logic sees: the routing code never reads the store or `config.owners` for a
+ * token, it asks here, honoring the owner and the EFFECTIVE mode it was handed (a
+ * host-narrowed mode is what gets requested). Per call, never cached; `null` means no
+ * access and the caller turns it into the typed no-access error (fail closed).
+ *
+ * The `person` is irrelevant to owner resolution (the catalog's schema fetch passes
+ * NO_PERSON for it) and is ignored here. `kind: "npm"` is not per-owner and not
+ * mode-scoped — one granular token. `kind: "ghcr"` has no router path yet (the ghcr
+ * verbs run on GhcrService's own store, host-side) and fails closed.
+ */
+export function hostTokenResolver(config: Config, secrets: SecretStore): TokenResolver {
+	return async ({ owner, mode, kind }) => {
+		if (kind === "npm") return config.npm ? secrets.resolve(config.npm.token) : null;
+		if (kind === "ghcr") return null;
+		const creds = owner ? config.owners[owner] : undefined;
+		if (!creds) return null;
+		return secrets.resolve(mode === "write" ? creds.write : creds.read);
+	};
+}
+
+/**
  * Enforces the default-deny allowlist, resolves the (owner, mode) → PAT, and either
  * forwards to the hosted MCP or dispatches a custom verb. The token never leaves here.
  */
@@ -62,6 +86,8 @@ export class Router {
 	private readonly upstream: Upstream;
 	private readonly appAuth?: AppAuth;
 	private readonly rules: Map<string, ToolRule>;
+	/** The daemon host's resolver (design §2a): the only credential path the routing asks. */
+	private readonly resolveToken: TokenResolver;
 	/** GHCR verbs run on config.ghcr's own credential, not the owner's GitHub PAT (created on first use). */
 	private ghcr?: GhcrService;
 	/** The OTP gate (#143). Inert without config.otp. */
@@ -72,7 +98,12 @@ export class Router {
 		this.secrets = secrets;
 		this.upstream = upstream;
 		this.appAuth = appAuth;
-		this.rules = indexTools(config.tools);
+		// The effective rules (design #175 §2h): the daemon serves the permissive policy
+		// explicitly — config.json keeps today's authority, so the effective mode equals
+		// the config's mode today. Routing asks the resolver for the rule's EFFECTIVE
+		// mode, so a host-narrowed mode is what the credential lookup honors.
+		this.rules = indexTools(permissivePolicy(config.tools).tools);
+		this.resolveToken = hostTokenResolver(config, secrets);
 		this.otp = otp ?? new OtpGate(config, secrets);
 	}
 
@@ -142,7 +173,10 @@ export class Router {
 		if (GHCR_TOOLS.has(tool)) return this.callGhcr(tool, args, rule, user, otp);
 		// Owner-less reads (global advisory DB, get_me, notifications) fall back to
 		// the configured defaultOwner's READ PAT. Writes never fall back — a write
-		// must always name the owner it targets.
+		// must always name the owner it targets. The config.owners read here is the
+		// ROUTING presence check (is defaultOwner configured at all), not a credential
+		// read: an unconfigured defaultOwner must fall through to "no owner in args",
+		// exactly as before — the token itself still comes only from the resolver.
 		let owner = createdIn ?? extractOwner(args);
 		if (!owner && rule.mode === "read" && this.config.defaultOwner && this.config.owners[this.config.defaultOwner]) {
 			owner = this.config.defaultOwner.toLowerCase();
@@ -151,12 +185,13 @@ export class Router {
 			audit({ tool, user, decision: "error", detail: "no owner in args" });
 			throw new Error(`tool "${tool}": could not determine repo owner from arguments`);
 		}
-		const creds = this.config.owners[owner];
-		if (!creds) {
+		// The token comes from the resolver (design §2a) — the owner+mode→PAT lookup lives
+		// there, not here. null (unconfigured owner) is the typed no-access refusal below.
+		const token = await this.resolveToken({ person: user, owner, mode: rule.mode, kind: "github" });
+		if (token === null) {
 			audit({ tool, user, owner, decision: "error", detail: "no creds for owner" });
 			throw new Error(`no credentials configured for owner "${owner}" — add it to config.owners + creds`);
 		}
-		const token = this.secrets.resolve(rule.mode === "write" ? creds.write : creds.read);
 		const repoName = tool === "create_repository" ? args.name : args.repo;
 		const repo = typeof repoName === "string" ? `${owner}/${repoName}` : owner;
 		// A fork's audit line also names what was forked; owner/repo above are the new copy.
@@ -165,7 +200,7 @@ export class Router {
 		const decision = rule.custom ? "custom" : rule.augment ? "augment" : "forward";
 		try {
 			const out = rule.custom
-				? await this.dispatchCustom(tool, args, owner, token)
+				? await this.dispatchCustom(tool, args, owner, token, user)
 				: rule.augment
 					? await this.dispatchAugmented(tool, args, owner, token)
 					: await this.upstream.forward(tool, args, token);
@@ -196,7 +231,8 @@ export class Router {
 		tool: string,
 		args: Record<string, unknown>,
 		owner: string,
-		token: string
+		token: string,
+		person: string
 	): Promise<CallToolResult> {
 		switch (tool) {
 			// DEFERRED: link_issue (App-token-only addClosingIssueReference) is not wired in — see docs.
@@ -266,9 +302,11 @@ export class Router {
 			case "npm_scaffold": {
 				const npm = this.config.npm!; // availability already required it
 				// The GitHub side only reads (repo metadata, package.json, workflow file), so it
-				// runs on the read PAT even though the verb is a write.
-				const octokit = new Octokit({ auth: this.secrets.resolve(this.config.owners[owner]!.read) });
-				const registry = new NpmRegistry({ token: this.secrets.resolve(npm.token), ...(npm.registry ? { registry: npm.registry } : {}) });
+				// runs on the read PAT even though the verb is a write — both credentials come
+				// from the resolver (design §2a). The npm token is not mode-scoped; the request
+				// carries the verb's mode.
+				const octokit = new Octokit({ auth: (await this.resolveToken({ person, owner, mode: "read", kind: "github" }))! });
+				const registry = new NpmRegistry({ token: (await this.resolveToken({ person, owner, mode: "write", kind: "npm" }))!, ...(npm.registry ? { registry: npm.registry } : {}) });
 				const out = await npmScaffold(args, { octokit, registry, scopes: npm.scopes });
 				return { content: [{ type: "text", text: JSON.stringify(out) }] };
 			}
