@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:10:00-08:00 (1794683400)
+ *	@Last modified time: 2026-11-14T11:29:27-08:00 (1794684567)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -159,8 +159,16 @@ export async function dispatchCustom(deps: RouteDeps, tool: string, args: Record
 			// runs on the read PAT even though the verb is a write — both credentials come
 			// from the resolver (design §2a). The npm token is not mode-scoped; the request
 			// carries the verb's mode.
-			const octokit = new Octokit({ auth: (await deps.resolveToken({ person, owner, mode: "read", kind: "github" }))! });
-			const registry = new NpmRegistry({ token: (await deps.resolveToken({ person, owner, mode: "write", kind: "npm" }))!, ...(npm.registry ? { registry: npm.registry } : {}) });
+			// A resolver may return null (no access) — §2a says the caller turns that into the
+			// typed no-access error rather than handing null to a client. Unreachable on the
+			// daemon (config validation guarantees both refs; npm_scaffold is only served when
+			// the npm token is stored), but invoke's foreign resolvers make it reachable.
+			const githubToken = await deps.resolveToken({ person, owner, mode: "read", kind: "github" });
+			if (!githubToken) throw new Error(`no credentials configured for owner "${owner}" — add it to config.owners + creds`);
+			const npmToken = await deps.resolveToken({ person, owner, mode: "write", kind: "npm" });
+			if (!npmToken) throw new Error(`no npm token configured — add npm.token to the config`);
+			const octokit = new Octokit({ auth: githubToken });
+			const registry = new NpmRegistry({ token: npmToken, ...(npm.registry ? { registry: npm.registry } : {}) });
 			const out = await npmScaffold(args, { octokit, registry, scopes: npm.scopes });
 			return { content: [{ type: "text", text: JSON.stringify(out) }] };
 		}
