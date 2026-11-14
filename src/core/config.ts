@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T13:30:36-08:00 (1794691836)
+ *	@Last modified time: 2026-11-14T14:53:38-08:00 (1794696818)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -15,7 +15,7 @@
 
 import type { Config, Mode, ToolRule } from "./types.ts";
 import { parseGhcrConfig } from "../verbs/ghcr/config.ts";
-import { OTP_STATUS } from "../otp/policy.ts";
+import { OTP_STATUS } from "./otp-policy.ts";
 import { deniedReason } from "../denylist.ts";
 
 const MODES: readonly Mode[] = ["read", "write"];
