@@ -76,6 +76,7 @@
 		"vitest": "^5.0.5"
 	},
 	"dependencies": {
+		"@cldmv/lib-otp": "^0.1.0",
 		"@modelcontextprotocol/sdk": "^1.32.2",
 		"@octokit/auth-app": "^8.3.1",
 		"@octokit/core": "^7.0.8",
