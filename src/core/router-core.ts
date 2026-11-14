@@ -25,7 +25,7 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { Octokit } from "@octokit/core";
-import type { NpmConfig, TokenResolver } from "./types.ts";
+import type { NpmConfig, TokenResolver, ToolRule } from "./types.ts";
 
 // The dispatch verbs are imported through the old src/verbs/* re-export shims, not their
 // src/core/verbs/ homes, so the suite's module mocks keep intercepting: tests mock the old
@@ -304,4 +304,58 @@ export async function dispatchAugmented(deps: RouteDeps, tool: string, args: Rec
 		default:
 			return deps.upstream.forward(tool, args, token);
 	}
+}
+
+/** Build a name→rule index for O(1) allowlist checks. (Lives here — the invoke surface and
+ * the Router share it; re-exported from core/config.ts for that module's consumers.) */
+export function indexTools(tools: ToolRule[]): Map<string, ToolRule> {
+	return new Map(tools.map((t) => [t.name, t]));
+}
+
+/** Tools that create a repo, whose PAT is picked by the org the repo lands in. */
+export const REPO_CREATING = new Set(["create_repository", "fork_repository"]);
+
+/**
+ * The org a new repo lands in. Upstream creates it in the PAT user's own account when
+ * `organization` is left out, so it's required here, and it must be a configured owner. Repos
+ * are only created in orgs: upstream sends a configured user-owner's name to the org endpoint,
+ * which 404s. For a fork, `owner` is the repo being forked and `organization` is where the
+ * fork goes, so the write PAT is the destination's. create_repository also needs `private`
+ * said explicitly, so a repo's visibility is never left to a default.
+ */
+export function creationOwner(tool: string, args: Record<string, unknown>, owners: { [owner: string]: { read: string; write: string } }): string {
+	if (typeof args.organization !== "string" || !args.organization) {
+		throw new Error(`tool "${tool}": "organization" is required (the org the repo is created in); gh-broker doesn't create repos in a personal account`);
+	}
+	const org = args.organization.toLowerCase();
+	if (!Object.hasOwn(owners, org)) throw new Error(`no credentials configured for owner "${org}" — add it to config.owners + creds`);
+	if (tool === "create_repository" && typeof args.private !== "boolean") {
+		throw new Error('tool "create_repository": "private" is required, true or false; a repo\'s visibility is never left to a default');
+	}
+	return org;
+}
+
+/**
+ * actions_run_trigger's delete_workflow_run_logs method removes a run's logs, which are the
+ * record of what a run did. The other methods (dispatch, re-run, cancel) stay, behind the gate.
+ */
+export function refuseLogDeletion(args: Record<string, unknown>): void {
+	if (args.method === "delete_workflow_run_logs") throw new Error('tool "actions_run_trigger": method "delete_workflow_run_logs" is not allowed in gh-broker; a run\'s logs are kept');
+}
+
+/** Derive the repo owner from a tool call's arguments, so we pick the right PAT. */
+export function extractOwner(args: Record<string, unknown>): string | undefined {
+	if (typeof args.owner === "string" && args.owner) return args.owner.toLowerCase();
+	// Many org-scoped tools (list_org_repository_security_advisories, get_team_members, …)
+	// name the org as `org` rather than `owner`; for routing, org === owner.
+	if (typeof args.org === "string" && args.org) return args.org.toLowerCase();
+	if (typeof args.query === "string") {
+		const m = args.query.match(/\brepo:([^/\s]+)\/[^\s]+|\b(?:org|user):([^\s]+)/i);
+		const hit = m?.[1] ?? m?.[2];
+		if (hit) return hit.toLowerCase();
+	}
+	if (typeof args.repository === "string" && args.repository.includes("/")) {
+		return args.repository.split("/")[0]?.toLowerCase();
+	}
+	return undefined;
 }

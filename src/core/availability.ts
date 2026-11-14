@@ -42,14 +42,30 @@ export function isEnabled(rule: ToolRule): boolean {
 /**
  * Why `rule` can't be used on this broker, or undefined when it can.
  *
- * Credentials come through the injected capability predicate `has` (design #175 §2a) —
- * the daemon passes `(ref) => secrets.has(ref)`; the library never sees a SecretStore.
- * The OTP setup check is injected too (`otpProblem`): whether the gate is ready is host
- * knowledge (the daemon's check decodes the stored seed, which a bare `has` cannot do —
- * without the injection that check would silently lose the invalid-seed case and change
- * which tools a broker with a corrupt seed advertises).
+ * Credentials come through the injected {@link Capability} — the daemon passes
+ * `{ has: (ref) => secrets.has(ref), otpProblem: () => otpSetupProblem(config, secrets) }`.
+ * Only the config's npm/ghcr sections are read (the npm/ghcr availability checks), so a
+ * library host can pass its lib-config half.
  */
-export function unavailableReason(rule: ToolRule, config: Config, has: (ref: string) => boolean, otpProblem: (config: Config) => string | undefined): string | undefined {
+/**
+ * The host's availability facts (design #175 §2a), folded into one object (parent
+ * directive, slice 5): whether a credential reference is stored, and — host knowledge —
+ * why the gated tools can't run yet. The library never sees a SecretStore.
+ */
+export interface Capability {
+	/** Whether a credential reference is stored (non-empty) on this host. */
+	has: (ref: string) => boolean;
+	/**
+	 * Why the gated tools can't run yet, or undefined when OTP is ready. Host knowledge:
+	 * the daemon's check decodes the stored seed, which a bare `has` cannot do — without
+	 * the injection that check would silently lose the invalid-seed case and change which
+	 * tools a broker with a corrupt seed advertises. Closed over the host's config, so it
+	 * takes no argument.
+	 */
+	otpProblem?: () => string | undefined;
+}
+
+export function unavailableReason(rule: ToolRule, config: Pick<Config, "npm" | "ghcr">, capability: Capability): string | undefined {
 	if (!isEnabled(rule)) {
 		return DEFAULT_DISABLED.has(rule.name) && rule.enabled === undefined
 			? `it is disabled by default; set "enabled": true on its entry in config.tools to turn it on`
@@ -57,16 +73,16 @@ export function unavailableReason(rule: ToolRule, config: Config, has: (ref: str
 	}
 	if (rule.name === "npm_scaffold") {
 		if (!config.npm) return "the npm integration is not configured (enable it with the installer's --npm)";
-		if (!has(config.npm.token)) return `its credential "${config.npm.token.replace(/^cred:/, "")}" is not stored (re-run the installer with --npm)`;
+		if (!capability.has(config.npm.token)) return `its credential "${config.npm.token.replace(/^cred:/, "")}" is not stored (re-run the installer with --npm)`;
 	}
 	if (GHCR_TOOLS.has(rule.name)) {
 		if (!config.ghcr) return "GHCR pushes are not configured (config.ghcr)";
 		const refs = ghcrCredRefs(config.ghcr);
-		if (!refs.some((ref) => has(ref))) {
+		if (!refs.some((ref) => capability.has(ref))) {
 			return `no GHCR credential is stored (${refs.map((r) => `"${r.replace(/^cred:/, "")}"`).join(", ")}; re-run the installer to add one)`;
 		}
 	}
 	// A gated tool can only run once OTP is set up; until then it's hidden like the others.
-	if (isGated(rule)) return otpProblem(config);
+	if (isGated(rule)) return capability.otpProblem?.();
 	return undefined;
 }

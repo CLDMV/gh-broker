@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:08:18-08:00 (1794683298)
+ *	@Last modified time: 2026-11-14T13:10:57-08:00 (1794690657)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -101,6 +101,9 @@ async function main(): Promise<void> {
 	const gate = new OtpGate(config, secrets);
 	const ghcr = new GhcrService(config.ghcr, secrets, { onJobDone: (entry) => audit(entry) });
 	const router = new Router(config, secrets, upstream, appAuth, gate, ghcr);
+	// The availability facts over the store (design §2a's capability object): ref presence
+	// plus the OTP setup check, which decodes the stored seed and so stays host-side.
+	const capability = { has: (ref: string) => secrets.has(ref), otpProblem: () => otpSetupProblem(config, secrets) };
 	// The daemon picks the permissive policy explicitly (design #175 §2h): config.json keeps
 	// today's authority, so a config that widens a manifest tool's mode or turns off its OTP
 	// gate is served as configured — never refused — but each such fact warns here at startup.
@@ -117,7 +120,7 @@ async function main(): Promise<void> {
 	const catalog = await buildCatalog(config, hostTokenResolver(config, secrets), upstream, {
 		upstreamTimeoutMs: Number(process.env.GH_BROKER_CATALOG_TIMEOUT_MS ?? 10000),
 		log: (message) => console.error(message),
-		unavailable: (rule) => unavailableReason(rule, config, (ref) => secrets.has(ref), (c) => otpSetupProblem(c, secrets))
+		unavailable: (rule) => unavailableReason(rule, config, capability)
 	});
 	const agents = await startServer(config, router, catalog);
 	console.log(

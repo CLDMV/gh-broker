@@ -229,22 +229,22 @@ describe("unavailableReason takes the injected capability predicate (design #175
 
 	it("an unstored npm credential hides npm_scaffold, exactly as before", () => {
 		const has = (ref: string) => ref !== "cred:npm-token";
-		expect(unavailableReason(rule("npm_scaffold"), config(), has, () => undefined)).toBe(
+		expect(unavailableReason(rule("npm_scaffold"), config(), { has, otpProblem: () => undefined })).toBe(
 			'its credential "npm-token" is not stored (re-run the installer with --npm)'
 		);
 	});
 
 	it("an unstored ghcr credential hides the ghcr verbs, exactly as before", () => {
-		expect(unavailableReason(rule("ghcr_push"), config(), () => false, () => undefined)).toBe(
+		expect(unavailableReason(rule("ghcr_push"), config(), { has: () => false, otpProblem: () => undefined })).toBe(
 			'no GHCR credential is stored ("alpha-ghcr"; re-run the installer to add one)'
 		);
 	});
 
 	it("a gated tool is hidden by the injected otpProblem (the host's seed-decoding check)", () => {
-		expect(unavailableReason(rule("merge_pull_request"), config(), () => true, () => "OTP is not set up")).toBe("OTP is not set up");
+		expect(unavailableReason(rule("merge_pull_request"), config(), { has: () => true, otpProblem: () => "OTP is not set up" })).toBe("OTP is not set up");
 	});
 
 	it("credentials stored + OTP ready → available", () => {
-		expect(unavailableReason(rule("ghcr_push"), config(), () => true, () => undefined)).toBeUndefined();
+		expect(unavailableReason(rule("ghcr_push"), config(), { has: () => true, otpProblem: () => undefined })).toBeUndefined();
 	});
 });
