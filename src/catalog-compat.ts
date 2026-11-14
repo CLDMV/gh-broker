@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:09:33-08:00 (1794676173)
+ *	@Last modified time: 2026-11-14T09:43:26-08:00 (1794678206)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -18,9 +18,10 @@
  * #175 §2g): the SecretStore doubled as the credential + availability source, the
  * schema-fetch timeout came from GH_BROKER_CATALOG_TIMEOUT_MS, and catalog messages went
  * to stderr (journald). buildCatalog still accepts that shape — a SecretStore as its
- * auth argument — so today's call sites and the suite's pins of this exact behavior run
- * unchanged; the core (src/catalog.ts) never sees the store. Slice 4 removes this module
- * when the daemon passes the resolver adapter + opts explicitly.
+ * auth argument — so the suite's pins of this exact behavior run unchanged, and the
+ * daemon's one adapter (legacyCatalogOpts, called from src/index.ts) is the host-side
+ * half of it; the core (src/catalog.ts) never sees the store. Slice 4 removes this
+ * module when the daemon passes the real per-call resolver wiring.
  */
 
 import type { Config, SecretStore, ToolRule, TokenResolver } from "./types.ts";

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:09:35-08:00 (1794676175)
+ *	@Last modified time: 2026-11-14T09:43:27-08:00 (1794678207)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,11 +19,10 @@ import { UpstreamPool } from "./upstream.ts";
 import { Router } from "./router.ts";
 import { AppAuth } from "./appauth.ts";
 import { buildCatalog } from "./catalog.ts";
+import { legacyCatalogOpts } from "./catalog-compat.ts";
 import { permissivePolicy } from "./manifest.ts";
-import { unavailableReason } from "./availability.ts";
 import { startServer } from "./server.ts";
 import { resolveConfigPath } from "./paths.ts";
-import type { TokenResolver } from "./types.ts";
 
 function argConfig(): string {
 	const i = process.argv.indexOf("--config");
@@ -96,23 +95,13 @@ async function main(): Promise<void> {
 	const { warnings } = permissivePolicy(config.tools);
 	for (const warning of warnings) console.error(`gh-broker: ${warning}`);
 
-	// The two library seams (design #175 §2a/§2g), both adapted over the SecretStore until
-	// slice 4 wires the real per-call resolver:
-	//   - resolveToken — the library's only credential path. The catalog's schema fetch is
-	//     owner-independent, so today's behavior (the first configured owner's read PAT,
-	//     person ignored) is exactly what this adapter keeps.
-	//   - unavailable — the capability predicate availability.ts will take directly in
-	//     slice 4; until then the daemon adapts it over the store.
-	const firstOwner = Object.values(config.owners)[0];
-	const resolveToken: TokenResolver = async () => (firstOwner ? secrets.resolve(firstOwner.read) : null);
-	const catalog = await buildCatalog(config, resolveToken, upstream, {
-		// Today's values, passed explicitly now that the library no longer reads them:
-		// the env-derived schema-fetch timeout (NaN included, pinned as-is) and stderr —
-		// journald captures it, same as every other daemon-side console.error.
-		upstreamTimeoutMs: Number(process.env.GH_BROKER_CATALOG_TIMEOUT_MS ?? 10000),
-		log: (message) => console.error(message),
-		unavailable: (rule) => unavailableReason(rule, config, secrets)
-	});
+	// One adapter for the daemon's pre-slice-4 call shape (design #175 §2a/§2g): the store
+	// becomes the resolver + opts the library takes — the first owner's read PAT for the
+	// schema fetch, the env-derived timeout (NaN included, pinned as-is), stderr for catalog
+	// messages, and the availability predicate. Slice 4 replaces this with the real
+	// per-call resolver wiring.
+	const { resolveToken, ...catalogOpts } = legacyCatalogOpts(config, secrets);
+	const catalog = await buildCatalog(config, resolveToken, upstream, catalogOpts);
 	const agents = await startServer(config, router, catalog);
 	console.log(
 		JSON.stringify({
