@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T08:30:09-08:00 (1794673809)
+ *	@Last modified time: 2026-11-14T09:10:29-08:00 (1794676229)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -49,7 +49,6 @@ import { OTP_ARG, isGated, otpSettings, readSeed, windowText, type OtpSettings }
 import { isEnabled } from "../availability.ts";
 import { OtpStateFile, emptyUser, personOf, userState, type HardLock, type MachinePerson, type OtpState, type UserState } from "./state.ts";
 import {
-	base32Encode,
 	lockStatus,
 	parseOtpOptions,
 	safeEqual,
@@ -307,7 +306,12 @@ export class OtpGate {
 			// to the TOTP match (which refuses a spent code) rather than inventing an outcome.
 		}
 
-		const counter = verifyCode(base32Encode((readSeed(this.config, this.secrets) as { key: Buffer }).key), code, now, this.machine);
+		// The stored seed string goes straight to verifyCode: the package decodes it and
+		// throws the typed OTP_SEED_INVALID on a bad seed (a config error must never read
+		// as "no match"). The old decode→encode round-trip hid behind an unchecked cast —
+		// an invalid seed escaped as a raw TypeError (design #175 §5.13). Availability's
+		// otpSetupProblem/readSeed still gate the router path; this is the gate's own read.
+		const counter = verifyCode(this.secrets.resolve(this.config.otp!.seed).trim(), code, now, this.machine);
 		const id = createHmac("sha256", this.idKey).update(`${user}\0${code}`).digest("hex").slice(0, 16);
 		const { state: after, outcome } = stepOtp(person, counter === undefined ? { kind: "code-bad", now } : { kind: "code-ok", counter, windowId: id, now }, this.machine);
 		switch (outcome?.reason) {
