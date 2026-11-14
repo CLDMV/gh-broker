@@ -7,30 +7,76 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:06:04-08:00 (1794675964)
+ *	@Last modified time: 2026-11-14T09:09:33-08:00 (1794676173)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { Config, SecretStore } from "./types.ts";
+import type { Config, SecretStore, TokenResolver, ToolRule } from "./types.ts";
 import type { UpstreamPool } from "./upstream.ts";
 import { MANIFEST } from "./manifest.ts";
-import { unavailableReason } from "./availability.ts";
+import { legacyCatalogOpts } from "./catalog-compat.ts";
 import { OTP_ARG, isGated, otpSettings, windowText } from "./otp/policy.ts";
+
+/**
+ * Where buildCatalog's credentials and availability facts come from. The library shape
+ * is a {@link TokenResolver} (design #175 §2a) — the only credential path, per call,
+ * never cached. A SecretStore is still accepted so today's daemon-side call sites (and
+ * the suite's pins of that exact behavior) run unchanged; the store never reaches the
+ * catalog core — src/catalog-compat.ts adapts it. Slice 4 drops the store shape.
+ */
+export type CatalogAuth = TokenResolver | SecretStore;
+
+export interface CatalogOpts {
+	/**
+	 * The upstream schema-fetch timeout in ms. Absent: 10000 for a TokenResolver caller;
+	 * a SecretStore caller (the daemon-compat shape) gets today's env-derived value
+	 * (GH_BROKER_CATALOG_TIMEOUT_MS, NaN included) instead.
+	 */
+	upstreamTimeoutMs?: number;
+	/**
+	 * Operator-facing log sink for the catalog's startup messages. Absent: silent for a
+	 * TokenResolver caller (a library host composes its own logging); a SecretStore
+	 * caller gets today's stderr (journald) sink.
+	 */
+	log?: (message: string) => void;
+	/**
+	 * The capability predicate (design §2's seam table): why a tool rule can't be served
+	 * on this host, or undefined when it can. Absent for a TokenResolver caller — the
+	 * host applies its own availability policy before building a catalog; a SecretStore
+	 * caller gets today's availability check over the store.
+	 */
+	unavailable?: (rule: ToolRule) => string | undefined;
+}
+
+/** A SecretStore (the daemon-compat shape) is detectable by its two methods. */
+function asSecretStore(auth: CatalogAuth): SecretStore | undefined {
+	const a = auth as Partial<SecretStore> | undefined;
+	return typeof a?.resolve === "function" && typeof a?.has === "function" ? (auth as SecretStore) : undefined;
+}
 
 /**
  * Build the advertised tool list ONCE at startup. Proxied tools carry their real
  * schemas fetched from the hosted MCP (tool schemas are owner-independent, so any
- * valid read token works — we use the first configured owner's read PAT). Custom
- * verbs carry local schemas. Only allowlisted tools appear; nothing else is
- * advertised (and, per the router, nothing else is executable either).
+ * valid read token works — the daemon's resolver yields the first configured owner's
+ * read PAT). Custom verbs carry local schemas. Only allowlisted tools appear; nothing
+ * else is advertised (and, per the router, nothing else is executable either).
  *
  * If the upstream fetch fails (network/token), we advertise minimal schemas rather
  * than fail startup — the daemon still serves and calls still route correctly.
  */
-export async function buildCatalog(config: Config, secrets: SecretStore, upstream: UpstreamPool): Promise<Tool[]> {
+export async function buildCatalog(config: Config, auth: CatalogAuth, upstream: UpstreamPool, opts: CatalogOpts = {}): Promise<Tool[]> {
+	const store = asSecretStore(auth);
+	const legacy = store ? legacyCatalogOpts(config, store) : undefined;
+	const resolveToken: TokenResolver = legacy?.resolveToken ?? (auth as TokenResolver);
+	// Absent opts keep today's daemon behavior for the compat shape, and stay
+	// env-free + silent for a resolver caller (a library host is Quack-safe).
+	const timeoutMs = opts.upstreamTimeoutMs ?? legacy?.upstreamTimeoutMs ?? 10000;
+	const log = opts.log ?? legacy?.log;
+	const unavailable = opts.unavailable ?? legacy?.unavailable;
+
 	const upstreamByName = new Map<string, Tool>();
 	// Whether the upstream tool list was actually fetched. If it wasn't (network/token), we must NOT drop
 	// allowlisted tools — we fall back to minimal schemas so the daemon still serves + routes. But if the
@@ -41,9 +87,11 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 	const firstOwner = Object.values(config.owners)[0];
 	if (firstOwner) {
 		try {
-			const token = secrets.resolve(firstOwner.read);
+			// The library's only credential path: the resolver decides what the schema fetch
+			// may use. The catalog has no person of its own (schemas are owner-independent).
+			const token = await resolveToken({ person: "", owner: Object.keys(config.owners)[0], mode: "read", kind: "github" });
+			if (token === null) throw new Error("the token resolver returned no token");
 			// Never let a slow/unreachable upstream hang startup — fall back to minimal schemas.
-			const timeoutMs = Number(process.env.GH_BROKER_CATALOG_TIMEOUT_MS ?? 10000);
 			const tools = await Promise.race([
 				upstream.listToolsFor(token),
 				new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs).unref())
@@ -51,15 +99,15 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 			for (const t of tools) upstreamByName.set(t.name, t);
 			upstreamFetched = true;
 		} catch (err) {
-			console.error(`catalog: could not fetch upstream tool schemas (${(err as Error).message}) — advertising minimal schemas`);
+			log?.(`catalog: could not fetch upstream tool schemas (${(err as Error).message}) — advertising minimal schemas`);
 		}
 	}
 
 	const tools: Tool[] = [];
 	for (const rule of config.tools) {
-		const unavailable = unavailableReason(rule, config, secrets);
-		if (unavailable) {
-			console.error(`catalog: "${rule.name}" is not exposed: ${unavailable}`);
+		const why = unavailable?.(rule);
+		if (why) {
+			log?.(`catalog: "${rule.name}" is not exposed: ${why}`);
 			continue;
 		}
 		if (rule.custom) {
@@ -78,7 +126,7 @@ export async function buildCatalog(config: Config, secrets: SecretStore, upstrea
 		const up = upstreamByName.get(rule.name);
 		if (!up && upstreamFetched) {
 			// Reachable upstream that doesn't expose this tool → it would 32602 at call time. Skip + warn.
-			console.error(`catalog: allowlisted tool "${rule.name}" is NOT exposed by the upstream (${config.upstream}) — skipping it. Check the tool name or the upstream toolset (e.g. use /mcp/x/all for non-default toolsets like labels).`);
+			log?.(`catalog: allowlisted tool "${rule.name}" is NOT exposed by the upstream (${config.upstream}) — skipping it. Check the tool name or the upstream toolset (e.g. use /mcp/x/all for non-default toolsets like labels).`);
 			continue;
 		}
 		const base = up ?? { name: rule.name, description: `(${rule.mode}) proxied to the GitHub MCP`, inputSchema: { type: "object" } };
