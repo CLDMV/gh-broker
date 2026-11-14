@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:10:21-08:00 (1794683421)
+ *	@Last modified time: 2026-11-14T11:38:43-08:00 (1794685123)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -55,7 +55,8 @@ export function hostTokenResolver(config: Config, secrets: SecretStore): TokenRe
 	return async ({ owner, mode, kind }) => {
 		if (kind === "npm") return config.npm ? secrets.resolve(config.npm.token) : null;
 		if (kind === "ghcr") return null;
-		const creds = owner ? config.owners[owner] : undefined;
+		// Object.hasOwn: "constructor"/"toString" must hit the prototype, not resolve a token.
+		const creds = owner && Object.hasOwn(config.owners, owner) ? config.owners[owner] : undefined;
 		if (!creds) return null;
 		return secrets.resolve(mode === "write" ? creds.write : creds.read);
 	};
@@ -89,7 +90,7 @@ export class Router {
 	 * one" would be a test-visible change. Any implementation of either seam is accepted
 	 * either way — the seam, not the class, is the contract.
 	 */
-	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth, otp?: OtpGate, ghcr?: GhcrVerbs) {
+	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth, otp?: OtpGate, ghcr?: GhcrVerbs, resolveToken?: TokenResolver) {
 		this.config = config;
 		this.secrets = secrets;
 		this.upstream = upstream;
@@ -99,7 +100,9 @@ export class Router {
 		// the config's mode today. Routing asks the resolver for the rule's EFFECTIVE
 		// mode, so a host-narrowed mode is what the credential lookup honors.
 		this.rules = indexTools(permissivePolicy(config.tools).tools);
-		this.resolveToken = hostTokenResolver(config, secrets);
+		// The 7th parameter lets a host (or a test spy) supply the resolver — the daemon
+		// omits it and gets hostTokenResolver. Additive; no existing call site changes.
+		this.resolveToken = resolveToken ?? hostTokenResolver(config, secrets);
 		this.routeDeps = { resolveToken: this.resolveToken, upstream, ...(config.npm ? { npm: config.npm } : {}) };
 		this.otp = otp ?? new DaemonOtpGate(config, secrets);
 		this.ghcr = ghcr;
@@ -189,7 +192,7 @@ export class Router {
 		// read: an unconfigured defaultOwner must fall through to "no owner in args",
 		// exactly as before — the token itself still comes only from the resolver.
 		let owner = createdIn ?? extractOwner(args);
-		if (!owner && rule.mode === "read" && this.config.defaultOwner && this.config.owners[this.config.defaultOwner]) {
+		if (!owner && rule.mode === "read" && this.config.defaultOwner && Object.hasOwn(this.config.owners, this.config.defaultOwner)) {
 			owner = this.config.defaultOwner.toLowerCase();
 		}
 		if (!owner) {
@@ -255,7 +258,7 @@ export function creationOwner(tool: string, args: Record<string, unknown>, owner
 		throw new Error(`tool "${tool}": "organization" is required (the org the repo is created in); gh-broker doesn't create repos in a personal account`);
 	}
 	const org = args.organization.toLowerCase();
-	if (!owners[org]) throw new Error(`no credentials configured for owner "${org}" — add it to config.owners + creds`);
+	if (!Object.hasOwn(owners, org)) throw new Error(`no credentials configured for owner "${org}" — add it to config.owners + creds`);
 	if (tool === "create_repository" && typeof args.private !== "boolean") {
 		throw new Error('tool "create_repository": "private" is required, true or false; a repo\'s visibility is never left to a default');
 	}

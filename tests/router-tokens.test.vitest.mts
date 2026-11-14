@@ -83,18 +83,75 @@ describe("the router resolves tokens only through the TokenResolver (design #175
 		expect(JSON.parse(row!)).toMatchObject({ tool: "get_me", user: "tester", owner: "ghost", decision: "error", detail: "no creds for owner" });
 	});
 
-	it("a host-narrowed mode is honoured: the effective mode from the manifest policy is what the resolver is asked for", async () => {
-		// merge_pull_request is manifest-declared "write"; the config narrows it to "read"
-		// (the permissive policy serves config as configured — a narrowing collects no
-		// warning) and turns its gate off so the call can run without an OTP setup. The
-		// effective mode is what reaches the resolver: the READ token.
-		const r = new Router(makeConfig({ tools: [{ name: "merge_pull_request", mode: "read", otp: false }] }), secrets as any, upstream as any);
+	it("the resolver is asked for exactly the effective rule's mode, one TokenRequest per call", async () => {
+		// The contract pin: the resolver receives one TokenRequest per call carrying the
+		// effective rule's mode, owner and kind. NOTE: the Router hardwires permissivePolicy
+		// (src/router.ts:101), which passes the config's rules through untouched — it cannot
+		// narrow a mode itself, so the effective mode here IS the config's mode fact. What a
+		// host policy that narrows would produce flows through the same indexTools path, and
+		// the spy records whatever the routing hands the resolver — that is the contract.
+		const requests: any[] = [];
+		const spy = vi.fn(async (req: any) => {
+			requests.push(req);
+			return `token:${req.owner}:${req.mode}`;
+		});
+		const r = new Router(
+			makeConfig({ tools: [{ name: "get_me", mode: "read" }, { name: "create_pull_request", mode: "write" }, { name: "merge_pull_request", mode: "read", otp: false }] }),
+			secrets as any,
+			upstream as any,
+			undefined,
+			undefined,
+			undefined,
+			spy as any
+		);
+		await r.call("get_me", { owner: "Alpha" }, { user: "tester" });
+		await r.call("create_pull_request", { owner: "Beta", repo: "thing", title: "t" }, { user: "tester" });
 		await r.call("merge_pull_request", { owner: "Alpha", repo: "thing" }, { user: "tester" });
-		expect(secrets.resolve).toHaveBeenCalledWith("cred:alpha-read");
-		expect(secrets.resolve).not.toHaveBeenCalledWith(expect.stringMatching(/-write/));
-		expect(upstream.forward).toHaveBeenCalledWith("merge_pull_request", { owner: "Alpha", repo: "thing" }, "token:cred:alpha-read");
-		const row = logLines.find((l) => l.includes('"decision":"forward"'));
-		expect(JSON.parse(row!)).toMatchObject({ tool: "merge_pull_request", mode: "read", ok: true });
+		expect(requests).toEqual([
+			{ person: "tester", owner: "alpha", mode: "read", kind: "github" },
+			{ person: "tester", owner: "beta", mode: "write", kind: "github" },
+			{ person: "tester", owner: "alpha", mode: "read", kind: "github" }
+		]);
+		// The forwarded token is the effective mode's: the narrowed (config-read) write tool got the READ token.
+		expect(upstream.forward).toHaveBeenNthCalledWith(3, "merge_pull_request", { owner: "Alpha", repo: "thing" }, "token:alpha:read");
+	});
+
+	it("npm_scaffold: a resolver null for the npm token is the typed no-access error, with no request sent", async () => {
+		const r = new Router(
+			makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } }),
+			secrets as any,
+			upstream as any,
+			undefined,
+			undefined,
+			undefined,
+			// The GitHub read resolves; the npm token request returns null.
+			vi.fn(async (req: any) => (req.kind === "npm" ? null : "token:github"))
+		);
+		await expect(r.call("npm_scaffold", { owner: "Alpha", name: "@cldmv/pkg" }, { user: "tester" })).rejects.toThrow(/no npm token configured/);
+		expect(upstream.forward).not.toHaveBeenCalled();
+	});
+
+	it("npm_scaffold: a resolver null for the GitHub read is the typed no-access error, with no request sent", async () => {
+		const r = new Router(
+			makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } }),
+			secrets as any,
+			upstream as any,
+			undefined,
+			undefined,
+			undefined,
+			vi.fn(async () => null)
+		);
+		await expect(r.call("npm_scaffold", { owner: "Alpha", name: "@cldmv/pkg" }, { user: "tester" })).rejects.toThrow(/no credentials configured for owner "alpha"/);
+		expect(upstream.forward).not.toHaveBeenCalled();
+	});
+
+	it("owner \"constructor\" resolves nothing and fails closed like any unconfigured owner", async () => {
+		const r = new Router(makeConfig(), secrets as any, upstream as any);
+		await expect(r.call("get_me", { owner: "constructor" }, { user: "tester" })).rejects.toThrow(/no credentials configured for owner "constructor"/);
+		expect(secrets.resolve).not.toHaveBeenCalled();
+		expect(upstream.forward).not.toHaveBeenCalled();
+		const row = logLines.find((l) => l.includes('"tool":"get_me"'));
+		expect(JSON.parse(row!)).toMatchObject({ tool: "get_me", user: "tester", owner: "constructor", decision: "error", detail: "no creds for owner" });
 	});
 });
 
