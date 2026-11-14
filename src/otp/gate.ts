@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T07:38:52-08:00 (1794670732)
+ *	@Last modified time: 2026-11-14T08:30:09-08:00 (1794673809)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -352,8 +352,9 @@ export class OtpGate {
 			}
 			default:
 				// Unreachable: the lock was checked above, so the machine cannot return
-				// locked/hard-locked here; fail closed on the refusal it would have produced.
-				throw this.lockRefusal((outcome?.reason as "locked" | "hard-locked" | undefined) ?? "locked", after, user, now);
+				// locked/hard-locked here, and every counted outcome is handled above. Fail closed
+				// with a fixed string — computing minutes off a null lockedUntil would print NaN.
+				throw new OtpRefusal("OTP could not be checked. Nothing was run.", { otp: "refused" });
 		}
 	}
 
