@@ -3,7 +3,8 @@ import { mkdirSync, openSync, closeSync, writeFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { Readable } from "node:stream";
 import { createServer } from "node:http";
-import { GhcrService, GHCR_CATALOG } from "../src/verbs/ghcr_push.ts";
+import { GhcrService } from "../src/verbs/ghcr_push.ts";
+import { MANIFEST } from "../src/manifest.ts";
 import { JobQueue, QueueFull } from "../src/verbs/ghcr/jobs.ts";
 import { Registry, RegistryError } from "../src/verbs/ghcr/registry.ts";
 import { pushImage } from "../src/verbs/ghcr/push.ts";
@@ -518,9 +519,10 @@ describe("JobQueue", () => {
 	});
 });
 
-describe("GHCR_CATALOG", () => {
-	it("describes all three verbs with strict schemas", () => {
-		expect(Object.keys(GHCR_CATALOG)).toEqual(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
-		for (const v of Object.values(GHCR_CATALOG)) expect(v.inputSchema.additionalProperties).toBe(false);
+describe("the ghcr manifest entries (the tool catalog's facts)", () => {
+	it("describe all three verbs with strict schemas", () => {
+		const ghcr = Object.entries(MANIFEST).filter(([name, d]) => d.kind === "verb" && name.startsWith("ghcr_"));
+		expect(ghcr.map(([name]) => name)).toEqual(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
+		for (const [, d] of ghcr) expect(d.inputSchema.additionalProperties).toBe(false);
 	});
 });

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:06:07-08:00 (1794675967)
+ *	@Last modified time: 2026-11-14T09:43:29-08:00 (1794678209)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -214,27 +214,9 @@ export class GhcrService {
 // declare these verbs without dragging this file's host imports into its graph; they are
 // re-exported here so the old import path keeps working.
 import {
-	GHCR_PUSH_DESCRIPTION,
 	GHCR_PUSH_SCHEMA,
 	GHCR_PUSH_STATUS_DESCRIPTION,
 	GHCR_PUSH_STATUS_SCHEMA,
-	GHCR_TAGS_DESCRIPTION,
 	GHCR_TAGS_SCHEMA
 } from "./ghcr/schemas.ts";
 export { GHCR_PUSH_SCHEMA, GHCR_PUSH_STATUS_SCHEMA, GHCR_TAGS_SCHEMA };
-
-/** Advertised description + schema per GHCR verb, keyed by tool name (src/manifest.ts). */
-export const GHCR_CATALOG: Record<string, { description: string; inputSchema: { type: "object"; [k: string]: unknown } }> = {
-	ghcr_push: {
-		description: GHCR_PUSH_DESCRIPTION,
-		inputSchema: GHCR_PUSH_SCHEMA
-	},
-	ghcr_push_status: {
-		description: GHCR_PUSH_STATUS_DESCRIPTION,
-		inputSchema: GHCR_PUSH_STATUS_SCHEMA
-	},
-	ghcr_tags: {
-		description: GHCR_TAGS_DESCRIPTION,
-		inputSchema: GHCR_TAGS_SCHEMA
-	}
-};
