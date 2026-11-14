@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-11-14T09:43:27-08:00 (1794678207)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,6 +19,8 @@ import { UpstreamPool } from "./upstream.ts";
 import { Router } from "./router.ts";
 import { AppAuth } from "./appauth.ts";
 import { buildCatalog } from "./catalog.ts";
+import { legacyCatalogOpts } from "./catalog-compat.ts";
+import { permissivePolicy } from "./manifest.ts";
 import { startServer } from "./server.ts";
 import { resolveConfigPath } from "./paths.ts";
 
@@ -87,7 +89,19 @@ async function main(): Promise<void> {
 	}
 
 	const router = new Router(config, secrets, upstream, appAuth);
-	const catalog = await buildCatalog(config, secrets, upstream);
+	// The daemon picks the permissive policy explicitly (design #175 §2h): config.json keeps
+	// today's authority, so a config that widens a manifest tool's mode or turns off its OTP
+	// gate is served as configured — never refused — but each such fact warns here at startup.
+	const { warnings } = permissivePolicy(config.tools);
+	for (const warning of warnings) console.error(`gh-broker: ${warning}`);
+
+	// One adapter for the daemon's pre-slice-4 call shape (design #175 §2a/§2g): the store
+	// becomes the resolver + opts the library takes — the first owner's read PAT for the
+	// schema fetch, the env-derived timeout (NaN included, pinned as-is), stderr for catalog
+	// messages, and the availability predicate. Slice 4 replaces this with the real
+	// per-call resolver wiring.
+	const { resolveToken, ...catalogOpts } = legacyCatalogOpts(config, secrets);
+	const catalog = await buildCatalog(config, resolveToken, upstream, catalogOpts);
 	const agents = await startServer(config, router, catalog);
 	console.log(
 		JSON.stringify({

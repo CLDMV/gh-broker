@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T21:27:13-08:00 (1793683633)
+ *	@Last modified time: 2026-11-14T09:09:36-08:00 (1794676176)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -166,6 +166,25 @@ export interface SecretStore {
 	/** Whether an optional credential is stored (non-empty). Never throws for a missing one. */
 	has(ref: string): boolean;
 }
+
+/**
+ * What a library call needs a credential for (design #175 §2a). `owner` is optional for
+ * `kind: "npm"` (the npm token is not per-owner); `person` is the agent user the call
+ * runs for — a resolver may ignore it (the daemon's catalog schema fetch does).
+ */
+export interface TokenRequest {
+	person: string;
+	owner?: string;
+	mode: Mode;
+	kind: "github" | "ghcr" | "npm";
+}
+
+/**
+ * The library's ONLY credential path: resolved per call, never cached by the library,
+ * and nothing token-shaped may appear in a result or an error. `null` = no access —
+ * the library turns it into a typed error.
+ */
+export type TokenResolver = (req: TokenRequest) => Promise<string | null>;
 
 /**
  * Structured audit log. One JSON line per decision/call to stdout (journald
