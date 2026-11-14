@@ -32,6 +32,8 @@
  * dispatch's own result, and wrapping is the host's job.
  */
 
+// Type-only: erased at runtime, so the daemon's host imports in config.ts (fs, the
+// agents wiring) never enter the library's graph — ConfigLib is §2g's lib-config half.
 import type { ConfigLib } from "./config.ts";
 import { MANIFEST, strictPolicy, type PolicyApplication } from "./manifest.ts";
 import { isEnabled, unavailableReason, type Capability } from "./availability.ts";
