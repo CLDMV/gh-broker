@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T13:12:50-08:00 (1794690770)
+ *	@Last modified time: 2026-11-14T13:16:58-08:00 (1794691018)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -165,14 +165,15 @@ function toolOfRequest(request: DriverRequest): string {
  */
 export function perCallUpstream(url: string): Upstream {
 	return {
-		async forward(tool, args, token) {
+		async forward(tool, args, token, signal) {
 			const client = new Client(CLIENT_INFO);
 			const transport = new StreamableHTTPClientTransport(new URL(url), {
-				requestInit: { headers: { Authorization: `Bearer ${token}` } }
+				// The call's signal reaches the transport's fetches (design #175 §2b).
+				requestInit: { headers: { Authorization: `Bearer ${token}` }, ...(signal ? { signal } : {}) }
 			});
 			try {
 				await client.connect(transport);
-				return (await client.callTool({ name: tool, arguments: args })) as CallToolResult;
+				return (await (signal ? client.callTool({ name: tool, arguments: args }, undefined, { signal }) : client.callTool({ name: tool, arguments: args }))) as CallToolResult;
 			} finally {
 				// The connection is per call: closed whatever the outcome, never cached.
 				await client.close().catch(() => {});
@@ -265,11 +266,21 @@ export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { inv
 		if (!owner) throw new InvokeError("no-owner", `tool "${name}": could not determine repo owner from arguments`);
 		const token = await ctx.resolveToken({ person: ctx.person, owner, mode: rule.mode, kind: "github" });
 		if (token === null) throw new InvokeError("no-access", `no credentials configured for owner "${owner}" — add it to config.owners + creds`);
+		// A local verb needs no upstream (its best-effort sub-calls tolerate a missing one);
+		// a forwarded call fails closed without one.
 		const upstream = ctx.upstream ?? libraryUpstream;
-		if (!upstream) throw new InvokeError("no-upstream", `tool "${name}" forwards to the hosted MCP, but this host provides no upstream client (ctx.upstream)`);
+		if (!upstream && !rule.custom) throw new InvokeError("no-upstream", `tool "${name}" forwards to the hosted MCP, but this host provides no upstream client (ctx.upstream)`);
+		// The call's signal (design #175 §2b): the ctx signal, or the ctx signal combined
+		// with the caller's timeoutMs via AbortSignal.any — reaching Octokit as
+		// request.signal and the MCP transport as its signal. The timer exists only when a
+		// timeout was asked for.
+		const signal = ctx.timeoutMs !== undefined ? AbortSignal.any([ctx.signal, AbortSignal.timeout(ctx.timeoutMs)]) : ctx.signal;
 		const deps: RouteDeps = {
 			resolveToken: ctx.resolveToken,
-			upstream,
+			// A custom verb without an upstream still dispatches — its one upstream sub-call
+			// (report_ci_status's log fetch) is best-effort and tolerates the failure.
+			upstream: upstream ?? { forward: async () => { throw new InvokeError("no-upstream", "this host provides no upstream client (ctx.upstream)"); } },
+			signal,
 			...(config.npm ? { npm: config.npm } : {})
 		};
 		const result = await dispatchCall(deps, rule, name, callArgs, owner, token, ctx.person);

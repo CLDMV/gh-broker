@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:05:05-08:00 (1794683105)
+ *	@Last modified time: 2026-11-14T13:16:59-08:00 (1794691019)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -53,8 +53,13 @@ export class UpstreamPool implements Upstream {
 		return pending;
 	}
 
-	async forward(tool: string, args: Record<string, unknown>, token: string): Promise<CallToolResult> {
-		return this.withReconnect(token, (client) => client.callTool({ name: tool, arguments: args }) as Promise<CallToolResult>);
+	async forward(tool: string, args: Record<string, unknown>, token: string, signal?: AbortSignal): Promise<CallToolResult> {
+		// The signal (design #175 §2b) reaches the MCP request when a caller passes one; the
+		// daemon never does (no timeout, no ctx signal on its path), so its calls are
+		// byte-identical to before — one argument, pinned by tests/upstream.test.vitest.mts.
+		return this.withReconnect(token, (client) =>
+			signal ? (client.callTool({ name: tool, arguments: args }, undefined, { signal }) as Promise<CallToolResult>) : (client.callTool({ name: tool, arguments: args }) as Promise<CallToolResult>)
+		);
 	}
 
 	/** Fetch upstream tool schemas (owner-independent) to build the advertised catalog. */

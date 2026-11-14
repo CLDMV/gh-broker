@@ -30,6 +30,7 @@ import { createBroker, InvokeError, perCallUpstream } from "../src/invoke.ts";
 import type { DriverRequest } from "../src/invoke.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Octokit } from "@octokit/core";
 
 /**
  * A strict host's lib-config. Every tool is IN the manifest (strict is the default
@@ -131,7 +132,7 @@ describe("invoke — the approve seam (round-3 M5)", () => {
 		await invoke("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "123456" }, ctx);
 		expect(ctx.approve).toHaveBeenCalledTimes(1);
 		expect(ctx.approve).toHaveBeenCalledWith("merge_pull_request", "tester", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "123456" });
-		expect(upstream.forward).toHaveBeenCalledWith("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1 }, "token:cldmv:write");
+		expect(upstream.forward).toHaveBeenCalledWith("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1 }, "token:cldmv:write", ctx.signal);
 	});
 
 	it("an approve refusal is the typed refusal, verbatim, and the security sink sees it", async () => {
@@ -181,14 +182,15 @@ describe("invoke — tokens and owners", () => {
 		const { invoke } = createBroker(makeConfig());
 		await invoke("issue_write", { owner: "CLDMV", repo: "x", title: "t" }, mkCtx({ upstream }));
 		await invoke("pull_request_read", { owner: "CLDMV", repo: "x", pullNumber: 1 }, mkCtx({ upstream }));
-		expect(upstream.forward).toHaveBeenNthCalledWith(1, "issue_write", { owner: "CLDMV", repo: "x", title: "t" }, "token:cldmv:write");
-		expect(upstream.forward).toHaveBeenNthCalledWith(2, "pull_request_read", { owner: "CLDMV", repo: "x", pullNumber: 1 }, "token:cldmv:read");
+		// invoke always carries the call's signal (the ctx signal, or combined with timeoutMs)
+		expect(upstream.forward).toHaveBeenNthCalledWith(1, "issue_write", { owner: "CLDMV", repo: "x", title: "t" }, "token:cldmv:write", expect.any(AbortSignal));
+		expect(upstream.forward).toHaveBeenNthCalledWith(2, "pull_request_read", { owner: "CLDMV", repo: "x", pullNumber: 1 }, "token:cldmv:read", expect.any(AbortSignal));
 	});
 
 	it("an owner-less read falls back to defaultOwner's READ PAT; a write never falls back", async () => {
 		const { invoke } = createBroker(makeConfig());
 		await invoke("pull_request_read", {}, mkCtx({ upstream }));
-		expect(upstream.forward).toHaveBeenCalledWith("pull_request_read", {}, "token:cldmv:read");
+		expect(upstream.forward).toHaveBeenCalledWith("pull_request_read", {}, "token:cldmv:read", expect.any(AbortSignal));
 		await expect(invoke("issue_write", { repo: "x" }, mkCtx({ upstream }))).rejects.toMatchObject({ code: "no-owner" });
 	});
 
@@ -318,5 +320,64 @@ describe("run — the driver adapter (design #175 §2b, the rummage run shape)",
 		await expect(run({ op: "sse" } as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({ code: "bad-request" });
 		await expect(run(null as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({ code: "bad-request" });
 		expect(upstream.forward).not.toHaveBeenCalled();
+	});
+});
+
+describe("invoke — timeouts: timeoutMs × ctx.signal reach Octokit and the MCP transport (design #175 §2b)", () => {
+	beforeEach(() => {
+		requestMock.mockReset();
+	});
+
+	it("timeoutMs combines with ctx.signal via AbortSignal.any, and a hanging upstream is cut off", async () => {
+		let seen: AbortSignal | undefined;
+		const upstream = {
+			forward: vi.fn((_tool: string, _args: unknown, _token: string, signal: AbortSignal) => {
+				seen = signal;
+				return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+			})
+		};
+		const { invoke } = createBroker(makeConfig());
+		const ctx = mkCtx({ upstream, timeoutMs: 10 });
+		await expect(invoke("pull_request_read", { owner: "cldmv" }, ctx)).rejects.toSatisfy((err: unknown) => {
+			// the abort reason of the combined signal: AbortSignal.timeout's TimeoutError
+			expect((err as { name?: string }).name).toBe("TimeoutError");
+			return true;
+		});
+		expect(seen).toBeInstanceOf(AbortSignal);
+		expect(seen).not.toBe(ctx.signal); // combined, not the bare ctx signal
+	});
+
+	it("without timeoutMs the upstream receives exactly the ctx signal", async () => {
+		const upstream = { forward: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] }) };
+		const { invoke } = createBroker(makeConfig());
+		const ctx = mkCtx({ upstream });
+		await invoke("pull_request_read", { owner: "cldmv" }, ctx);
+		expect(upstream.forward).toHaveBeenCalledWith("pull_request_read", { owner: "cldmv" }, "token:cldmv:read", ctx.signal);
+	});
+
+	it("a local verb's Octokit gets the call's signal as request.signal", async () => {
+		requestMock.mockImplementation((route: string) => {
+			if (route.startsWith("GET /repos/{owner}/{repo}/issues/")) return { data: [] };
+			if (route.startsWith("GET /repos/{owner}/{repo}/labels/")) return { data: { name: "bug" } };
+			if (route.startsWith("POST /repos/{owner}/{repo}/issues/")) return { data: [{ name: "bug" }] };
+			throw new Error(`unexpected route ${route}`);
+		});
+		const { invoke } = createBroker(makeConfig());
+		const ctx = mkCtx({ timeoutMs: 1000 });
+		await invoke("issue_labels", { owner: "cldmv", repo: "x", issue_number: 1, add: ["bug"] }, ctx);
+		const constructed = vi.mocked(Octokit).mock.calls[0]![0] as { auth: string; request?: { signal?: AbortSignal } };
+		expect(constructed.auth).toBe("token:cldmv:write");
+		expect(constructed.request?.signal).toBeInstanceOf(AbortSignal);
+		expect(constructed.request?.signal).not.toBe(ctx.signal); // combined with the timeout
+	});
+
+	it("the library forwarder hands the signal to the transport and the tool call", async () => {
+		const upstream = perCallUpstream("https://api.githubcopilot.com/mcp/");
+		const signal = new AbortController().signal;
+		await upstream.forward("get_me", { a: 1 }, "TOK", signal);
+		expect(StreamableHTTPClientTransport).toHaveBeenCalledWith(new URL("https://api.githubcopilot.com/mcp/"), {
+			requestInit: { headers: { Authorization: "Bearer TOK" }, signal }
+		});
+		expect(callToolMock).toHaveBeenCalledWith({ name: "get_me", arguments: { a: 1 } }, undefined, { signal });
 	});
 });
