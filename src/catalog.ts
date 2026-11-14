@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:09:33-08:00 (1794676173)
+ *	@Last modified time: 2026-11-14T09:43:26-08:00 (1794678206)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -90,7 +90,7 @@ export async function buildCatalog(config: Config, auth: CatalogAuth, upstream: 
 			// The library's only credential path: the resolver decides what the schema fetch
 			// may use. The catalog has no person of its own (schemas are owner-independent).
 			const token = await resolveToken({ person: "", owner: Object.keys(config.owners)[0], mode: "read", kind: "github" });
-			if (token === null) throw new Error("the token resolver returned no token");
+			if (!token) throw new Error("the token resolver returned no token");
 			// Never let a slow/unreachable upstream hang startup — fall back to minimal schemas.
 			const tools = await Promise.race([
 				upstream.listToolsFor(token),
@@ -117,7 +117,7 @@ export async function buildCatalog(config: Config, auth: CatalogAuth, upstream: 
 			// It has no manifest entry, so it is intentionally not advertised even if an
 			// allowlist entry is added; re-enable by adding the manifest entry + the router
 			// dispatch case, then config.app + installationId.
-			const decl = MANIFEST[rule.name];
+			const decl = Object.hasOwn(MANIFEST, rule.name) ? MANIFEST[rule.name] : undefined;
 			if (decl?.kind === "verb") {
 				tools.push({ name: rule.name, description: decl.description, inputSchema: decl.inputSchema });
 			}
