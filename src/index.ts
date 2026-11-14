@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:43:27-08:00 (1794678207)
+ *	@Last modified time: 2026-11-14T11:02:53-08:00 (1794682973)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -18,6 +18,7 @@ import { loadSecretStore } from "./secrets.ts";
 import { UpstreamPool } from "./upstream.ts";
 import { Router } from "./router.ts";
 import { AppAuth } from "./appauth.ts";
+import { OtpGate } from "./otp/gate.ts";
 import { buildCatalog } from "./catalog.ts";
 import { legacyCatalogOpts } from "./catalog-compat.ts";
 import { permissivePolicy } from "./manifest.ts";
@@ -88,7 +89,12 @@ async function main(): Promise<void> {
 		}
 	}
 
-	const router = new Router(config, secrets, upstream, appAuth);
+	// The OTP gate is composed host-side and injected (design #175 §2e): the Router
+	// consumes the OtpGate seam, so the daemon constructs the concrete gate here and
+	// passes it in. (The Router still defaults to the daemon gate when omitted — the
+	// suite's Router call sites rely on that — but the composition is explicit.)
+	const gate = new OtpGate(config, secrets);
+	const router = new Router(config, secrets, upstream, appAuth, gate);
 	// The daemon picks the permissive policy explicitly (design #175 §2h): config.json keeps
 	// today's authority, so a config that widens a manifest tool's mode or turns off its OTP
 	// gate is served as configured — never refused — but each such fact warns here at startup.

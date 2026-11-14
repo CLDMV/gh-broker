@@ -7,14 +7,14 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:01:08-08:00 (1794682868)
+ *	@Last modified time: 2026-11-14T11:02:54-08:00 (1794682974)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { Caller, Config, SecretStore, TokenResolver, ToolRule } from "./types.ts";
+import type { Caller, Config, OtpAudit, OtpGate, OtpRefusal, SecretStore, TokenResolver, ToolRule } from "./types.ts";
 import type { AppAuth } from "./appauth.ts";
 import { Octokit } from "@octokit/core";
 import { indexTools } from "./config.ts";
@@ -43,7 +43,10 @@ import { deleteBranch, type DeleteBranchInput } from "./verbs/delete_branch.ts";
 import { dismissAlert, type DismissAlertInput } from "./verbs/dismiss_alert.ts";
 import { NpmRegistry } from "./verbs/npm-registry.ts";
 import { GhcrService } from "./verbs/ghcr_push.ts";
-import { OtpGate, type OtpAudit, type OtpRefusal } from "./otp/gate.ts";
+// The Router consumes the OtpGate SEAM (src/types.ts, design #175 §2e); the daemon's
+// concrete gate is imported only for the constructor default below — a host passes its
+// own implementation through the optional parameter.
+import { OtpGate as DaemonOtpGate } from "./otp/gate.ts";
 import { OTP_ARG, OTP_STATUS, isGated } from "./otp/policy.ts";
 
 const GHCR_TOOLS = new Set(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
@@ -90,9 +93,17 @@ export class Router {
 	private readonly resolveToken: TokenResolver;
 	/** GHCR verbs run on config.ghcr's own credential, not the owner's GitHub PAT (created on first use). */
 	private ghcr?: GhcrService;
-	/** The OTP gate (#143). Inert without config.otp. */
+	/** The OTP gate (#143), the injected OtpGate seam. Inert without config.otp. */
 	private readonly otp: OtpGate;
 
+	/**
+	 * The constructor is unchanged (`new Router(config, secrets, upstream[, appAuth, gate])`).
+	 * `gate` is the OtpGate SEAM (src/types.ts, design #175 §2e) — the daemon composition
+	 * (src/index.ts) constructs the concrete gate and passes it. The default still
+	 * constructs the daemon's own gate: the suite's 58 test call sites rely on it, and a
+	 * default of "must pass a gate" would be a test-visible change. Any OtpGate
+	 * implementation is accepted either way — the seam, not the class, is the contract.
+	 */
 	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth, otp?: OtpGate) {
 		this.config = config;
 		this.secrets = secrets;
@@ -104,7 +115,7 @@ export class Router {
 		// mode, so a host-narrowed mode is what the credential lookup honors.
 		this.rules = indexTools(permissivePolicy(config.tools).tools);
 		this.resolveToken = hostTokenResolver(config, secrets);
-		this.otp = otp ?? new OtpGate(config, secrets);
+		this.otp = otp ?? new DaemonOtpGate(config, secrets);
 	}
 
 	/** Tools advertised to the agent (used to build tools/list). */

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:09:36-08:00 (1794676176)
+ *	@Last modified time: 2026-11-14T11:02:54-08:00 (1794682974)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -222,3 +222,40 @@ export type SecurityEvent =
 	| { kind: "unlock"; person: string; by: string }
 	| { kind: "refused-mode"; tool: string; person: string; mode: Mode }
 	| { kind: "protected-write"; tool: string; person: string; detail: string };
+
+/** The audit fields a gated (or hard-locked) call adds to its log line (src/otp/gate.ts). */
+export type OtpOutcome = "window" | "opened" | "refused" | "locked" | "hard-locked";
+
+export interface OtpAudit {
+	otp: OtpOutcome;
+	window?: string;
+	/** When the window closes, on "opened". */
+	until?: string;
+}
+
+/** A call the gate refused. Its message is safe to return to the agent. */
+export class OtpRefusal extends Error {
+	readonly audit: OtpAudit;
+	constructor(message: string, audit: OtpAudit) {
+		super(message);
+		this.name = "OtpRefusal";
+		this.audit = audit;
+	}
+}
+
+/**
+ * The OTP gate seam (design #175 §2e): what the Router consumes. The daemon's concrete
+ * implementation is src/otp/gate.ts's OtpGate class (host code over @cldmv/lib-otp +
+ * LockStateStore); the Router takes any implementation through its unchanged constructor.
+ * Same name as the concrete class on purpose — the class structurally satisfies this.
+ */
+export interface OtpGate {
+	/** Whether the gate is set up (config.otp + a stored, decodable seed). Inert when false. */
+	enabled: boolean;
+	/** The refusal that blocks every tool for a hard-locked user, or undefined. */
+	hardLockRefusal(user: string): OtpRefusal | undefined;
+	/** Check a gated call's code; throws OtpRefusal when the code is refused. */
+	authorize(tool: string, code: unknown, user: string): OtpAudit;
+	/** The otp_status payload for a user. */
+	status(user: string): unknown;
+}
