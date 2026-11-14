@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { buildCatalog } from "../src/catalog.ts";
-import { NO_PERSON, type TokenResolver } from "../src/types.ts";
+import type { TokenResolver } from "../src/types.ts";
+// (separate import statement, not an edit of the line above — the suite's existing test
+// files stay insertions-only)
+import { NO_PERSON } from "../src/types.ts";
 
 function makeConfig(tools: any[]): any {
 	return { listen: "unix:/x", upstream: "https://api.githubcopilot.com/mcp/", tools, owners: { cldmv: { read: "cred:r", write: "cred:w" } } };
