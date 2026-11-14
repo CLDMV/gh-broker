@@ -127,10 +127,14 @@ export class NpmRegistry {
 		return JSON.parse(res.body) as Packument;
 	}
 
-	/** First publish of a package: PUT of the full document with the tarball attached. */
-	async publish(document: unknown, name: string, otp: string): Promise<void> {
+	/**
+	 * First publish of a package: PUT of the full document with the tarball attached. Returns
+	 * the registry's answer, because a 2xx alone has not always meant the version is live.
+	 */
+	async publish(document: unknown, name: string, otp: string): Promise<{ status: number; detail: string }> {
 		const res = await this.send("publish", "PUT", `/${escapePackageName(name)}`, { otp, body: document });
 		if (res.status < 200 || res.status >= 300) throw new NpmHttpError("publish", res.status, errorDetail(res.body));
+		return { status: res.status, detail: errorDetail(res.body) };
 	}
 
 	/**
