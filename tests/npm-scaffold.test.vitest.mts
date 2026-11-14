@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
-import { npmScaffold, placeholderDocument, NPM_SCAFFOLD_SCHEMA, PLACEHOLDER_VERSION, SCAFFOLD_MARKER } from "../src/verbs/npm_scaffold.ts";
+import { npmScaffold, placeholderDocument, NPM_SCAFFOLD_SCHEMA, PLACEHOLDER_VERSION, SCAFFOLD_MARKER, NPM_STAGE_PLACEHOLDER } from "../src/verbs/npm_scaffold.ts";
 import { NpmRegistry, NpmOtpRequired, NpmHttpError, escapePackageName, type FetchLike } from "../src/verbs/npm-registry.ts";
 import { buildTarball, tarballDigests } from "../src/verbs/npm-tarball.ts";
 
@@ -325,6 +325,33 @@ describe("npm_scaffold", () => {
 	it("refuses an existing single 0.0.1-placeholder version that lacks the scaffold marker", async () => {
 		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { [PLACEHOLDER_VERSION]: { name: PKG } } } } });
 		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/was not created by npm_scaffold/);
+	});
+
+	it("resumes when an earlier staged placeholder went live next to npm's 0.0.0-stage", async () => {
+		const doc = placeholderFor("CLDMV/new-thing");
+		const ours = { ...doc.versions[PLACEHOLDER_VERSION], version: "0.0.1-stage" };
+		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { [NPM_STAGE_PLACEHOLDER]: { name: PKG, description: "Temporary package placeholder for staged publishing" }, "0.0.1-stage": ours } } } });
+		const out = await npmScaffold(args(), deps(fakeGitHub(), reg));
+		expect(out.status).toBe("done");
+		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+		expect(reg.calls.some((c) => c.url.endsWith("/trust"))).toBe(true);
+	});
+
+	it.each([
+		["npm's placeholder alone", false, { [NPM_STAGE_PLACEHOLDER]: { name: PKG } }],
+		["a real release next to our placeholder", true, { "1.0.0": { name: PKG } }],
+		["a marked version that isn't a placeholder version", true, { "1.0.0": { name: PKG, scaffoldedBy: SCAFFOLD_MARKER } }]
+	])("refuses a package with %s", async (_, withOurs, extra) => {
+		const versions = { ...(withOurs ? placeholderFor("CLDMV/new-thing").versions : {}), ...extra };
+		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions } } });
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/was not created by npm_scaffold/);
+	});
+
+	it("refuses when any of several placeholders was made for another repo", async () => {
+		const mine = placeholderFor("CLDMV/new-thing").versions[PLACEHOLDER_VERSION];
+		const other = { ...placeholderFor("CLDMV/other-repo").versions[PLACEHOLDER_VERSION], version: "0.0.1-stage" };
+		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { [PLACEHOLDER_VERSION]: mine, "0.0.1-stage": other } } } });
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/published for git\+https:\/\/github\.com\/CLDMV\/other-repo\.git/);
 	});
 
 	it("refuses a scope that is not configured, before any request", async () => {
