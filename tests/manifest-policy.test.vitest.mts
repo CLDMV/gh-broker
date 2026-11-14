@@ -303,4 +303,36 @@ describe("config.example.json against the manifest (the shipped config pin)", ()
 		);
 		for (const t of otpChanged) expect(t.otp).toBe(true);
 	});
+
+	it("never lets an inherited key make an unknown tool exist", () => {
+		const strict = strictPolicy([rule("constructor", { mode: "write" }), rule("toString"), rule("__proto__")]);
+		expect(strict.tools).toEqual([]);
+		expect(strict.warnings).toEqual([]);
+		// Permissive has no manifest facts for them either — config-only, no warnings.
+		const permissive = permissivePolicy([rule("constructor", { mode: "write" }), rule("toString"), rule("__proto__")]);
+		expect(permissive.warnings).toEqual([]);
+	});
+
+	it("derives custom from the manifest's kind, and clears augment the entry doesn't declare", () => {
+		const strict = strictPolicy([
+			rule("issue_write", { mode: "write", custom: true, augment: true }),
+			rule("report_unlabeled", { custom: false }),
+			rule("list_pull_requests", { custom: false })
+		]);
+		const issueWrite = strict.tools.find((t) => t.name === "issue_write");
+		expect(issueWrite).toMatchObject({ custom: false });
+		expect(issueWrite?.augment).toBeUndefined();
+		expect(strict.tools.find((t) => t.name === "report_unlabeled")).toMatchObject({ custom: true });
+		// The one place config's augment survives: the entry declares it.
+		expect(strict.tools.find((t) => t.name === "list_pull_requests")).toMatchObject({ augment: true });
+	});
+
+	it("brings a default-off tool back only for an explicit enabled: true", () => {
+		const withEntry = () => rule("assign_copilot_to_issue", { mode: "write" });
+		expect(strictPolicy([withEntry()]).tools).toEqual([]);
+		expect(strictPolicy([rule("assign_copilot_to_issue", { mode: "write", enabled: false })]).tools).toEqual([]);
+		const kept = strictPolicy([rule("assign_copilot_to_issue", { mode: "write", enabled: true })]).tools;
+		expect(kept.map((t) => t.name)).toEqual(["assign_copilot_to_issue"]);
+		expect(kept[0]?.otp).toBe(true); // gated, per the manifest
+	});
 });
