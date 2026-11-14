@@ -705,7 +705,7 @@ npm only accepts a trusted publisher on a package that already exists, and that 
 
 - The scope is allowed by `config.npm.scopes`.
 - The repo exists under exactly the owner and name given (a renamed or transferred repo, which GitHub answers with a redirect, is refused), isn't archived, its `package.json` on the default branch names exactly this package and is not `"private": true`, and `.github/workflows/<workflow>` exists there.
-- The package does not exist on the registry yet. A package that exists is refused unless it is this verb's own placeholder from an earlier call (a single `0.0.1-placeholder` version marked `scaffoldedBy: "gh-broker"`), which is how an interrupted call resumes; the placeholder's recorded repository must be the one in this call. The lookup uses `?write=true`, so it reads the registry's primary copy rather than a possibly stale cache. The verb can never publish a version of a real package.
+- The package does not exist on the registry yet. A package that exists is refused unless it is this verb's own placeholder from an earlier call (every version is a `0.0.0-…`/`0.0.1-…` prerelease marked `scaffoldedBy: "gh-broker"`, apart from npm's own `0.0.0-stage`), which is how an interrupted call resumes. npm's placeholder appears when a staged publish from an older broker went live later. Every placeholder's recorded repository must be the one in this call. The lookup uses `?write=true`, so it reads the registry's primary copy rather than a possibly stale cache. The verb can never publish a version of a real package.
 
 **What it writes.**
 
