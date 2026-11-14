@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { Router } from "../src/router.ts";
 import { OtpRefusal } from "../src/types.ts";
+import { GhcrService } from "../src/verbs/ghcr_push.ts";
+import { DEFAULT_MAX_ARCHIVE_BYTES } from "../src/verbs/ghcr/config.ts";
+import { FakeRegistry, ociArchive, scratchDir, removeDir, join } from "./helpers/ghcr-fixtures.mts";
 
 // Pins for the Router's injected seams (design #175 §2e/§2f): the Router consumes the
 // OtpGate INTERFACE, not the concrete daemon class — a foreign implementation passed
@@ -81,5 +85,131 @@ describe("the Router dispatches through the injected OtpGate seam (design #175 �
 		// otp_status still answers under a hard lock
 		const out = await r.call("otp_status", {}, { user: "tester" });
 		expect(out.content).toBeDefined();
+	});
+});
+
+describe("the Router dispatches ghcr_* through the injected GhcrVerbs seam (design #175 §2f)", () => {
+	let secrets: { resolve: ReturnType<typeof vi.fn>; has: ReturnType<typeof vi.fn> };
+	let upstream: { forward: ReturnType<typeof vi.fn> };
+	let logLines: string[];
+
+	beforeEach(() => {
+		vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void logLines.push(a.join(" ")));
+		logLines = [];
+		secrets = { resolve: vi.fn((ref: string) => `token:${ref}`), has: vi.fn(() => true) };
+		upstream = { forward: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] }) };
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function ghcrConfig(): any {
+		return makeConfig({
+			tools: [
+				{ name: "ghcr_push", mode: "write" },
+				{ name: "ghcr_push_status", mode: "read" },
+				{ name: "ghcr_tags", mode: "read" }
+			],
+			ghcr: { dropDir: "/drop", owners: { alpha: { username: "u", credential: "cred:alpha-ghcr", images: ["hoot"] } } },
+			// no config.otp: the default gate stays inert and never touches a state file
+			otp: undefined
+		});
+	}
+
+	/** A GhcrVerbs implementation the daemon never built — the seam must accept it. */
+	function fakeGhcr(log: string[]) {
+		return {
+			push: async (input: unknown) => {
+				log.push(`push:${JSON.stringify(input)}`);
+				return { job: "j-1", state: "queued" };
+			},
+			status: (input: unknown) => {
+				log.push(`status:${JSON.stringify(input)}`);
+				return { jobs: [] };
+			},
+			tags: async (input: unknown) => {
+				log.push(`tags:${JSON.stringify(input)}`);
+				return { image: "x", exists: false, tags: [] };
+			}
+		};
+	}
+
+	it("ghcr_push / ghcr_push_status / ghcr_tags reach the injected verbs, results JSON-wrapped", async () => {
+		const log: string[] = [];
+		const r = new Router(ghcrConfig(), secrets as any, upstream as any, undefined, undefined, fakeGhcr(log));
+		const push = await r.call("ghcr_push", { owner: "Alpha", image: "hoot", tag: "1.0.0", archive: "/drop/a.tar" }, { user: "tester" });
+		expect(JSON.parse((push.content as { text: string }[])[0]!.text)).toEqual({ job: "j-1", state: "queued" });
+		const status = await r.call("ghcr_push_status", { owner: "Alpha" }, { user: "tester" });
+		expect(JSON.parse((status.content as { text: string }[])[0]!.text)).toEqual({ jobs: [] });
+		const tags = await r.call("ghcr_tags", { owner: "Alpha", image: "hoot" }, { user: "tester" });
+		expect(JSON.parse((tags.content as { text: string }[])[0]!.text)).toEqual({ image: "x", exists: false, tags: [] });
+		expect(log).toEqual([
+			'push:{"owner":"Alpha","image":"hoot","tag":"1.0.0","archive":"/drop/a.tar"}',
+			'status:{"owner":"Alpha"}',
+			'tags:{"owner":"Alpha","image":"hoot"}'
+		]);
+		const row = JSON.parse(logLines.find((l) => l.includes('"tool":"ghcr_push"'))!);
+		expect(row).toMatchObject({ tool: "ghcr_push", user: "tester", owner: "alpha", repo: "alpha/hoot", decision: "custom", ok: true });
+	});
+
+	it("a ghcr verb failure carries the error detail on the call row", async () => {
+		const r = new Router(ghcrConfig(), secrets as any, upstream as any, undefined, undefined, {
+			push: async () => {
+				throw new Error("boom");
+			},
+			status: () => ({}),
+			tags: async () => ({})
+		});
+		await expect(r.call("ghcr_push", { owner: "Alpha", image: "hoot", tag: "1.0.0", archive: "/drop/a.tar" }, { user: "tester" })).rejects.toThrow("boom");
+		const row = JSON.parse(logLines.find((l) => l.includes('"tool":"ghcr_push"'))!);
+		expect(row).toMatchObject({ tool: "ghcr_push", decision: "custom", ok: false, detail: "boom" });
+	});
+});
+
+describe("GhcrService reports the async completion row through the injected onJobDone (design #175 §2f)", () => {
+	it("the daemon's callback receives today's exact completion row, and the enqueue row still comes only on successful submit", async () => {
+		const logs: string[] = [];
+		const logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+		const root = scratchDir("s4-onjobdone");
+		const drop = join(root, "drop");
+		mkdirSync(drop, { recursive: true });
+		const reg = new FakeRegistry();
+		const base = await reg.start();
+		const onJobDone = vi.fn();
+		try {
+			const svc = new GhcrService(
+				{
+					dropDir: drop,
+					protectReleaseTags: true,
+					maxArchiveBytes: DEFAULT_MAX_ARCHIVE_BYTES,
+					owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot"] } }
+				},
+				{ resolve: (ref: string) => (ref === "cred:cldmv-packages" ? "ghp_testPatValue0123456789abcdefABCDEF" : "x"), has: () => true } as any,
+				{ base, onJobDone }
+			);
+			const img = ociArchive();
+			const archive = join(drop, "img.tar");
+			writeFileSync(archive, img.archive);
+			const job = await svc.push({ owner: "cldmv", image: "hoot", tag: "1.0.0", archive });
+			await svc.queue.idle();
+			// The enqueue row: synchronous, only on successful submit, written by the service.
+			const enqueue = logs.filter((l) => l.includes('"tool":"ghcr_push"'));
+			expect(enqueue).toHaveLength(1);
+			expect(JSON.parse(enqueue[0]!)).toMatchObject({ tool: "ghcr_push", owner: "cldmv", mode: "write", decision: "custom", ok: true });
+			expect(JSON.parse(enqueue[0]!).detail).toContain(`job=${job.job} queued tag=1.0.0`);
+			// The completion row: async, from the job's finally, through the injected callback.
+			expect(onJobDone).toHaveBeenCalledTimes(1);
+			const row = onJobDone.mock.calls[0]![0] as Record<string, unknown>;
+			expect(row).toMatchObject({ tool: "ghcr_push", owner: "cldmv", mode: "write", repo: `${new URL(base).host}/cldmv/hoot`, decision: "custom", ok: true });
+			expect(String(row.detail)).toContain(`job=${job.job} tag=1.0.0 digest=`);
+			expect(String(row.detail)).toContain(`archive=${archive}`);
+			// The injected sink replaced the default: the completion row did NOT also go to audit().
+			expect(logs).toHaveLength(1);
+		} finally {
+			logSpy.mockRestore();
+			await reg.stop();
+			removeDir(root);
+		}
 	});
 });

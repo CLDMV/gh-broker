@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:02:54-08:00 (1794682974)
+ *	@Last modified time: 2026-11-14T11:05:05-08:00 (1794683105)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -48,13 +48,13 @@ import { GhcrService } from "./verbs/ghcr_push.ts";
 // own implementation through the optional parameter.
 import { OtpGate as DaemonOtpGate } from "./otp/gate.ts";
 import { OTP_ARG, OTP_STATUS, isGated } from "./otp/policy.ts";
+import type { GhcrVerbs, Upstream } from "./router-core.ts";
+
+// The interface moved to the library-facing seams module (src/router-core.ts); re-exported
+// so the old import path keeps working.
+export type { Upstream } from "./router-core.ts";
 
 const GHCR_TOOLS = new Set(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
-
-/** What the router needs from the upstream (hosted-MCP) client pool. */
-export interface Upstream {
-	forward(tool: string, args: Record<string, unknown>, token: string): Promise<CallToolResult>;
-}
 
 /**
  * The daemon host's {@link TokenResolver} (design #175 §2a) — the owner+mode→PAT lookup
@@ -91,20 +91,21 @@ export class Router {
 	private readonly rules: Map<string, ToolRule>;
 	/** The daemon host's resolver (design §2a): the only credential path the routing asks. */
 	private readonly resolveToken: TokenResolver;
-	/** GHCR verbs run on config.ghcr's own credential, not the owner's GitHub PAT (created on first use). */
-	private ghcr?: GhcrService;
+	/** GHCR verbs run on config.ghcr's own credential, not the owner's GitHub PAT — the injected GhcrVerbs seam. */
+	private ghcr?: GhcrVerbs;
 	/** The OTP gate (#143), the injected OtpGate seam. Inert without config.otp. */
 	private readonly otp: OtpGate;
 
 	/**
-	 * The constructor is unchanged (`new Router(config, secrets, upstream[, appAuth, gate])`).
-	 * `gate` is the OtpGate SEAM (src/types.ts, design #175 §2e) — the daemon composition
-	 * (src/index.ts) constructs the concrete gate and passes it. The default still
-	 * constructs the daemon's own gate: the suite's 58 test call sites rely on it, and a
-	 * default of "must pass a gate" would be a test-visible change. Any OtpGate
-	 * implementation is accepted either way — the seam, not the class, is the contract.
+	 * The constructor keeps its call shape (`new Router(config, secrets, upstream[, appAuth, gate[, ghcr]])`).
+	 * `gate` is the OtpGate SEAM (src/types.ts, design #175 §2e) and `ghcr` the GhcrVerbs
+	 * SEAM (src/router-core.ts, §2f) — the daemon composition (src/index.ts) constructs
+	 * both and passes them. The defaults still construct the daemon's own gate and ghcr
+	 * service: the suite's 58 test call sites rely on them, and a default of "must pass
+	 * one" would be a test-visible change. Any implementation of either seam is accepted
+	 * either way — the seam, not the class, is the contract.
 	 */
-	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth, otp?: OtpGate) {
+	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth, otp?: OtpGate, ghcr?: GhcrVerbs) {
 		this.config = config;
 		this.secrets = secrets;
 		this.upstream = upstream;
@@ -116,6 +117,7 @@ export class Router {
 		this.rules = indexTools(permissivePolicy(config.tools).tools);
 		this.resolveToken = hostTokenResolver(config, secrets);
 		this.otp = otp ?? new DaemonOtpGate(config, secrets);
+		this.ghcr = ghcr;
 	}
 
 	/** Tools advertised to the agent (used to build tools/list). */

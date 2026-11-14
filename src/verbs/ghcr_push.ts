@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:58:22-08:00 (1794679102)
+ *	@Last modified time: 2026-11-14T11:05:05-08:00 (1794683105)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -33,7 +33,7 @@
  * advertised schemas, so every key and type is checked here before any network call.
  */
 
-import type { SecretStore } from "../types.ts";
+import type { AuditEntry, SecretStore } from "../types.ts";
 import { audit } from "../audit.ts";
 import { imageAllowed, type GhcrConfig, type GhcrOwnerConfig } from "./ghcr/config.ts";
 import { openArchive, planImage } from "./ghcr/archive.ts";
@@ -79,6 +79,14 @@ export interface GhcrServiceOptions {
 	/** Registry origin — tests only; production is always https://ghcr.io. */
 	base?: string;
 	queue?: JobQueue;
+	/**
+	 * The sink for the async completion row (design #175 §2f): the daemon injects one
+	 * that writes today's exact audit row — the row the job's finally callback used to
+	 * write directly. The default is the daemon's audit() itself, so a direct
+	 * construction (the suite's) behaves exactly as before. The synchronous enqueue row
+	 * (written only on successful submit) stays an audit() here either way.
+	 */
+	onJobDone?: (entry: AuditEntry) => void;
 }
 
 export class GhcrService {
@@ -86,12 +94,14 @@ export class GhcrService {
 	private readonly secrets: SecretStore;
 	private readonly base: string;
 	readonly queue: JobQueue;
+	readonly onJobDone: (entry: AuditEntry) => void;
 
 	constructor(cfg: GhcrConfig | undefined, secrets: SecretStore, opts: GhcrServiceOptions = {}) {
 		this.cfg = cfg;
 		this.secrets = secrets;
 		this.base = opts.base ?? GHCR_BASE;
 		this.queue = opts.queue ?? new JobQueue();
+		this.onJobDone = opts.onJobDone ?? audit;
 	}
 
 	private config(verb: string): GhcrConfig {
@@ -153,7 +163,9 @@ export class GhcrService {
 					describeError: (err) => reg.clean((err as Error)?.message ?? String(err)),
 					finally: (done) => {
 						archive.close();
-						audit({
+						// The async completion row goes through the injected onJobDone (design §2f):
+						// the daemon's sink writes today's exact row; the default is audit() itself.
+						this.onJobDone({
 							tool: verb,
 							owner,
 							mode: "write",

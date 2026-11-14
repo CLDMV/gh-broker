@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:02:53-08:00 (1794682973)
+ *	@Last modified time: 2026-11-14T11:05:04-08:00 (1794683104)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,6 +19,8 @@ import { UpstreamPool } from "./upstream.ts";
 import { Router } from "./router.ts";
 import { AppAuth } from "./appauth.ts";
 import { OtpGate } from "./otp/gate.ts";
+import { GhcrService } from "./verbs/ghcr_push.ts";
+import { audit } from "./audit.ts";
 import { buildCatalog } from "./catalog.ts";
 import { legacyCatalogOpts } from "./catalog-compat.ts";
 import { permissivePolicy } from "./manifest.ts";
@@ -89,12 +91,15 @@ async function main(): Promise<void> {
 		}
 	}
 
-	// The OTP gate is composed host-side and injected (design #175 §2e): the Router
-	// consumes the OtpGate seam, so the daemon constructs the concrete gate here and
-	// passes it in. (The Router still defaults to the daemon gate when omitted — the
-	// suite's Router call sites rely on that — but the composition is explicit.)
+	// The OTP gate and the ghcr verbs are composed host-side and injected (design #175
+	// §2e/§2f): the Router consumes the OtpGate and GhcrVerbs seams, so the daemon
+	// constructs both here and passes them in. (The Router still defaults to the daemon
+	// implementations when omitted — the suite's Router call sites rely on that — but the
+	// composition is explicit.) onJobDone receives the async ghcr completion row and
+	// writes today's exact audit fields; the enqueue row stays inside the service.
 	const gate = new OtpGate(config, secrets);
-	const router = new Router(config, secrets, upstream, appAuth, gate);
+	const ghcr = new GhcrService(config.ghcr, secrets, { onJobDone: (entry) => audit(entry) });
+	const router = new Router(config, secrets, upstream, appAuth, gate, ghcr);
 	// The daemon picks the permissive policy explicitly (design #175 §2h): config.json keeps
 	// today's authority, so a config that widens a manifest tool's mode or turns off its OTP
 	// gate is served as configured — never refused — but each such fact warns here at startup.
