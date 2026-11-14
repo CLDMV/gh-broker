@@ -224,9 +224,12 @@ describe("Router.call", () => {
 				return { data: { type: "file", encoding: "base64", content: b64("name: publish") } };
 			});
 			const urls: string[] = [];
+			let published: unknown;
 			const fetchMock = vi.fn(async (url: string, init: any) => {
 				urls.push(`${init.method} ${url}`);
-				return { status: init.method === "GET" ? 404 : 200, headers: { get: () => null }, text: async () => "{}" };
+				if (init.method === "PUT") published = JSON.parse(init.body);
+				const body = init.method === "GET" && published ? JSON.stringify(published) : "{}";
+				return { status: init.method === "GET" && !published ? 404 : 200, headers: { get: () => null }, text: async () => body };
 			});
 			vi.stubGlobal("fetch", fetchMock);
 			try {
@@ -234,7 +237,7 @@ describe("Router.call", () => {
 				const r = new Router(cfg, secrets as any, upstream as any);
 				const out = await r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" });
 				expect(JSON.parse((out.content[0] as any).text)).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"] });
-				expect(urls).toEqual(["GET https://npm.example.test/@cldmv%2fx?write=true", "PUT https://npm.example.test/@cldmv%2fx"]);
+				expect(urls).toEqual(["GET https://npm.example.test/@cldmv%2fx?write=true", "PUT https://npm.example.test/@cldmv%2fx", "GET https://npm.example.test/@cldmv%2fx?write=true"]);
 				expect(fetchMock.mock.calls[1]![1].headers.authorization).toBe("Bearer token:cred:npm-token");
 			} finally {
 				vi.unstubAllGlobals();

@@ -19,18 +19,17 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.10.5 (November 2026)
+### Latest: v0.10.6 (November 2026)
 
-- **`npm_scaffold` works again.** npm now refuses any version whose core is `0.0.0`, so the `0.0.0-stage` placeholder failed with HTTP 403. The placeholder is now `0.0.1-stage`, still a prerelease that sorts below every real release.
-- **First refactors toward the core library.** The OTP state helpers, config validation and the TOTP step each have one implementation now, with no change in behaviour.
-- [View full v0.10.5 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.5.md)
+- **`npm_scaffold` stays clear of npm's staged publishing.** The `-stage` placeholder versions collided with npm's own staging, so a publish could get a 2xx and still never go live. The placeholder is now `0.0.1-placeholder`, and the verb checks it's on the registry before it moves on to the trusted publisher.
+- [View full v0.10.6 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.6.md)
 
 ### Recent Releases
 
+- **v0.10.5** (November 2026) — a first fix for the `npm_scaffold` placeholder, and the first refactors toward the core library ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.5.md))
 - **v0.10.4** (November 2026) — the MCP handshake reports the installed version instead of `0.1.0`, and `typecheck` is renamed `types:check` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.4.md))
 - **v0.10.3** (November 2026) — the `gh-broker` command and installer are built from TypeScript in `src/`, and a checkout installs with `sudo ./deploy/install.sh` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.3.md))
 - **v0.10.2** (November 2026) — the MCP entry reaches every Claude config folder an agent uses, and the package drops from 3.2 MB to about 780 kB ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.2.md))
-- **v0.10.1** (November 2026) — the OTP gate says why it refused a code, and `report_dependents` lists dev branches on large orgs without a 502 ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.1.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
@@ -76,7 +75,7 @@ The hosted MCP's `issue_write` takes `labels` as a full replacement, so changing
 
 ### 📦 **New npm Packages Without a Manual First Publish**
 
-npm only accepts a trusted publisher on a package that already exists, so every new package used to need a hand-run first publish and a form on npmjs.com. `npm_scaffold` does both: it publishes a broker-built placeholder (`0.0.1-stage`, no code) and registers the repo's publish workflow as the trusted publisher, after which CI publishes every release through OIDC. The broker's npm token has no 2FA bypass, so every npm write needs a one-time password from the user: one call publishes, a second call with the next code adds the trusted publisher. The verb refuses any package that already exists.
+npm only accepts a trusted publisher on a package that already exists, so every new package used to need a hand-run first publish and a form on npmjs.com. `npm_scaffold` does both: it publishes a broker-built placeholder (`0.0.1-placeholder`, no code) and registers the repo's publish workflow as the trusted publisher, after which CI publishes every release through OIDC. The broker's npm token has no 2FA bypass, so every npm write needs a one-time password from the user: one call publishes, a second call with the next code adds the trusted publisher. The verb refuses any package that already exists.
 
 ```json
 { "owner": "cldmv", "repo": "new-thing", "package": "@cldmv/new-thing", "otp": "123456" }
