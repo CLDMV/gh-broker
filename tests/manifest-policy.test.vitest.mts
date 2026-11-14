@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { MANIFEST, permissivePolicy, strictPolicy } from "../src/manifest.ts";
 import { DEFAULT_GATED, OTP_STATUS } from "../src/otp/policy.ts";
 import { DEFAULT_DISABLED } from "../src/availability.ts";
@@ -149,5 +150,155 @@ describe("the strict policy (the library's default)", () => {
 	it("drops tools that are not in the manifest, and the host-only default:off tools", () => {
 		const { tools } = strictPolicy([rule("get_me"), rule("ghcr_push", { mode: "write", custom: true }), rule("report_unlabeled", { custom: true })]);
 		expect(tools.map((t) => t.name)).toEqual(["report_unlabeled"]);
+	});
+});
+
+describe("config.example.json against the manifest (the shipped config pin)", () => {
+	const raw = JSON.parse(readFileSync("config.example.json", "utf8")) as { tools: Array<Record<string, unknown>> };
+	const names = raw.tools.map((t) => t.name as string);
+
+	it("sits within the manifest under the permissive policy: no mode widening, no OTP turn-off, nothing dropped", () => {
+		const { tools, warnings } = permissivePolicy(raw.tools as any);
+		expect(warnings).toEqual([]);
+		expect(tools).toHaveLength(raw.tools.length);
+	});
+
+	it("keeps the daemon-side enabled facts out of the policy: the ghcr entries carry no enabled flag and survive permissive (their default: \"off\" is ignored there)", () => {
+		for (const entry of raw.tools.filter((t) => String(t.name).startsWith("ghcr_"))) expect(entry.enabled).toBeUndefined();
+		const kept = permissivePolicy(raw.tools as any).tools.map((t) => t.name);
+		for (const ghcr of ["ghcr_push", "ghcr_push_status", "ghcr_tags"]) expect(kept).toContain(ghcr);
+	});
+
+	it("under the strict policy, exactly the config-only and host-only tools vanish — the pinned delta", () => {
+		const survivors = strictPolicy(raw.tools as any).tools.map((t) => t.name).sort();
+		// Everything the manifest declares, minus the host-only ghcr verbs.
+		expect(survivors).toEqual(
+			[
+				"actions_run_trigger",
+				"assign_copilot_to_issue",
+				"assign_copilot_to_issue_with_intent",
+				"create_pull_request_with_copilot",
+				"create_repository",
+				"delete_branch",
+				"dismiss_alert",
+				"fork_repository",
+				"issue_labels",
+				"issue_write",
+				"label_write",
+				"list_pull_requests",
+				"merge_pull_request",
+				"minimize_comment",
+				"npm_scaffold",
+				"otp_status",
+				"pull_request_read",
+				"pull_request_review_write",
+				"reply_review_thread",
+				"report_alert_status",
+				"report_ci_status",
+				"report_dependents",
+				"report_release_changes",
+				"report_release_prs",
+				"report_security_alerts",
+				"report_unlabeled",
+				"resolve_review_thread"
+			].sort()
+		);
+		// The 60 tools a strict host would not serve: 57 config-only forwarded tools plus
+		// the 3 host-only ghcr verbs. Any manifest or config.example drift shows up here.
+		const vanished = names.filter((n) => !survivors.includes(n)).sort();
+		expect(vanished).toEqual(
+			[
+				"actions_get",
+				"actions_list",
+				"add_issue_comment",
+				"check_dependency_vulnerabilities",
+				"create_pull_request",
+				"get_code_quality_finding",
+				"get_code_scanning_alert",
+				"get_commit",
+				"get_dependabot_alert",
+				"get_discussion",
+				"get_discussion_comments",
+				"get_file_contents",
+				"get_global_security_advisory",
+				"get_job_logs",
+				"get_label",
+				"get_latest_release",
+				"get_me",
+				"get_notification_details",
+				"get_release_by_tag",
+				"get_repository_tree",
+				"get_secret_scanning_alert",
+				"get_tag",
+				"get_team_members",
+				"get_teams",
+				"ghcr_push",
+				"ghcr_push_status",
+				"ghcr_tags",
+				"issue_read",
+				"list_branches",
+				"list_code_scanning_alerts",
+				"list_commits",
+				"list_dependabot_alerts",
+				"list_discussion_categories",
+				"list_discussions",
+				"list_global_security_advisories",
+				"list_issue_fields",
+				"list_issue_types",
+				"list_issues",
+				"list_label",
+				"list_notifications",
+				"list_org_repository_security_advisories",
+				"list_releases",
+				"list_repository_collaborators",
+				"list_repository_security_advisories",
+				"list_secret_scanning_alerts",
+				"list_tags",
+				"projects_get",
+				"projects_list",
+				"request_copilot_review",
+				"search_code",
+				"search_commits",
+				"search_issues",
+				"search_orgs",
+				"search_pull_requests",
+				"search_repositories",
+				"search_users",
+				"semantic_issue_similarity_search",
+				"sub_issue_write",
+				"update_pull_request",
+				"update_pull_request_branch"
+			].sort()
+		);
+	});
+
+	it("under the strict policy, no mode narrows and the only otp change is the gated tools' gate made explicit", () => {
+		const strict = strictPolicy(raw.tools as any).tools;
+		const narrowed = strict.filter((t) => {
+			const orig = raw.tools.find((r) => r.name === t.name)!;
+			return orig.mode === "write" && t.mode === "read";
+		});
+		expect(narrowed.map((t) => t.name)).toEqual([]);
+		// The config omits otp everywhere; the manifest's gating defaults become explicit.
+		const otpChanged = strict.filter((t) => {
+			const orig = raw.tools.find((r) => r.name === t.name)!;
+			return (orig.otp ?? false) !== t.otp;
+		});
+		expect(otpChanged.map((t) => t.name).sort()).toEqual(
+			[
+				"actions_run_trigger",
+				"assign_copilot_to_issue",
+				"assign_copilot_to_issue_with_intent",
+				"create_pull_request_with_copilot",
+				"create_repository",
+				"delete_branch",
+				"dismiss_alert",
+				"fork_repository",
+				"label_write",
+				"merge_pull_request",
+				"pull_request_review_write"
+			].sort()
+		);
+		for (const t of otpChanged) expect(t.otp).toBe(true);
 	});
 });
