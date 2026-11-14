@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:08:19-08:00 (1794683299)
+ *	@Last modified time: 2026-11-14T11:38:43-08:00 (1794685123)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -259,7 +259,9 @@ export class OtpRefusal extends Error {
  * Same name as the concrete class on purpose — the class structurally satisfies this.
  */
 export interface OtpGate {
-	/** Whether the gate is set up (config.otp + a stored, decodable seed). Inert when false. */
+	/** Whether config.otp is present. Inert when false. The seed's presence and decodability
+	 * are availability's check (otpSetupProblem), not this flag's — a corrupt seed keeps
+	 * enabled true and fails at authorize time. */
 	enabled: boolean;
 	/** The refusal that blocks every tool for a hard-locked user, or undefined. */
 	hardLockRefusal(user: string): OtpRefusal | undefined;
