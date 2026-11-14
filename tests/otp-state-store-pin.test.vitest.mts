@@ -50,7 +50,7 @@ describe("the LockStateStore write-failure contract", () => {
 		expect(store.read()).toEqual({ ok: true, state: next });
 	});
 
-	it("the attempted state is what a read sees, not the file's last good content", () => {
+	it.skipIf(process.getuid?.() === 0)("the attempted state is what a read sees, not the file's last good content", () => {
 		const dir = join(ROOT, `stale-${n++}`);
 		mkdirSync(dir, { recursive: true });
 		const path = join(dir, "state.json");
