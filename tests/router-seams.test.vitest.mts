@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { Router } from "../src/router.ts";
 import { OtpRefusal } from "../src/types.ts";
+import { unavailableReason } from "../src/availability.ts";
 import { GhcrService } from "../src/verbs/ghcr_push.ts";
 import { DEFAULT_MAX_ARCHIVE_BYTES } from "../src/verbs/ghcr/config.ts";
 import { FakeRegistry, ociArchive, scratchDir, removeDir, join } from "./helpers/ghcr-fixtures.mts";
@@ -211,5 +212,39 @@ describe("GhcrService reports the async completion row through the injected onJo
 			await reg.stop();
 			removeDir(root);
 		}
+	});
+});
+
+describe("unavailableReason takes the injected capability predicate (design #175 §2a)", () => {
+	const config = (over: Record<string, unknown> = {}): any => ({
+		listen: "unix:/x.sock",
+		upstream: "https://api.githubcopilot.com/mcp/",
+		tools: [],
+		owners: {},
+		npm: { token: "cred:npm-token", scopes: ["@cldmv"] },
+		ghcr: { dropDir: "/d", owners: { alpha: { username: "u", credential: "cred:alpha-ghcr", images: ["hoot"] } } },
+		...over
+	});
+	const rule = (name: string, extra: Record<string, unknown> = {}) => ({ name, mode: "write", ...extra }) as any;
+
+	it("an unstored npm credential hides npm_scaffold, exactly as before", () => {
+		const has = (ref: string) => ref !== "cred:npm-token";
+		expect(unavailableReason(rule("npm_scaffold"), config(), has, () => undefined)).toBe(
+			'its credential "npm-token" is not stored (re-run the installer with --npm)'
+		);
+	});
+
+	it("an unstored ghcr credential hides the ghcr verbs, exactly as before", () => {
+		expect(unavailableReason(rule("ghcr_push"), config(), () => false, () => undefined)).toBe(
+			'no GHCR credential is stored ("alpha-ghcr"; re-run the installer to add one)'
+		);
+	});
+
+	it("a gated tool is hidden by the injected otpProblem (the host's seed-decoding check)", () => {
+		expect(unavailableReason(rule("merge_pull_request"), config(), () => true, () => "OTP is not set up")).toBe("OTP is not set up");
+	});
+
+	it("credentials stored + OTP ready → available", () => {
+		expect(unavailableReason(rule("ghcr_push"), config(), () => true, () => undefined)).toBeUndefined();
 	});
 });

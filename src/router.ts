@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:05:05-08:00 (1794683105)
+ *	@Last modified time: 2026-11-14T11:06:20-08:00 (1794683180)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -20,6 +20,7 @@ import { Octokit } from "@octokit/core";
 import { indexTools } from "./config.ts";
 import { audit } from "./audit.ts";
 import { unavailableReason } from "./availability.ts";
+import { otpSetupProblem } from "./otp/policy.ts";
 import { permissivePolicy } from "./manifest.ts";
 // DEFERRED: link_issue is App-token-only and not wired in — see docs.
 // import { linkIssue, type LinkIssueInput } from "./verbs/link_issue.ts";
@@ -120,9 +121,22 @@ export class Router {
 		this.ghcr = ghcr;
 	}
 
+	/**
+	 * The daemon's availability facts (design §2a's capability predicate): ref presence
+	 * over the store, plus the OTP setup check (which decodes the stored seed, so it
+	 * stays a host-side function over the store).
+	 */
+	private readonly unavailable = (rule: ToolRule): string | undefined =>
+		unavailableReason(
+			rule,
+			this.config,
+			(ref) => this.secrets.has(ref),
+			(config) => otpSetupProblem(config, this.secrets)
+		);
+
 	/** Tools advertised to the agent (used to build tools/list). */
 	advertisedTools(): ToolRule[] {
-		return this.config.tools.filter((rule) => !unavailableReason(rule, this.config, this.secrets));
+		return this.config.tools.filter((rule) => !this.unavailable(rule));
 	}
 
 	/** Run `tool` for `caller`, the agent user whose socket the call came in on. */
@@ -150,7 +164,7 @@ export class Router {
 			args = rest;
 		}
 		// An optional integration that isn't set up hides its tools: refuse them the same way.
-		const unavailable = unavailableReason(rule, this.config, this.secrets);
+		const unavailable = this.unavailable(rule);
 		if (unavailable) {
 			audit({ tool, user, decision: "deny", detail: `unavailable: ${unavailable}` });
 			throw new Error(`tool "${tool}" is not available on this broker: ${unavailable}`);

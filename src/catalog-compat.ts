@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:43:26-08:00 (1794678206)
+ *	@Last modified time: 2026-11-14T11:06:17-08:00 (1794683177)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -26,6 +26,7 @@
 
 import type { Config, SecretStore, ToolRule, TokenResolver } from "./types.ts";
 import { unavailableReason } from "./availability.ts";
+import { otpSetupProblem } from "./otp/policy.ts";
 
 export interface LegacyCatalogOpts {
 	resolveToken: TokenResolver;
@@ -43,6 +44,6 @@ export function legacyCatalogOpts(config: Config, store: SecretStore): LegacyCat
 		resolveToken: async () => (firstOwner ? store.resolve(firstOwner.read) : null),
 		upstreamTimeoutMs: Number(process.env.GH_BROKER_CATALOG_TIMEOUT_MS ?? 10000),
 		log: (message) => console.error(message),
-		unavailable: (rule) => unavailableReason(rule, config, store)
+		unavailable: (rule) => unavailableReason(rule, config, (ref) => store.has(ref), (c) => otpSetupProblem(c, store))
 	};
 }
