@@ -33,6 +33,8 @@ type RegistryOpts = {
 	existing?: Record<string, unknown>;
 	/** Codes the registry accepts; each works once. */
 	otps?: string[];
+	/** The PUT answers 200 but the version never appears (what npm did with a -stage placeholder). */
+	publishNotLive?: string;
 	trustStatus?: number;
 	publishStatus?: number;
 	lookupStatus?: number;
@@ -74,6 +76,7 @@ function fakeRegistry(opts: RegistryOpts = {}) {
 		if (init.method === "PUT" && path === `/${escapePackageName(PKG)}`) {
 			if (!useOtp()) return otpRefused();
 			if (opts.publishStatus) return reply(opts.publishStatus, { error: "You do not have permission to publish" });
+			if (opts.publishNotLive !== undefined) return reply(200, opts.publishNotLive);
 			const doc = JSON.parse(init.body!);
 			packages.set(PKG, { name: doc.name, versions: doc.versions, "dist-tags": doc["dist-tags"] });
 			return reply(200, { ok: true });
@@ -307,7 +310,19 @@ describe("npm_scaffold", () => {
 		expect(reg.calls.every((c) => c.method === "GET")).toBe(true);
 	});
 
-	it("refuses an existing single 0.0.1-stage version that lacks the scaffold marker", async () => {
+	it("fails when npm answers the publish with 2xx but the version never goes live", async () => {
+		const reg = fakeRegistry({ publishNotLive: '{"message":"staged"}' });
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(`HTTP 200 (staged), but ${PKG}@0.0.1-placeholder isn't on the registry, so it may have been staged`);
+		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(1);
+		expect(reg.calls.filter((c) => c.method === "POST")).toHaveLength(0);
+	});
+
+	it("says so when that 2xx publish came back with no message", async () => {
+		const reg = fakeRegistry({ publishNotLive: "" });
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow("HTTP 200 (no message)");
+	});
+
+	it("refuses an existing single 0.0.1-placeholder version that lacks the scaffold marker", async () => {
 		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { [PLACEHOLDER_VERSION]: { name: PKG } } } } });
 		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/was not created by npm_scaffold/);
 	});

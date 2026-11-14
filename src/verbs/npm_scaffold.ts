@@ -43,8 +43,13 @@ import { buildTarball, tarballDigests } from "./npm-tarball.ts";
  * not an error either: the result is `needs_otp` naming what is left.
  */
 
-/** npm refuses any version whose core is 0.0.0 (it used to accept 0.0.0-stage). A prerelease of 0.0.1 sorts below every real release. */
-export const PLACEHOLDER_VERSION = "0.0.1-stage";
+/**
+ * The placeholder's version. A prerelease of 0.0.1 sorts below every real release and can't
+ * take a real 0.0.1. It must not use the `-stage` suffix: npm's staged publishing reserves
+ * `0.0.0-stage` for its own placeholder (a publish of it is refused with 403), and a PUT of
+ * `0.0.1-stage` was answered 2xx but never went live (a retry got 409 "previously staged").
+ */
+export const PLACEHOLDER_VERSION = "0.0.1-placeholder";
 export const SCAFFOLD_MARKER = "gh-broker";
 const DEFAULT_WORKFLOW = "publish.yml";
 const INPUT_KEYS = new Set(["owner", "repo", "package", "npm_otp", "workflow"]);
@@ -245,13 +250,20 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 
 	const existing = await deps.registry.packument(args.package);
 	if (!existing) {
+		let answer: { status: number; detail: string };
 		try {
-			await deps.registry.publish(placeholderDocument(args.package, facts, access, deps.registry.registry), args.package, args.npm_otp);
+			answer = await deps.registry.publish(placeholderDocument(args.package, facts, access, deps.registry.registry), args.package, args.npm_otp);
 		} catch (err) {
 			if (err instanceof NpmOtpRequired) {
 				return { ...base, status: "needs_otp", done: [], remaining: ["publish", "trust"], message: "npm refused the one-time password before publishing; nothing was written. Call again with a fresh code." };
 			}
 			throw err;
+		}
+		// Only call it published once the registry serves it: npm has answered a publish with 2xx
+		// and then not shown the version (it was staged), which left the trust step with nothing.
+		const live = await deps.registry.packument(args.package);
+		if (!live?.versions?.[PLACEHOLDER_VERSION]) {
+			fail(`npm answered the placeholder publish with HTTP ${answer.status} (${answer.detail || "no message"}), but ${args.package}@${PLACEHOLDER_VERSION} isn't on the registry, so it may have been staged rather than published; check ${base.url} and npm's staged packages before trying again`);
 		}
 		// That code is spent: every npm write needs its own one-time password, so don't
 		// send it again (a guaranteed refusal that counts as a failed 2FA attempt).
