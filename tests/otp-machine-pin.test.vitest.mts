@@ -176,7 +176,7 @@ describe("the reason-code → audit-row table", () => {
 });
 
 describe("windows never reach disk", () => {
-	it("the file-bytes-after-write pin: an open window's record carries no windows key", () => {
+	it("the file-bytes-after-write pin: an open window lives in the gate's map, and the written record is exactly the four persisted fields", () => {
 		const h = harness();
 		const iso = new Date(T0 - MIN).toISOString();
 		writeFileSync(h.statePath, JSON.stringify({ ...emptyState(), users: { repo: { ...emptyUser(), lockouts: [iso] } } }));
@@ -184,12 +184,13 @@ describe("windows never reach disk", () => {
 		expect(opened.otp).toBe("opened");
 		// The gate's map holds the window...
 		expect(h.gate.status("repo")).toMatchObject({ openWindows: 1 });
-		// ...but the file record does not: windows (and the machine's other memory-tier
-		// fields) are stripped from every write.
+		// ...and the written record is exactly the four persisted fields. That exact-shape
+		// equality is the real pin: compact() rebuilds every entry from these four fields, so
+		// the file cannot carry `windows` (or any other memory-tier field) by construction —
+		// asserting "no windows key" separately could never fail. What WOULD break is compact
+		// (or the gate's userRecord feed) growing a fifth field, which this catches.
 		const written = h.readState();
-		expect(Object.hasOwn(written.users.repo, "windows")).toBe(false);
 		expect(written.users.repo).toEqual({ failures: 0, lockedUntil: null, lockouts: [iso], hardLock: null });
-		expect(JSON.stringify(written)).not.toContain("windows");
 	});
 });
 
@@ -240,7 +241,7 @@ describe("the CLI's spend runs through the package's spendThrough", () => {
 		for (const t of [now, now + 29_500, T0, T0 + 12_345]) expect(secondsUntilFreshCode(t)).toBe(old(t));
 	});
 
-	it("the machine's admin-unlock names today's three outcomes", () => {
+	it("lib-otp's admin-unlock names its three outcomes (library behavior, exercised here for the mapping)", () => {
 		const machine = parseOtpOptions();
 		expect(stepOtp(emptyPerson(), { kind: "admin-unlock", by: "root", now: NOW }, machine).outcome).toEqual({ reason: "no-entry" });
 		expect(stepOtp(personOf({ ...emptyUser(), failures: 2 }), { kind: "admin-unlock", by: "root", now: NOW }, machine).outcome).toEqual({ reason: "cleared" });
