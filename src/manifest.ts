@@ -472,9 +472,10 @@ export function strictPolicy(rules: readonly ToolRule[]): PolicyApplication {
 			// never gated (src/otp/policy.ts), so a config otp on it is ignored.
 			otp: rule.name === OTP_STATUS ? undefined : decl.otp || rule.otp === true,
 			// A tool is custom exactly when the manifest serves it as a verb, and augmentable
-			// exactly where the manifest declares it — config can't add either.
+			// exactly where the manifest declares it — config can't add either, so augment is
+			// set from the entry and CLEARED (not merely left behind by the spread) otherwise.
 			custom: decl.kind === "verb",
-			...("augment" in decl && decl.augment ? { augment: true as const } : {})
+			augment: "augment" in decl && decl.augment ? true : undefined
 		});
 	}
 	return { tools, warnings: [] };
