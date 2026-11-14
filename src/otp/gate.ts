@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:10:29-08:00 (1794676229)
+ *	@Last modified time: 2026-11-14T11:02:53-08:00 (1794682973)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -44,7 +44,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { audit } from "../audit.ts";
 import { hostname } from "node:os";
-import type { AuditEntry, Config, SecretStore } from "../types.ts";
+import { OtpRefusal, type AuditEntry, type Config, type OtpAudit, type OtpGate as OtpGateSeam, type SecretStore } from "../types.ts";
 import { OTP_ARG, isGated, otpSettings, readSeed, windowText, type OtpSettings } from "./policy.ts";
 import { isEnabled } from "../availability.ts";
 import { OtpStateFile, emptyUser, personOf, userState, type HardLock, type MachinePerson, type OtpState, type UserState } from "./state.ts";
@@ -67,25 +67,11 @@ type MachineConfig = ReturnType<typeof parseOtpOptions>;
 // Re-exported so the old import path keeps working.
 export { windowText };
 
-export type OtpOutcome = "window" | "opened" | "refused" | "locked" | "hard-locked";
-
-/** The audit fields a gated (or hard-locked) call adds to its log line. */
-export interface OtpAudit {
-	otp: OtpOutcome;
-	window?: string;
-	/** When the window closes, on "opened". */
-	until?: string;
-}
-
-/** A call the gate refused. Its message is safe to return to the agent. */
-export class OtpRefusal extends Error {
-	readonly audit: OtpAudit;
-	constructor(message: string, audit: OtpAudit) {
-		super(message);
-		this.name = "OtpRefusal";
-		this.audit = audit;
-	}
-}
+// OtpOutcome/OtpAudit/OtpRefusal are the gate's shared vocabulary and live in src/types.ts
+// (next to the OtpGate seam interface the Router consumes, design #175 §2e); re-exported
+// so the old import path keeps working.
+export { OtpRefusal } from "../types.ts";
+export type { OtpAudit, OtpOutcome } from "../types.ts";
 
 export const UNLOCK_COMMAND = "sudo gh-broker otp unlock";
 
@@ -171,7 +157,8 @@ function userRecord(person: MachinePerson): UserState {
 	};
 }
 
-export class OtpGate {
+/** The daemon's concrete gate — the host implementation of the OtpGate seam (src/types.ts). */
+export class OtpGate implements OtpGateSeam {
 	private readonly config: Config;
 	private readonly secrets: SecretStore;
 	private readonly settings: OtpSettings;
