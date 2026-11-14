@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T07:38:51-08:00 (1794670731)
+ *	@Last modified time: 2026-11-14T08:30:08-08:00 (1794673808)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -106,7 +106,7 @@ function list(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 /** Record an unlock in the journal next to the daemon's audit log (never fatal). */
 function auditUnlock(d: OtpDeps, user: string, detail?: string): void {
 	try {
-		d.audit({ ts: new Date(d.now()).toISOString(), decision: "otp-unlock", user, by: d.sudoUser() ?? "root", ...(detail ? { detail } : {}) });
+		d.audit({ ts: new Date(d.now()).toISOString(), decision: "otp-unlock", user, by: d.sudoUser() || "root", ...(detail ? { detail } : {}) });
 	} catch (err) {
 		d.error(`warning: the unlock could not be written to the journal: ${(err as Error).message}`);
 	}
@@ -150,7 +150,7 @@ function unlock(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 	// is spent below, which is the spend that matters across users). Today's outcome keys off the
 	// entry's existence rather than the record's emptiness, so a machine "no-entry" for an
 	// all-zero entry still clears it.
-	const { outcome } = stepOtp(personOf(userOf(read.state, user!)), { kind: "admin-unlock", by: d.sudoUser() ?? "root", now }, UNLOCK_MACHINE);
+	const { outcome } = stepOtp(personOf(userOf(read.state, user!)), { kind: "admin-unlock", by: d.sudoUser() || "root", now }, UNLOCK_MACHINE);
 	const result = outcome?.reason === "unlocked" ? `unlocked ${user}` : `cleared ${user}'s counters (not hard-locked)`;
 	d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user!), now));
 	auditUnlock(d, user!);
