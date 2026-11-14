@@ -169,15 +169,14 @@ describe("config.example.json against the manifest (the shipped config pin)", ()
 		for (const ghcr of ["ghcr_push", "ghcr_push_status", "ghcr_tags"]) expect(kept).toContain(ghcr);
 	});
 
-	it("under the strict policy, exactly the config-only and host-only tools vanish — the pinned delta", () => {
+	it("under the strict policy, exactly the config-only and default-off tools vanish — the pinned delta", () => {
 		const survivors = strictPolicy(raw.tools as any).tools.map((t) => t.name).sort();
-		// Everything the manifest declares, minus the host-only ghcr verbs.
+		// Everything the manifest declares, minus the host-only ghcr verbs and the copilot
+		// trio (default: "off" — strict is never looser than the daemon, which keeps them
+		// off via availability until a rule says enabled: true).
 		expect(survivors).toEqual(
 			[
 				"actions_run_trigger",
-				"assign_copilot_to_issue",
-				"assign_copilot_to_issue_with_intent",
-				"create_pull_request_with_copilot",
 				"create_repository",
 				"delete_branch",
 				"dismiss_alert",
@@ -203,12 +202,16 @@ describe("config.example.json against the manifest (the shipped config pin)", ()
 				"resolve_review_thread"
 			].sort()
 		);
-		// The 60 tools a strict host would not serve: 57 config-only forwarded tools plus
-		// the 3 host-only ghcr verbs. Any manifest or config.example drift shows up here.
+		// The 63 tools a strict host would not serve: 57 config-only forwarded tools, the
+		// 3 host-only ghcr verbs, and the 3 copilot tools (default: "off" — the daemon keeps
+		// them off via availability until enabled: true). Any drift shows up here.
 		const vanished = names.filter((n) => !survivors.includes(n)).sort();
 		expect(vanished).toEqual(
 			[
 				"actions_get",
+				"assign_copilot_to_issue",
+				"assign_copilot_to_issue_with_intent",
+				"create_pull_request_with_copilot",
 				"actions_list",
 				"add_issue_comment",
 				"check_dependency_vulnerabilities",
@@ -280,16 +283,15 @@ describe("config.example.json against the manifest (the shipped config pin)", ()
 		});
 		expect(narrowed.map((t) => t.name)).toEqual([]);
 		// The config omits otp everywhere; the manifest's gating defaults become explicit.
+		// (Comparison normalizes absent/undefined to false — strict leaves otp_status's otp
+		// undefined, where the old code wrote false; both mean ungated.)
 		const otpChanged = strict.filter((t) => {
 			const orig = raw.tools.find((r) => r.name === t.name)!;
-			return (orig.otp ?? false) !== t.otp;
+			return (orig.otp ?? false) !== (t.otp ?? false);
 		});
 		expect(otpChanged.map((t) => t.name).sort()).toEqual(
 			[
 				"actions_run_trigger",
-				"assign_copilot_to_issue",
-				"assign_copilot_to_issue_with_intent",
-				"create_pull_request_with_copilot",
 				"create_repository",
 				"delete_branch",
 				"dismiss_alert",

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:07:37-08:00 (1794676057)
+ *	@Last modified time: 2026-11-14T09:43:28-08:00 (1794678208)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -105,6 +105,13 @@ interface DeclBase {
 	otp: boolean;
 	/** How the owner comes out of the args. */
 	owner: OwnerExtraction;
+	/**
+	 * Host-only: shipped but off until a host explicitly enables it. The ghcr verbs and the
+	 * copilot trio carry it — the daemon ignores it (availability's DEFAULT_DISABLED and
+	 * config.ghcr govern what's enabled there); the strict library policy treats the tool
+	 * as nonexistent unless the rule says enabled: true.
+	 */
+	default?: "off";
 }
 
 /** A locally dispatched verb: its description and input schema live here. */
@@ -112,13 +119,6 @@ export interface VerbDecl extends DeclBase {
 	kind: "verb";
 	description: string;
 	inputSchema: ToolInputSchema;
-	/**
-	 * Host-only: shipped but off until a host explicitly enables it. Only the ghcr verbs
-	 * carry it — the daemon ignores it (availability's DEFAULT_DISABLED and config.ghcr
-	 * govern what's enabled there); the strict library policy treats the tool as
-	 * nonexistent.
-	 */
-	default?: "off";
 }
 
 /** A call forwarded to the hosted MCP: its schema and description live upstream. */
@@ -378,29 +378,32 @@ export const MANIFEST: Readonly<Record<string, ToolDecl>> = {
 		owner: "extractOwner",
 		request: { op: "mcp", target: "label_write" }
 	},
-	// Disabled by default on the daemon too (src/availability.ts's DEFAULT_DISABLED — a
-	// daemon-side enabled fact the manifest's `default` field deliberately does not
-	// carry); gated once enabled.
+	// Disabled by default everywhere: the daemon keeps them off via availability's
+	// DEFAULT_DISABLED, and strict hosts drop them until a rule says `enabled: true`
+	// explicitly — strict must never be looser than the daemon. Gated once enabled.
 	create_pull_request_with_copilot: {
 		kind: "forwarded",
 		mode: "write",
 		otp: gated("create_pull_request_with_copilot"),
 		owner: "extractOwner",
-		request: { op: "mcp", target: "create_pull_request_with_copilot" }
+		request: { op: "mcp", target: "create_pull_request_with_copilot" },
+		default: "off"
 	},
 	assign_copilot_to_issue: {
 		kind: "forwarded",
 		mode: "write",
 		otp: gated("assign_copilot_to_issue"),
 		owner: "extractOwner",
-		request: { op: "mcp", target: "assign_copilot_to_issue" }
+		request: { op: "mcp", target: "assign_copilot_to_issue" },
+		default: "off"
 	},
 	assign_copilot_to_issue_with_intent: {
 		kind: "forwarded",
 		mode: "write",
 		otp: gated("assign_copilot_to_issue_with_intent"),
 		owner: "extractOwner",
-		request: { op: "mcp", target: "assign_copilot_to_issue_with_intent" }
+		request: { op: "mcp", target: "assign_copilot_to_issue_with_intent" },
+		default: "off"
 	}
 };
 
@@ -431,7 +434,8 @@ export function permissivePolicy(rules: readonly ToolRule[]): PolicyApplication 
 	const tools = [...rules];
 	const warnings: string[] = [];
 	for (const rule of rules) {
-		const decl = MANIFEST[rule.name];
+		// Object.hasOwn: inherited keys must not give a config-only tool manifest facts.
+		const decl = Object.hasOwn(MANIFEST, rule.name) ? MANIFEST[rule.name] : undefined;
 		if (!decl) continue; // config-only tool: no manifest facts to exceed
 		if (decl.mode === "read" && rule.mode === "write") {
 			warnings.push(`tool "${rule.name}": config.tools widens its mode to "write", but the manifest declares "read" — the broker serves it as configured`);
@@ -453,15 +457,24 @@ export function permissivePolicy(rules: readonly ToolRule[]): PolicyApplication 
 export function strictPolicy(rules: readonly ToolRule[]): PolicyApplication {
 	const tools: ToolRule[] = [];
 	for (const rule of rules) {
-		const decl = MANIFEST[rule.name];
-		if (!decl) continue; // not in the manifest → doesn't exist
-		if (decl.kind === "verb" && decl.default === "off") continue; // host-only → nonexistent
+		// Object.hasOwn: inherited keys ("constructor", "toString", "__proto__") must not make
+		// an unknown tool exist.
+		if (!Object.hasOwn(MANIFEST, rule.name)) continue; // not in the manifest → doesn't exist
+		const decl = MANIFEST[rule.name]!;
+		// Host-only and default-off tools don't exist until the rule enables them explicitly —
+		// strict is never looser than the daemon, which keeps these off via availability.
+		if (decl.default === "off" && rule.enabled !== true) continue;
 		tools.push({
 			...rule,
 			// min(manifest, config): read beats write.
 			mode: decl.mode === "read" ? "read" : rule.mode,
-			// Add-only: the manifest's gate stands even if config says otherwise.
-			otp: decl.otp || rule.otp === true
+			// Add-only: the manifest's gate stands even if config says otherwise. otp_status is
+			// never gated (src/otp/policy.ts), so a config otp on it is ignored.
+			otp: rule.name === OTP_STATUS ? undefined : decl.otp || rule.otp === true,
+			// A tool is custom exactly when the manifest serves it as a verb, and augmentable
+			// exactly where the manifest declares it — config can't add either.
+			custom: decl.kind === "verb",
+			...("augment" in decl && decl.augment ? { augment: true as const } : {})
 		});
 	}
 	return { tools, warnings: [] };
