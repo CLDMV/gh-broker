@@ -51,6 +51,13 @@ import { buildTarball, tarballDigests } from "./npm-tarball.ts";
  */
 export const PLACEHOLDER_VERSION = "0.0.1-placeholder";
 export const SCAFFOLD_MARKER = "gh-broker";
+/**
+ * npm's own staged-publishing placeholder. Only npm can create it (a publish of it is refused),
+ * and a staged first publish leaves it on the package next to ours once the stage goes live.
+ */
+export const NPM_STAGE_PLACEHOLDER = "0.0.0-stage";
+/** Versions an earlier release of this verb may have published as its placeholder. */
+const OUR_PLACEHOLDER = /^0\.0\.[01]-[a-z]+$/;
 const DEFAULT_WORKFLOW = "publish.yml";
 const INPUT_KEYS = new Set(["owner", "repo", "package", "npm_otp", "workflow"]);
 const PACKAGE_NAME = /^@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*$/;
@@ -277,14 +284,18 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 	}
 
 	// The package exists: carry on only if it is this verb's own placeholder (a resumed call).
-	const versions = Object.keys(existing.versions ?? {});
-	const placeholder = existing.versions?.[PLACEHOLDER_VERSION];
-	const ours = versions.length === 1 && versions[0] === PLACEHOLDER_VERSION && placeholder?.scaffoldedBy === SCAFFOLD_MARKER;
-	if (!ours) fail(`${args.package} already exists on the registry (${versions.length} version(s)) and was not created by npm_scaffold — set up its trusted publisher on npmjs.com instead`);
-	// The placeholder records the repo it was made for; the trusted publisher may only go there.
-	const madeFor = (placeholder?.repository as { url?: unknown } | undefined)?.url;
-	if (typeof madeFor !== "string" || madeFor.toLowerCase() !== `git+https://github.com/${facts.repository}.git`.toLowerCase()) {
-		fail(`${args.package}'s placeholder was published for ${typeof madeFor === "string" ? madeFor : "an unrecorded repository"}, not ${facts.repository}`);
+	// Every version must be one of our marked placeholders or npm's own staging placeholder,
+	// with at least one of ours: a staged publish can go live later, next to npm's 0.0.0-stage.
+	const entries = Object.entries(existing.versions ?? {});
+	const placeholders = entries.filter(([v, doc]) => OUR_PLACEHOLDER.test(v) && doc?.scaffoldedBy === SCAFFOLD_MARKER).map(([, doc]) => doc);
+	const ours = placeholders.length > 0 && entries.length === placeholders.length + (existing.versions?.[NPM_STAGE_PLACEHOLDER] ? 1 : 0);
+	if (!ours) fail(`${args.package} already exists on the registry (${entries.length} version(s)) and was not created by npm_scaffold — set up its trusted publisher on npmjs.com instead`);
+	// Each placeholder records the repo it was made for; the trusted publisher may only go there.
+	for (const placeholder of placeholders) {
+		const madeFor = (placeholder.repository as { url?: unknown } | undefined)?.url;
+		if (typeof madeFor !== "string" || madeFor.toLowerCase() !== `git+https://github.com/${facts.repository}.git`.toLowerCase()) {
+			fail(`${args.package}'s placeholder was published for ${typeof madeFor === "string" ? madeFor : "an unrecorded repository"}, not ${facts.repository}`);
+		}
 	}
 
 	let out: Awaited<ReturnType<NpmRegistry["addGithubTrust"]>>;
