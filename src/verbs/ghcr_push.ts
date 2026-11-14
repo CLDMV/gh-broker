@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:43:29-08:00 (1794678209)
+ *	@Last modified time: 2026-11-14T09:58:22-08:00 (1794679102)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -215,7 +215,6 @@ export class GhcrService {
 // re-exported here so the old import path keeps working.
 import {
 	GHCR_PUSH_SCHEMA,
-	GHCR_PUSH_STATUS_DESCRIPTION,
 	GHCR_PUSH_STATUS_SCHEMA,
 	GHCR_TAGS_SCHEMA
 } from "./ghcr/schemas.ts";
