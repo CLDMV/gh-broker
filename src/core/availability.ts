@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T15:00:35-08:00 (1794697235)
+ *	@Last modified time: 2026-11-14T15:02:47-08:00 (1794697367)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,7 +23,7 @@
  */
 
 import type { Config, ToolRule } from "./types.ts";
-import { ghcrCredRefs } from "../verbs/ghcr/config.ts";
+import { ghcrCredRefs } from "./verbs/ghcr/config.ts";
 import { isGated } from "./otp-policy.ts";
 
 const GHCR_TOOLS = new Set(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);

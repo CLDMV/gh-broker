@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T15:01:39-08:00 (1794697299)
+ *	@Last modified time: 2026-11-14T15:18:20-08:00 (1794698300)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -26,6 +26,13 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { Octokit } from "@octokit/core";
 import type { NpmConfig, TokenResolver } from "./types.ts";
+
+// The dispatch verbs are imported through the old src/verbs/* re-export shims, not their
+// src/core/verbs/ homes, so the suite's module mocks keep intercepting: tests mock the old
+// paths (tests/otp-router.test.vitest.mts mocks ../src/verbs/npm_scaffold.ts), and a mock
+// only reaches importers of the mocked path. The shims re-export into src/core/ and add no
+// host code — the boundary test resolves through them. Slice 6's test re-cut goes direct.
+
 // DEFERRED: link_issue is App-token-only and not wired in — see dispatchCustomVerb's
 // commented case (the App-authenticated client stays wrapper-side and would arrive via
 // RouteDeps when this is wired).

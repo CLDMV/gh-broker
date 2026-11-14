@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T15:00:35-08:00 (1794697235)
+ *	@Last modified time: 2026-11-14T15:18:20-08:00 (1794698300)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -49,21 +49,21 @@
 
 import type { Mode, ToolRule } from "./types.ts";
 import { DEFAULT_GATED, OTP_STATUS } from "./otp-policy.ts";
-import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "../verbs/review_thread.ts";
-import { REPORT_UNLABELED_SCHEMA } from "../verbs/report_unlabeled.ts";
-import { REPORT_DEPENDENTS_SCHEMA } from "../verbs/report_dependents.ts";
-import { REPORT_SECURITY_ALERTS_SCHEMA } from "../verbs/report_security_alerts.ts";
-import { REPORT_RELEASE_PRS_SCHEMA } from "../verbs/report_release_prs.ts";
-import { REPORT_RELEASE_CHANGES_SCHEMA } from "../verbs/report_release_changes.ts";
-import { REPORT_ALERT_STATUS_SCHEMA } from "../verbs/report_alert_status.ts";
-import { ISSUE_LABELS_SCHEMA } from "../verbs/issue_labels.ts";
-import { REPORT_CI_STATUS_SCHEMA } from "../verbs/report_ci_status.ts";
-import { NPM_SCAFFOLD_SCHEMA } from "../verbs/npm_scaffold.ts";
-import { MINIMIZE_COMMENT_DESCRIPTION, MINIMIZE_COMMENT_SCHEMA } from "../verbs/minimize_comment.ts";
-import { DELETE_BRANCH_DESCRIPTION, DELETE_BRANCH_SCHEMA } from "../verbs/delete_branch.ts";
-import { DISMISS_ALERT_DESCRIPTION, DISMISS_ALERT_SCHEMA } from "../verbs/dismiss_alert.ts";
-import { OTP_STATUS_DESCRIPTION, OTP_STATUS_SCHEMA } from "../verbs/otp_status.ts";
-import { GHCR_PUSH_DESCRIPTION, GHCR_PUSH_SCHEMA, GHCR_PUSH_STATUS_DESCRIPTION, GHCR_PUSH_STATUS_SCHEMA, GHCR_TAGS_DESCRIPTION, GHCR_TAGS_SCHEMA } from "../verbs/ghcr/schemas.ts";
+import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verbs/review_thread.ts";
+import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
+import { REPORT_DEPENDENTS_SCHEMA } from "./verbs/report_dependents.ts";
+import { REPORT_SECURITY_ALERTS_SCHEMA } from "./verbs/report_security_alerts.ts";
+import { REPORT_RELEASE_PRS_SCHEMA } from "./verbs/report_release_prs.ts";
+import { REPORT_RELEASE_CHANGES_SCHEMA } from "./verbs/report_release_changes.ts";
+import { REPORT_ALERT_STATUS_SCHEMA } from "./verbs/report_alert_status.ts";
+import { ISSUE_LABELS_SCHEMA } from "./verbs/issue_labels.ts";
+import { REPORT_CI_STATUS_SCHEMA } from "./verbs/report_ci_status.ts";
+import { NPM_SCAFFOLD_SCHEMA } from "./verbs/npm_scaffold.ts";
+import { MINIMIZE_COMMENT_DESCRIPTION, MINIMIZE_COMMENT_SCHEMA } from "./verbs/minimize_comment.ts";
+import { DELETE_BRANCH_DESCRIPTION, DELETE_BRANCH_SCHEMA } from "./verbs/delete_branch.ts";
+import { DISMISS_ALERT_DESCRIPTION, DISMISS_ALERT_SCHEMA } from "./verbs/dismiss_alert.ts";
+import { OTP_STATUS_DESCRIPTION, OTP_STATUS_SCHEMA } from "./verbs/otp_status.ts";
+import { GHCR_PUSH_DESCRIPTION, GHCR_PUSH_SCHEMA, GHCR_PUSH_STATUS_DESCRIPTION, GHCR_PUSH_STATUS_SCHEMA, GHCR_TAGS_DESCRIPTION, GHCR_TAGS_SCHEMA } from "./verbs/ghcr/schemas.ts";
 
 /** The JSON schema a verb advertises for its arguments. */
 export interface ToolInputSchema {

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T13:28:37-08:00 (1794691717)
+ *	@Last modified time: 2026-11-14T15:02:47-08:00 (1794697367)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,7 +23,7 @@
  * safe to copy between machines.
  */
 
-import type { GhcrConfig } from "../verbs/ghcr/config.ts";
+import type { GhcrConfig } from "./verbs/ghcr/config.ts";
 
 export type Mode = "read" | "write";
 
