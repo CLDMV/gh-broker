@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T00:00:00-08:00 (1794643200)
+ *	@Last modified time: 2026-11-14T13:12:50-08:00 (1794690770)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -125,6 +125,37 @@ export interface InvokeFn {
 	(name: string, args: unknown, ctx: InvokeCtx): Promise<JsonSafeResult>;
 }
 
+/**
+ * A driver call's declared request (design #175 §2b, the rummage run shape): what the
+ * manifest declared for this tool — the hosted-MCP request for a forward, or the
+ * execution op for a local verb. `run` validates the shape and delegates to invoke;
+ * everything else (policy, approve, tokens, dispatch) is the same code path.
+ */
+export type DriverRequest =
+	| { op: "mcp"; target: string }
+	| { op: "graphql" | "rest"; tool: string };
+
+/** run returns exactly what invoke returns — the adapter adds no shape of its own. */
+export type DriverResult = JsonSafeResult;
+
+/** The bound adapter: the (request, args, ctx) signature the note fixes. */
+export interface RunFn {
+	(request: DriverRequest, args: unknown, ctx: InvokeCtx): Promise<DriverResult>;
+}
+
+/** The tool a declared request names. Thin validation only — invoke owns every policy. */
+function toolOfRequest(request: DriverRequest): string {
+	if (typeof request !== "object" || request === null) throw new InvokeError("bad-request", "the driver request must be an object");
+	if (request.op === "mcp") {
+		if (typeof request.target !== "string" || !request.target) throw new InvokeError("bad-request", 'a driver request with op "mcp" names its upstream tool in "target"');
+		return request.target;
+	}
+	if (request.op === "graphql" || request.op === "rest") {
+		if (typeof request.tool !== "string" || !request.tool) throw new InvokeError("bad-request", `a driver request with op "${request.op}" names its verb in "tool"`);
+		return request.tool;
+	}
+	throw new InvokeError("bad-request", `unsupported driver op "${String((request as { op?: unknown }).op)}" — expected "mcp", "graphql" or "rest"`);
+}
 
 /**
  * The library's own per-call Upstream (design #175 §2a): a fresh MCP client connection
@@ -174,10 +205,10 @@ export interface BrokerOptions {
 /**
  * Build the library entry for one host. The rules come from the host's config under its
  * chosen policy — module state is forbidden (the library's purity rules), so the entry
- * is bound per host here and the returned `invoke` carries the (name, args, ctx)
- * signature the design fixes.
+ * is bound per host here; the returned `invoke` carries the (name, args, ctx) signature
+ * the design fixes, and `run` the (request, args, ctx) driver adapter over it.
  */
-export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { invoke: InvokeFn } {
+export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { invoke: InvokeFn; run: RunFn } {
 	const { tools } = (opts.policy ?? strictPolicy)(config.tools);
 	const rules = indexTools(tools);
 	const libraryUpstream = opts.upstreamUrl ? perCallUpstream(opts.upstreamUrl) : undefined;
@@ -249,7 +280,11 @@ export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { inv
 		return { tool: name, mode: rule.mode, ...(mcpTarget !== undefined ? { mcpTarget } : {}), result };
 	};
 
-	return { invoke };
+	// The rummage-shaped driver adapter (design #175 §2b): same code path, thin shape
+	// validation in front.
+	const run: RunFn = async (request, args, ctx) => invoke(toolOfRequest(request), args, ctx);
+
+	return { invoke, run };
 }
 
 /**

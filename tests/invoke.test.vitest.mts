@@ -27,6 +27,7 @@ vi.mock("@octokit/core", () => ({
 }));
 
 import { createBroker, InvokeError, perCallUpstream } from "../src/invoke.ts";
+import type { DriverRequest } from "../src/invoke.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -278,5 +279,44 @@ describe("perCallUpstream — the library's per-call forwarder (design #175 §2a
 	it("a forwarded tool with no upstream at all fails closed", async () => {
 		const { invoke } = createBroker(makeConfig());
 		await expect(invoke("pull_request_read", { owner: "cldmv" }, mkCtx())).rejects.toMatchObject({ code: "no-upstream" });
+	});
+});
+
+describe("run — the driver adapter (design #175 §2b, the rummage run shape)", () => {
+	let upstream: ReturnType<typeof mkUpstream>;
+	beforeEach(() => {
+		upstream = mkUpstream();
+	});
+
+	it("an op-mcp request delegates to invoke: same policy gate, same typed refusals, same envelope", async () => {
+		const { run } = createBroker(makeConfig());
+		const out = await run({ op: "mcp", target: "pull_request_read" } as DriverRequest, { owner: "cldmv" }, mkCtx({ upstream }));
+		expect(out).toEqual({ tool: "pull_request_read", mode: "read", mcpTarget: "pull_request_read", result: { content: [{ type: "text", text: "ok" }] } });
+		// the same code path: a gated tool needs approve through run too
+		const gated = await run({ op: "mcp", target: "merge_pull_request" } as DriverRequest, { owner: "cldmv", repo: "x" }, mkCtx({ upstream, approve: undefined })).catch((e: unknown) => e);
+		expect((gated as InvokeError).code).toBe("otp-required");
+	});
+
+	it("an op-graphql / op-rest request names its verb in tool and runs it", async () => {
+		const { run } = createBroker(makeConfig());
+		requestMock.mockImplementation((route: string) => {
+			if (route.startsWith("GET /repos/{owner}/{repo}/issues/")) return { data: [] };
+			if (route.startsWith("GET /repos/{owner}/{repo}/labels/")) return { data: { name: "bug" } };
+			if (route.startsWith("POST /repos/{owner}/{repo}/issues/")) return { data: [{ name: "bug" }] };
+			throw new Error(`unexpected route ${route}`);
+		});
+		const out = await run({ op: "graphql", tool: "issue_labels" } as DriverRequest, { owner: "cldmv", repo: "x", issue_number: 1, add: ["bug"] }, mkCtx({ upstream }));
+		expect(out.tool).toBe("issue_labels");
+		expect(out.mcpTarget).toBeUndefined();
+		await expect(run({ op: "rest", tool: "issue_labels" } as DriverRequest, { owner: "cldmv", repo: "x", issue_number: 1, add: ["bug"] }, mkCtx({ upstream }))).resolves.toMatchObject({ tool: "issue_labels" });
+	});
+
+	it("a malformed request is a typed bad-request before anything runs", async () => {
+		const { run } = createBroker(makeConfig());
+		await expect(run({ op: "mcp" } as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({ code: "bad-request" });
+		await expect(run({ op: "graphql" } as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({ code: "bad-request" });
+		await expect(run({ op: "sse" } as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({ code: "bad-request" });
+		await expect(run(null as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({ code: "bad-request" });
+		expect(upstream.forward).not.toHaveBeenCalled();
 	});
 });
