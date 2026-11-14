@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-13T07:15:50-08:00 (1794582950)
+ *	@Last modified time: 2026-11-14T07:38:52-08:00 (1794670732)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -34,6 +34,7 @@
 import { closeSync, fstatSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
+import { DEFAULTS, describeUser as libDescribeUser, formatStatus as libFormatStatus, spendThrough } from "@cldmv/lib-otp";
 import { isAgentUser } from "../agents.ts";
 import { STEP_SECONDS } from "./totp.ts";
 
@@ -60,8 +61,45 @@ export interface OtpState {
 	users: Record<string, UserState>;
 }
 
+/**
+ * One person's record in `@cldmv/lib-otp`'s machine (its `PersonState`, declared structurally
+ * here — the package's index doesn't re-export the type). The persisted fields (`failures`
+ * through `hardLock`) are the file's {@link UserState}; the rest is memory-tier.
+ */
+export interface MachinePerson {
+	/** Bad codes since the last accepted code or short lockout. */
+	failures: number;
+	/** Ms timestamps of those failures — maintained only in window-counting mode, which the daemon doesn't use. */
+	failureTimes: number[];
+	/** ISO end of the current short lockout, or null. */
+	lockedUntil: string | null;
+	/** ISO start times of short lockouts, pruned to the hard-lock window. */
+	lockouts: string[];
+	/** The hard lock snapshot, if any. */
+	hardLock: HardLock | null;
+	/** Highest accepted TOTP counter — the gate threads the global step into it. */
+	lastCounter: number;
+	/** The period `lastCounter` was computed under, or 0 when nothing was accepted. */
+	lastAcceptedPeriod: number;
+	/** Open reuse windows (memory-tier: ids and expiry only, never a code). */
+	windows: { id: string; expiresAt: number }[];
+}
+
 /** What a read returns: the state, or a marker that the file is unusable. */
 export type StateRead = { ok: true; state: OtpState } | { ok: false; since: string };
+
+/**
+ * The gate's persistence seam (design #175 §2d): the gate reads lock state through this and
+ * writes it back, so the machine (src/otp/gate.ts's host code) never touches the file itself.
+ * {@link OtpStateFile} is the implementation. `write` throws when persistence failed; after a
+ * throw, `read` serves the attempted state — with the in-memory counters it carried — until the
+ * file's signature changes, which is what keeps a failed write from resetting a count or
+ * handing back a spent code. That contract is pinned in tests/otp-machine-pin.test.vitest.mts.
+ */
+export interface LockStateStore {
+	read(): StateRead;
+	write(state: OtpState): void;
+}
 
 /** What the CLI's {@link readState} (src/cli/otp.ts) returns: how the file stood, and the state to use. */
 export interface StateReading {
@@ -87,6 +125,25 @@ export function userState(state: OtpState, user: string): UserState {
 
 /** `user`'s entry, or all-zero when it has none — an alias of {@link userState}: always a fresh copy. */
 export const userOf = userState;
+
+/**
+ * `user`'s record as the @cldmv/lib-otp machine sees it: the file's persisted fields padded
+ * with the memory-tier ones the file format doesn't carry (`failureTimes`, the per-person
+ * counter — the daemon threads the global step into it — and `windows`, which the gate merges
+ * back from its per-process map and never persists).
+ */
+export function personOf(user: UserState): MachinePerson {
+	return {
+		failures: user.failures,
+		failureTimes: [],
+		lockedUntil: user.lockedUntil,
+		lockouts: [...user.lockouts],
+		hardLock: user.hardLock === null ? null : { ...user.hardLock },
+		lastCounter: 0,
+		lastAcceptedPeriod: 0,
+		windows: []
+	};
+}
 
 const isIso = (v: unknown): v is string => typeof v === "string" && !Number.isNaN(Date.parse(v));
 const isCount = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
@@ -143,18 +200,20 @@ export function withoutUsers(state: OtpState): OtpState {
 
 /**
  * `state` ready to be written by the CLI: every code up to one step ahead of `now` counts as
- * spent. The CLI rewrites the whole file while the daemon may be accepting a code (it accepts
- * at most one step ahead), so this keeps a write from handing back a code the daemon just used.
- * The cost is that the code an authenticator shows now, and the one after it, can't open a
- * window; see secondsUntilFreshCode.
+ * spent. The spend is the package's spendThrough at the machine defaults (period 30 s, skew 1
+ * step — the daemon's fixed numbers), which is exactly the old `floor(now / 30 s) + 1`. The CLI
+ * rewrites the whole file while the daemon may be accepting a code (it accepts at most one step
+ * ahead), so this keeps a write from handing back a code the daemon just used. The cost is that
+ * the code an authenticator shows now, and the one after it, can't open a window; see
+ * secondsUntilFreshCode.
  */
 export function spendRecentCodes(state: OtpState, now: number): OtpState {
-	return { ...state, lastAcceptedStep: Math.max(state.lastAcceptedStep, Math.floor(now / (STEP_SECONDS * 1000)) + 1) };
+	return { ...state, lastAcceptedStep: Math.max(state.lastAcceptedStep, spendThrough(now, DEFAULTS)) };
 }
 
 /** Seconds from `now` until an authenticator shows a code spendRecentCodes(…, now) didn't spend (31 to 60). */
 export function secondsUntilFreshCode(now: number): number {
-	return Math.ceil(((Math.floor(now / (STEP_SECONDS * 1000)) + 2) * STEP_SECONDS * 1000 - now) / 1000);
+	return Math.ceil(((spendThrough(now, DEFAULTS) + 1) * STEP_SECONDS * 1000 - now) / 1000);
 }
 
 /** The lockout limits the CLI reports against when config.otp doesn't set them (OTP_DEFAULTS in src/otp/policy.ts). */
@@ -186,17 +245,21 @@ export interface UserStatus extends UserFacts {
 	corrupt?: true;
 }
 
-/** One user's facts for `status`, from their entry and the config's limits. */
+/**
+ * One user's facts for `status`, from their entry and the config's limits. The facts are the
+ * package's describeUser over the user's machine record (padded by personOf); this wrapper
+ * renames its `lockoutsInWindow` to the CLI's `lockoutsLast24h` and fills the daemon's limits.
+ */
 export function describeUser(user: UserState, { maxFailures = DEFAULT_MAX_FAILURES, maxLockouts = DEFAULT_MAX_LOCKOUTS }: OtpLimits = {}, now = Date.now()): UserFacts {
-	const lockedUntil = user.lockedUntil && Date.parse(user.lockedUntil) > now ? user.lockedUntil : null;
+	const f = libDescribeUser(personOf(user), { maxFailures, maxLockouts, windowMs: DAY_MS }, now);
 	return {
-		locked: Boolean(user.hardLock) || lockedUntil !== null,
-		failures: user.failures,
-		maxFailures,
-		lockedUntil,
-		lockoutsLast24h: user.lockouts.filter((t) => Date.parse(t) > now - DAY_MS).length,
-		maxLockouts,
-		hardLock: user.hardLock
+		locked: f.locked,
+		failures: f.failures,
+		maxFailures: f.maxFailures,
+		lockedUntil: f.lockedUntil,
+		lockoutsLast24h: f.lockoutsInWindow,
+		maxLockouts: f.maxLockouts,
+		hardLock: f.hardLock
 	};
 }
 
@@ -213,7 +276,19 @@ export function describeUsers({ status, state }: StateReading, users: string[], 
 	);
 }
 
-/** Human-readable lines for `describeUsers`'s result. */
+/** `d`'s facts in the package formatter's shape (it names the field `lockoutsInWindow`). */
+function asPersonStatus(d: UserStatus): { person: string; locked: boolean; failures: number; maxFailures: number; lockedUntil: string | null; lockoutsInWindow: number; maxLockouts: number; hardLock: UserState["hardLock"] } {
+	return { person: d.user, locked: d.locked, failures: d.failures!, maxFailures: d.maxFailures, lockedUntil: d.lockedUntil, lockoutsInWindow: d.lockoutsLast24h!, maxLockouts: d.maxLockouts, hardLock: d.hardLock };
+}
+
+/**
+ * Human-readable lines for `describeUsers`'s result. The header, the state-file line, the
+ * corrupt-file notice and the empty-list line are the CLI's own prose (the package's formatter
+ * has no state-file or corrupt concept); each user's block comes from the package's
+ * formatStatus over that one user, byte-identical to the prose it replaces — the package's own
+ * header line (`OTP configured: yes`) is dropped, since the daemon's header carries the
+ * not-configured hint.
+ */
 export function formatStatus(
 	users: UserStatus[],
 	{
@@ -227,15 +302,11 @@ export function formatStatus(
 	if (fileStatus === "corrupt") lines.push("LOCKED: the state file is unreadable, so the broker treats every user as hard-locked.", `Clear it with: ${unlockCommand} --all`);
 	if (users.length === 0) lines.push("no agents registered");
 	for (const d of users) {
-		lines.push(`${d.user}:`);
 		if (d.corrupt) {
-			lines.push("  locked (state file unreadable)");
+			lines.push(`${d.user}:`, "  locked (state file unreadable)");
 			continue;
 		}
-		lines.push(`  bad codes so far: ${d.failures} of ${d.maxFailures}`, `  short lockouts in the last 24 h: ${d.lockoutsLast24h} of ${d.maxLockouts}`);
-		if (d.hardLock) lines.push(`  HARD LOCK since ${d.hardLock.since} after ${d.hardLock.lockouts} lockouts. Clear it with: ${unlockCommand} ${d.user}`);
-		else if (d.lockedUntil) lines.push(`  short lockout until ${d.lockedUntil}`);
-		else lines.push("  not locked");
+		lines.push(...libFormatStatus([asPersonStatus(d)], { configured: true, unlockCommand }).slice(1));
 	}
 	return lines;
 }
@@ -251,7 +322,7 @@ function signature(path: string): string {
 	}
 }
 
-export class OtpStateFile {
+export class OtpStateFile implements LockStateStore {
 	readonly path: string;
 	private readonly now: () => number;
 	private sig: string | undefined;
