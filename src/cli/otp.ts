@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-12T22:42:56-08:00 (1794552176)
+ *	@Last modified time: 2026-11-14T07:38:51-08:00 (1794670731)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -28,6 +28,7 @@ import type { OtpConfig, SecretsConfig } from "../types.ts";
 import { emptyState, validState, type OtpState, type StateReading } from "../otp/state.ts";
 import { OTP_DEFAULTS } from "../otp/policy.ts";
 import { base32Encode } from "../otp/totp.ts";
+import { newSeed, otpauthUri as libOtpauthUri, renderQr as libRenderQr } from "@cldmv/lib-otp";
 import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, fchmodSync, fchownSync, statSync, constants } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import QRCode from "qrcode";
@@ -40,6 +41,7 @@ export {
 	emptyState,
 	emptyUser,
 	formatStatus,
+	personOf,
 	secondsUntilFreshCode,
 	spendRecentCodes,
 	userOf,
@@ -59,17 +61,21 @@ export { base32Encode };
 
 /** A new TOTP seed: 20 random bytes as base32 (32 characters). `random` is injectable for tests. */
 export function generateSeed(random: (size: number) => Uint8Array = randomBytes): string {
-	return base32Encode(random(20));
+	// The package's newSeed: same 20 bytes → base32, with the RFC 4226 §4 floor enforced.
+	return newSeed({ seedBytes: 20, random });
 }
 
 /** The otpauth URI an authenticator app imports (HMAC-SHA1, 6 digits, 30 s step). */
 export function otpauthUri(seed: string, host: string): string {
-	return `otpauth://totp/gh-broker:${encodeURIComponent(host)}?secret=${seed}&issuer=gh-broker&algorithm=SHA1&digits=6&period=30`;
+	// The package's otpauthUri with the daemon's issuer and the host as the account label; it
+	// builds the same URI and validates the seed as base32 first (a raw seed like "not&valid"
+	// would otherwise inject a URI parameter).
+	return libOtpauthUri(seed, host, "gh-broker");
 }
 
 /** The URI as a terminal QR code. `toString` is the qrcode library's, injectable for tests. */
 export async function renderQr(uri: string, toString: (text: string, options: { type: "terminal"; small: boolean }) => Promise<string> = QRCode.toString): Promise<string> {
-	return toString(uri, { type: "terminal", small: true });
+	return (await libRenderQr(uri, { toString: toString as (text: string, options: Record<string, unknown>) => Promise<string> })) as string;
 }
 
 /**

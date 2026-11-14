@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-11-14T11:08:18-08:00 (1794683298)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -16,9 +16,15 @@
 import { loadConfig } from "./config.ts";
 import { loadSecretStore } from "./secrets.ts";
 import { UpstreamPool } from "./upstream.ts";
-import { Router } from "./router.ts";
+import { Router, hostTokenResolver } from "./router.ts";
 import { AppAuth } from "./appauth.ts";
+import { OtpGate } from "./otp/gate.ts";
+import { GhcrService } from "./verbs/ghcr_push.ts";
+import { audit } from "./audit.ts";
+import { unavailableReason } from "./availability.ts";
+import { otpSetupProblem } from "./otp/policy.ts";
 import { buildCatalog } from "./catalog.ts";
+import { permissivePolicy } from "./manifest.ts";
 import { startServer } from "./server.ts";
 import { resolveConfigPath } from "./paths.ts";
 
@@ -86,8 +92,33 @@ async function main(): Promise<void> {
 		}
 	}
 
-	const router = new Router(config, secrets, upstream, appAuth);
-	const catalog = await buildCatalog(config, secrets, upstream);
+	// The OTP gate and the ghcr verbs are composed host-side and injected (design #175
+	// §2e/§2f): the Router consumes the OtpGate and GhcrVerbs seams, so the daemon
+	// constructs both here and passes them in. (The Router still defaults to the daemon
+	// implementations when omitted — the suite's Router call sites rely on that — but the
+	// composition is explicit.) onJobDone receives the async ghcr completion row and
+	// writes today's exact audit fields; the enqueue row stays inside the service.
+	const gate = new OtpGate(config, secrets);
+	const ghcr = new GhcrService(config.ghcr, secrets, { onJobDone: (entry) => audit(entry) });
+	const router = new Router(config, secrets, upstream, appAuth, gate, ghcr);
+	// The daemon picks the permissive policy explicitly (design #175 §2h): config.json keeps
+	// today's authority, so a config that widens a manifest tool's mode or turns off its OTP
+	// gate is served as configured — never refused — but each such fact warns here at startup.
+	const { warnings } = permissivePolicy(config.tools);
+	for (const warning of warnings) console.error(`gh-broker: ${warning}`);
+
+	// The catalog's credentials come through the real per-call resolver (design #175
+	// §2a/§2g, src/router.ts's hostTokenResolver): the schema fetch requests the first
+	// configured owner's read PAT with the NO_PERSON marker, and the resolver honors the
+	// owner it is asked for — no person-ignoring wrapper needed, the resolver ignores
+	// person by design. The other catalog opts are today's exact daemon behavior spelled
+	// out: the env-derived timeout (NaN included, pinned as-is), stderr (journald) for
+	// catalog messages, and the availability predicate over the store.
+	const catalog = await buildCatalog(config, hostTokenResolver(config, secrets), upstream, {
+		upstreamTimeoutMs: Number(process.env.GH_BROKER_CATALOG_TIMEOUT_MS ?? 10000),
+		log: (message) => console.error(message),
+		unavailable: (rule) => unavailableReason(rule, config, (ref) => secrets.has(ref), (c) => otpSetupProblem(c, secrets))
+	});
 	const agents = await startServer(config, router, catalog);
 	console.log(
 		JSON.stringify({
