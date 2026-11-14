@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T13:10:57-08:00 (1794690657)
+ *	@Last modified time: 2026-11-14T13:19:17-08:00 (1794691157)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -21,11 +21,6 @@ import { audit } from "./audit.ts";
 import { unavailableReason, type Capability } from "./availability.ts";
 import { otpSetupProblem } from "./otp/policy.ts";
 import { permissivePolicy } from "./manifest.ts";
-import { GhcrService } from "./verbs/ghcr_push.ts";
-// The Router consumes the OtpGate SEAM (src/types.ts, design #175 §2e); the daemon's
-// concrete gate is imported only for the constructor default below — a host passes its
-// own implementation through the optional parameter.
-import { OtpGate as DaemonOtpGate } from "./otp/gate.ts";
 import { OTP_ARG, OTP_STATUS, isGated } from "./otp/policy.ts";
 // The dispatch layer (custom verbs, augmented forwards) is the library-facing router
 // core (src/router-core.ts, design #175 §1's split row); this wrapper owns the
@@ -91,15 +86,15 @@ export class Router {
 	private readonly capability: Capability;
 
 	/**
-	 * The constructor keeps its call shape (`new Router(config, secrets, upstream[, appAuth, gate[, ghcr]])`).
 	 * `gate` is the OtpGate SEAM (src/types.ts, design #175 §2e) and `ghcr` the GhcrVerbs
-	 * SEAM (src/router-core.ts, §2f) — the daemon composition (src/index.ts) constructs
-	 * both and passes them. The defaults still construct the daemon's own gate and ghcr
-	 * service: the suite's 58 test call sites rely on them, and a default of "must pass
-	 * one" would be a test-visible change. Any implementation of either seam is accepted
-	 * either way — the seam, not the class, is the contract.
+	 * SEAM (src/router-core.ts, §2f) — both are INJECTED, never default-constructed (the
+	 * parent's slice-5 directive): the daemon composition (src/index.ts) constructs the
+	 * daemon's own implementations and passes them, so this class imports no daemon host
+	 * module. Any implementation of either seam is accepted — the seam, not the class, is
+	 * the contract. A Router without a gate cannot route (the gate is consulted on every
+	 * call); one without ghcr verbs fails closed on the ghcr tools.
 	 */
-	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth, otp?: OtpGate, ghcr?: GhcrVerbs, resolveToken?: TokenResolver) {
+	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth: AppAuth | undefined, otp: OtpGate, ghcr?: GhcrVerbs, resolveToken?: TokenResolver) {
 		this.config = config;
 		this.secrets = secrets;
 		this.upstream = upstream;
@@ -113,7 +108,7 @@ export class Router {
 		// omits it and gets hostTokenResolver. Additive; no existing call site changes.
 		this.resolveToken = resolveToken ?? hostTokenResolver(config, secrets);
 		this.routeDeps = { resolveToken: this.resolveToken, upstream, ...(config.npm ? { npm: config.npm } : {}) };
-		this.otp = otp ?? new DaemonOtpGate(config, secrets);
+		this.otp = otp;
 		this.ghcr = ghcr;
 		// The daemon's availability facts (design §2a's capability object): ref presence
 		// over the store, plus the OTP setup check (which decodes the stored seed, so it
@@ -231,8 +226,8 @@ export class Router {
 	private async callGhcr(tool: string, args: Record<string, unknown>, rule: ToolRule, user: string, otp: OtpAudit | undefined): Promise<CallToolResult> {
 		const owner = extractOwner(args) ?? "";
 		const repo = typeof args.image === "string" ? `${owner}/${args.image}` : owner;
+		if (!this.ghcr) throw new Error(`tool "${tool}" runs on the daemon's GHCR service, but no GhcrVerbs implementation was injected into this Router`);
 		try {
-			this.ghcr ??= new GhcrService(this.config.ghcr, this.secrets);
 			const out = tool === "ghcr_push" ? await this.ghcr.push(args) : tool === "ghcr_tags" ? await this.ghcr.tags(args) : this.ghcr.status(args);
 			audit({ tool, user, owner, mode: rule.mode, repo, decision: "custom", ok: true, ...otp });
 			return { content: [{ type: "text", text: JSON.stringify(out) }] };

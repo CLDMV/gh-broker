@@ -8,7 +8,7 @@ vi.mock("../src/verbs/npm_scaffold.ts", async (importOriginal) => ({
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Router } from "../src/router.ts";
+import { HostRouter as Router } from "./helpers/router-host.mts";
 import { OtpGate } from "../src/otp/gate.ts";
 import { base32Encode, totpAt } from "../src/otp/totp.ts";
 import { emptyState, emptyUser } from "../src/otp/state.ts";
@@ -273,9 +273,10 @@ describe("Router + OTP gate", () => {
 		expect(text).not.toContain(SEED);
 	});
 
-	it("builds its own gate when none is injected", async () => {
+	it("answers otp_status with the daemon's gate passed explicitly (the Router no longer builds one)", async () => {
 		const h = setup({ otp: null });
-		const r = new Router({ ...(h.router as any).config }, h.secrets as any, h.upstream as any);
+		const config = { ...(h.router as any).config };
+		const r = new Router(config, h.secrets as any, h.upstream as any, undefined, new OtpGate(config, h.secrets as any));
 		const status = JSON.parse(((await r.call("otp_status", {}, { user: "repo" })).content[0] as any).text);
 		expect(status.configured).toBe(false);
 	});

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { Router } from "../src/router.ts";
+import { HostRouter as Router } from "./helpers/router-host.mts";
 import { OtpRefusal } from "../src/types.ts";
 import { unavailableReason } from "../src/availability.ts";
 import { GhcrService } from "../src/verbs/ghcr_push.ts";
