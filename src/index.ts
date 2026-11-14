@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-11-14T09:07:37-08:00 (1794676057)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,6 +19,7 @@ import { UpstreamPool } from "./upstream.ts";
 import { Router } from "./router.ts";
 import { AppAuth } from "./appauth.ts";
 import { buildCatalog } from "./catalog.ts";
+import { permissivePolicy } from "./manifest.ts";
 import { startServer } from "./server.ts";
 import { resolveConfigPath } from "./paths.ts";
 
@@ -87,6 +88,11 @@ async function main(): Promise<void> {
 	}
 
 	const router = new Router(config, secrets, upstream, appAuth);
+	// The daemon picks the permissive policy explicitly (design #175 §2h): config.json keeps
+	// today's authority, so a config that widens a manifest tool's mode or turns off its OTP
+	// gate is served as configured — never refused — but each such fact warns here at startup.
+	const { warnings } = permissivePolicy(config.tools);
+	for (const warning of warnings) console.error(`gh-broker: ${warning}`);
 	const catalog = await buildCatalog(config, secrets, upstream);
 	const agents = await startServer(config, router, catalog);
 	console.log(

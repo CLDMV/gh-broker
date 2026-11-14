@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T09:06:06-08:00 (1794675966)
+ *	@Last modified time: 2026-11-14T09:07:37-08:00 (1794676057)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -403,3 +403,66 @@ export const MANIFEST: Readonly<Record<string, ToolDecl>> = {
 		request: { op: "mcp", target: "assign_copilot_to_issue_with_intent" }
 	}
 };
+
+/**
+ * The two policies (design #175 §2h) a host picks between explicitly. Both take the
+ * config's tool rules and return the rules a host serving under that policy would run,
+ * with the effective mode and OTP gate — the shape the catalog build consumes. Config
+ * facts the policies don't touch (custom, augment, enabled) pass through unchanged.
+ */
+export interface PolicyApplication {
+	tools: ToolRule[];
+	/**
+	 * Startup warnings for config facts that exceed the manifest. The permissive policy
+	 * collects them and serves as configured; the strict policy never has any — it
+	 * enforces instead.
+	 */
+	warnings: string[];
+}
+
+/**
+ * The daemon's policy: config.json keeps today's authority. Tools missing from the
+ * manifest work config-only; a config that widens a manifest tool's mode or turns off
+ * its OTP gate is served as configured — never refused — but each such fact collects a
+ * startup warning here. The manifest's `default: "off"` is ignored (on the daemon,
+ * availability's DEFAULT_DISABLED and config.ghcr govern what's enabled).
+ */
+export function permissivePolicy(rules: readonly ToolRule[]): PolicyApplication {
+	const tools = [...rules];
+	const warnings: string[] = [];
+	for (const rule of rules) {
+		const decl = MANIFEST[rule.name];
+		if (!decl) continue; // config-only tool: no manifest facts to exceed
+		if (decl.mode === "read" && rule.mode === "write") {
+			warnings.push(`tool "${rule.name}": config.tools widens its mode to "write", but the manifest declares "read" — the broker serves it as configured`);
+		}
+		if (decl.otp && rule.otp === false) {
+			warnings.push(`tool "${rule.name}": config.tools turns off its OTP gate ("otp": false), but the manifest gates it — the broker serves it ungated`);
+		}
+	}
+	return { tools, warnings };
+}
+
+/**
+ * The library's default policy (Quack and other hosts): the manifest is the universe.
+ * Tools missing from it don't exist, and host-only `default: "off"` tools are
+ * nonexistent until a host explicitly enables them. A surviving tool runs at
+ * min(manifest mode, config mode) — the policy never widens a mode — and its OTP gate
+ * can only be added, never removed.
+ */
+export function strictPolicy(rules: readonly ToolRule[]): PolicyApplication {
+	const tools: ToolRule[] = [];
+	for (const rule of rules) {
+		const decl = MANIFEST[rule.name];
+		if (!decl) continue; // not in the manifest → doesn't exist
+		if (decl.kind === "verb" && decl.default === "off") continue; // host-only → nonexistent
+		tools.push({
+			...rule,
+			// min(manifest, config): read beats write.
+			mode: decl.mode === "read" ? "read" : rule.mode,
+			// Add-only: the manifest's gate stands even if config says otherwise.
+			otp: decl.otp || rule.otp === true
+		});
+	}
+	return { tools, warnings: [] };
+}
