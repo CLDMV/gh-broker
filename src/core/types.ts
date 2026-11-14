@@ -232,6 +232,15 @@ export type SecurityEvent =
 	| { kind: "refused-mode"; tool: string; person: string; mode: Mode }
 	| { kind: "protected-write"; tool: string; person: string; detail: string };
 
+/**
+ * The library's optional audit surface (design #175 §2c): security events only, one
+ * injected sink. The per-call rows stay the host's — the library emits none. With no
+ * sink, nothing happens.
+ */
+export interface AuditSink {
+	security(event: SecurityEvent): void;
+}
+
 /** The audit fields a gated (or hard-locked) call adds to its log line (src/otp/gate.ts). */
 export type OtpOutcome = "window" | "opened" | "refused" | "locked" | "hard-locked";
 
