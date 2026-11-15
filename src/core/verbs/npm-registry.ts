@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T15:02:48-08:00 (1794697368)
+ *	@Last modified time: 2026-11-14T16:48:56-08:00 (1794703736)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -47,7 +47,7 @@ export class NpmHttpError extends Error {
 
 /** `@scope/name` → `@scope%2fname`, the form registry URLs use. */
 export function escapePackageName(name: string): string {
-	return name.replace("/", "%2f");
+	return name.replaceAll("/", "%2f");
 }
 
 /** The registry's own message, kept short; never echoes request headers. */

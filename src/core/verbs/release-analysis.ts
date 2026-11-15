@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T15:02:48-08:00 (1794697368)
+ *	@Last modified time: 2026-11-14T16:48:57-08:00 (1794703737)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -138,8 +138,9 @@ export function assessFreshness(version: string, changelog: string, commits: Rel
 	// String.prototype.split always returns at least one element, so the "" fallback is unreachable; it only satisfies noUncheckedIndexedAccess.
 	/* v8 ignore next */
 	const firstLine = changelog.split("\n", 1)[0] ?? "";
-	const headingMatchesVersion = new RegExp(`v?${version.replace(/\./g, "\\.")}\\b`).test(firstLine);
-	const readmeMentionsVersion = readme !== undefined && new RegExp(`Latest:\\s*v?${version.replace(/\./g, "\\.")}\\b`).test(readme);
+	const versionPattern = escapeRegExp(version);
+	const headingMatchesVersion = new RegExp(`v?${versionPattern}\\b`).test(firstLine);
+	const readmeMentionsVersion = readme !== undefined && new RegExp(`Latest:\\s*v?${versionPattern}\\b`).test(readme);
 	const thin = changelog.length < 400 || !/^##\s+Overview/m.test(changelog);
 	let status: FreshnessStatus = "current";
 	if (!headingMatchesVersion) status = "version-drift";
@@ -209,4 +210,9 @@ export async function analyzeRelease(
 		verdict: decision.verdict,
 		reason: decision.reason
 	};
+}
+
+/** Escapes every RegExp metacharacter (backslash included), so a version string matches literally. */
+function escapeRegExp(text: string): string {
+	return text.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 }
