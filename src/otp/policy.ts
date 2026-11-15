@@ -7,45 +7,24 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T21:27:13-08:00 (1793683633)
+ *	@Last modified time: 2026-11-14T14:53:38-08:00 (1794696818)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 /**
- * Which tools need a broker OTP, and whether OTP is set up at all. Catalog, router and
- * availability all ask here, so the advertised schema, the availability check and the
- * gate itself can never disagree about a tool.
+ * The daemon's half of the old otp/policy module (design #175 §1's split row): the OTP
+ * limits with their defaults, and the seed checks (whether OTP is set up at all — the
+ * catalog's availability and the gate's readiness both ask here). The gating half —
+ * OTP_STATUS, OTP_ARG, DEFAULT_GATED, isGated, windowText — is library vocabulary in
+ * src/core/otp-policy.ts and is re-exported here so the old import path keeps working.
  */
 
-import type { Config, OtpConfig, SecretStore, ToolRule } from "../types.ts";
+import type { Config, OtpConfig, SecretStore } from "../types.ts";
 import { base32Decode } from "./totp.ts";
 
-/** The status verb. Never gated and never blocked by a lock, so a locked agent can still report. */
-export const OTP_STATUS = "otp_status";
-
-/** The argument a gated call carries its code in (npm_scaffold's own npm code is `npm_otp`). */
-export const OTP_ARG = "otp";
-
-/**
- * Tools gated when config.tools[i].otp doesn't say otherwise (#146): each one can publish,
- * merge, release or undo something under the user's name. Every other tool defaults to ungated.
- */
-export const DEFAULT_GATED: ReadonlySet<string> = new Set<string>([
-	"create_repository",
-	"fork_repository",
-	"merge_pull_request",
-	"pull_request_review_write",
-	"actions_run_trigger",
-	"label_write",
-	"delete_branch",
-	"dismiss_alert",
-	// Disabled by default too (src/availability.ts); gated once enabled.
-	"create_pull_request_with_copilot",
-	"assign_copilot_to_issue",
-	"assign_copilot_to_issue_with_intent"
-]);
+export { OTP_STATUS, OTP_ARG, DEFAULT_GATED, isGated, windowText } from "../core/otp-policy.ts";
 
 export const OTP_DEFAULTS = {
 	windowSeconds: 300,
@@ -69,12 +48,6 @@ export function otpSettings(config: Config): OtpSettings {
 	};
 }
 
-/** Whether `rule` needs a broker OTP: its own `otp` flag, else the built-in default. */
-export function isGated(rule: ToolRule): boolean {
-	if (rule.name === OTP_STATUS) return false;
-	return rule.otp ?? DEFAULT_GATED.has(rule.name);
-}
-
 /** The decoded TOTP key, or why OTP isn't usable on this broker. */
 export function readSeed(config: Config, secrets: SecretStore): { key: Buffer } | { problem: string } {
 	if (!config.otp) return { problem: "OTP is not set up on this broker (no config.otp); re-run the installer to set it up" };
@@ -96,8 +69,3 @@ export function otpSetupProblem(config: Config, secrets: SecretStore): string | 
 	return "problem" in seed ? seed.problem : undefined;
 }
 
-/** Window length for tool descriptions, e.g. "5 minutes" or "90 seconds". */
-export function windowText(seconds: number): string {
-	if (seconds % 60 === 0) return `${seconds / 60} minute${seconds === 60 ? "" : "s"}`;
-	return `${seconds} seconds`;
-}
