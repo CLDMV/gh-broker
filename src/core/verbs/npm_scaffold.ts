@@ -42,7 +42,8 @@ import { buildTarball, tarballDigests } from "./npm-tarball.ts";
  * publisher; the second call (with the next code) adds it. A refused or expired code is
  * not an error either: the result is `needs_otp` naming what is left. npm stages a new
  * package's first publish and makes it live on its own shortly after; the call waits for that,
- * and if it takes too long the result is `pending` (call again later with a fresh code).
+ * or for npm's own 0.0.0-stage (either means the package exists), and if neither shows in
+ * time the result is `pending` (call again later with a fresh code).
  */
 
 /**
@@ -142,7 +143,9 @@ export interface NpmScaffoldDeps {
 const LIVE_WAIT_MS = 120_000;
 const LIVE_POLL_MS = 5_000;
 const PENDING_MESSAGE =
-	"npm accepted the placeholder publish but is still making the first publish live (npm stages a new package's first version and publishes it on its own, usually within a couple of minutes; nothing needs approving). Wait a minute, then call again with a fresh npm code to add the trusted publisher.";
+	"npm accepted the placeholder publish, but the package isn't on the registry yet (npm stages a new package's first version and shows it on its own shortly after; nothing needs approving). Wait a minute, then call again with a fresh npm code to add the trusted publisher.";
+/** The package exists on the registry once it shows our placeholder or npm's staging placeholder. */
+const exists = (p: { versions?: Record<string, unknown> } | undefined) => Boolean(p?.versions?.[PLACEHOLDER_VERSION] || p?.versions?.[NPM_STAGE_PLACEHOLDER]);
 
 const fail = (msg: string): never => {
 	throw new Error(`npm_scaffold: ${msg}`);
@@ -320,18 +323,19 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 			}
 			throw err;
 		}
-		// Only call it published once the registry serves it. npm stages a new package's first
-		// publish: it answers 202, creates the package with its own 0.0.0-stage at once, and
-		// makes our version live on its own a minute or so later. Wait for that here.
+		// Only call it published once the package is on the registry. npm stages a new package's
+		// first publish: it answers 202, creates the package with its own 0.0.0-stage, and makes
+		// our version live on its own a minute or so later. Either version means the package
+		// exists, so the trusted publisher can be added; wait until one of them shows.
 		const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 		const waitMs = deps.liveWaitMs ?? LIVE_WAIT_MS;
 		const pollMs = deps.livePollMs ?? LIVE_POLL_MS;
 		let live = await deps.registry.packument(args.package);
-		for (let waited = 0; !live?.versions?.[PLACEHOLDER_VERSION] && waited < waitMs; waited += pollMs) {
+		for (let waited = 0; !exists(live) && waited < waitMs; waited += pollMs) {
 			await sleep(pollMs);
 			live = await deps.registry.packument(args.package);
 		}
-		if (!live?.versions?.[PLACEHOLDER_VERSION]) {
+		if (!exists(live)) {
 			// The publish was accepted (2xx) and the code is spent, so this is not an error: a
 			// later call finds the placeholder and goes on to the trusted publisher.
 			return { ...base, status: "pending", done: ["publish"], remaining: ["trust"], message: `${PENDING_MESSAGE} (npm answered HTTP ${answer.status}${answer.detail ? `: ${answer.detail}` : ""}.)` };
@@ -348,16 +352,14 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 	}
 
 	// The package exists: carry on only if it is this verb's own placeholder (a resumed call).
-	// Every version must be one of our marked placeholders or npm's own staging placeholder,
-	// with at least one of ours: a staged publish can go live later, next to npm's 0.0.0-stage.
+	// Every version must be one of our marked placeholders or npm's own staging placeholder.
+	// npm's 0.0.0-stage alone counts too: it is what a staged first publish shows before our
+	// version goes live, and the package already exists then, so the trust step can run (no
+	// second placeholder is ever written). It records no repository, so only the scope and
+	// repo checks above guard that case.
 	const entries = Object.entries(existing.versions ?? {});
-	// Only npm's staging placeholder so far: a first publish (ours, if a call just made it) is
-	// still going live. Nothing is written, so a stage that isn't ours costs nothing here.
-	if (entries.length === 1 && existing.versions?.[NPM_STAGE_PLACEHOLDER]) {
-		return { ...base, status: "pending", done: [], remaining: ["trust"], message: PENDING_MESSAGE };
-	}
 	const placeholders = entries.filter(([v, doc]) => OUR_PLACEHOLDER.test(v) && doc?.scaffoldedBy === SCAFFOLD_MARKER).map(([, doc]) => doc);
-	const ours = placeholders.length > 0 && entries.length === placeholders.length + (existing.versions?.[NPM_STAGE_PLACEHOLDER] ? 1 : 0);
+	const ours = entries.length > 0 && entries.length === placeholders.length + (existing.versions?.[NPM_STAGE_PLACEHOLDER] ? 1 : 0);
 	if (!ours) fail(`${args.package} already exists on the registry (${entries.length} version(s)) and was not created by npm_scaffold — set up its trusted publisher on npmjs.com instead`);
 	// Each placeholder records the repo it was made for; the trusted publisher may only go there.
 	for (const placeholder of placeholders) {
