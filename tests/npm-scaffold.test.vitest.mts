@@ -35,6 +35,8 @@ type RegistryOpts = {
 	otps?: string[];
 	/** The PUT answers 200 but the version never appears (what npm did with a -stage placeholder). */
 	publishNotLive?: string;
+	/** npm's staging: the PUT answers 202; lookups then 404 `notFound` times, show only 0.0.0-stage `stageOnly` times, then show ours next to it. */
+	staged?: { notFound?: number; stageOnly?: number };
 	trustStatus?: number;
 	publishStatus?: number;
 	lookupStatus?: number;
@@ -52,6 +54,8 @@ function fakeRegistry(opts: RegistryOpts = {}) {
 	const packages = new Map<string, any>(Object.entries(opts.existing ?? {}));
 	const valid = [...(opts.otps ?? [OTP])];
 	const trust: any[] = [...(opts.existingTrust ?? [])];
+	let notFound = 0;
+	let stageOnly = 0;
 	const calls: Array<{ method: string; url: string; headers: Record<string, string>; body?: any }> = [];
 	const otpRefused = () => ({ status: 401, headers: { get: (n: string) => (n === "www-authenticate" ? "OTP" : null) }, text: async () => '{"error":"You must provide a one-time pass."}' });
 	const reply = (status: number, body: unknown) => ({ status, headers: { get: () => null }, text: async () => (typeof body === "string" ? body : JSON.stringify(body)) });
@@ -71,6 +75,14 @@ function fakeRegistry(opts: RegistryOpts = {}) {
 			expect(new URL(url).searchParams.get("write")).toBe("true");
 			if (opts.lookupStatus) return reply(opts.lookupStatus, { error: "boom" });
 			const p = packages.get(PKG);
+			if (p && notFound > 0) {
+				notFound--;
+				return reply(404, { error: "Not found" });
+			}
+			if (p && stageOnly > 0) {
+				stageOnly--;
+				return reply(200, { name: PKG, versions: { [NPM_STAGE_PLACEHOLDER]: { name: PKG } } });
+			}
 			return p ? reply(200, p) : reply(404, { error: "Not found" });
 		}
 		if (init.method === "PUT" && path === `/${escapePackageName(PKG)}`) {
@@ -78,7 +90,12 @@ function fakeRegistry(opts: RegistryOpts = {}) {
 			if (opts.publishStatus) return reply(opts.publishStatus, { error: "You do not have permission to publish" });
 			if (opts.publishNotLive !== undefined) return reply(200, opts.publishNotLive);
 			const doc = JSON.parse(init.body!);
-			packages.set(PKG, { name: doc.name, versions: doc.versions, "dist-tags": doc["dist-tags"] });
+			packages.set(PKG, { name: doc.name, versions: { ...(opts.staged ? { [NPM_STAGE_PLACEHOLDER]: { name: PKG } } : {}), ...doc.versions }, "dist-tags": doc["dist-tags"] });
+			if (opts.staged) {
+				notFound = opts.staged.notFound ?? 0;
+				stageOnly = opts.staged.stageOnly ?? 0;
+				return reply(202, { success: true });
+			}
 			return reply(200, { ok: true });
 		}
 		if (init.method === "POST" && path === `/-/package/${escapePackageName(PKG)}/trust`) {
@@ -135,7 +152,8 @@ function fakeGitHub(o: RepoOpts = {}) {
 }
 
 const args = (extra: Record<string, unknown> = {}) => ({ owner: "cldmv", repo: "new-thing", package: PKG, npm_otp: OTP, ...extra });
-const deps = (gh: ReturnType<typeof fakeGitHub>, reg: ReturnType<typeof fakeRegistry>, scopes = ["@cldmv"]) => ({ octokit: gh.octokit, registry: reg.registry, scopes });
+const sleeps: number[] = [];
+const deps = (gh: ReturnType<typeof fakeGitHub>, reg: ReturnType<typeof fakeRegistry>, scopes = ["@cldmv"]) => ({ octokit: gh.octokit, registry: reg.registry, scopes, sleep: async (ms: number) => void sleeps.push(ms) });
 
 describe("buildTarball", () => {
 	it("writes package/-prefixed ustar entries with valid checksums, gzipped", () => {
@@ -314,16 +332,69 @@ describe("npm_scaffold", () => {
 		expect(reg.calls.every((c) => c.method === "GET")).toBe(true);
 	});
 
-	it("fails when npm answers the publish with 2xx but the version never goes live", async () => {
+	it("returns pending, not an error, when a 2xx publish still isn't live after the wait", async () => {
+		sleeps.length = 0;
 		const reg = fakeRegistry({ publishNotLive: '{"message":"staged"}' });
-		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(`HTTP 200 (staged), but ${PKG}@0.0.1-placeholder isn't on the registry, so it may have been staged`);
+		const out = await npmScaffold(args(), deps(fakeGitHub(), reg));
+		expect(out).toMatchObject({ status: "pending", done: ["publish"], remaining: ["trust"] });
+		expect(out.message).toMatch(/isn't on the registry yet/);
+		expect(out.message).toContain("HTTP 200: staged");
+		expect(out.message).not.toMatch(/staged packages/);
+		expect(sleeps).toHaveLength(24);
+		expect(sleeps.every((ms) => ms === 5000)).toBe(true);
 		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(1);
 		expect(reg.calls.filter((c) => c.method === "POST")).toHaveLength(0);
 	});
 
-	it("says so when that 2xx publish came back with no message", async () => {
+	it("leaves the HTTP detail out of the pending message when the 2xx had no message", async () => {
 		const reg = fakeRegistry({ publishNotLive: "" });
-		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow("HTTP 200 (no message)");
+		const out = await npmScaffold(args(), { ...deps(fakeGitHub(), reg), liveWaitMs: 0 });
+		expect(out.status).toBe("pending");
+		expect(out.message).toContain("(npm answered HTTP 200.)");
+	});
+
+	it("waits until the staged package shows up (202, then 404s) and asks for the next code", async () => {
+		sleeps.length = 0;
+		const reg = fakeRegistry({ staged: { notFound: 3 }, otps: [OTP, OTP2] });
+		const out = await npmScaffold(args(), deps(fakeGitHub(), reg));
+		expect(out).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"] });
+		expect(sleeps).toEqual([5000, 5000, 5000]);
+		// The spent code is never sent again.
+		expect(reg.calls.filter((c) => c.method === "POST")).toHaveLength(0);
+		// The next call, with a fresh code, finishes next to npm's 0.0.0-stage.
+		const second = await npmScaffold(args({ npm_otp: OTP2 }), deps(fakeGitHub(), reg));
+		expect(second.status).toBe("done");
+	});
+
+	it("counts npm's 0.0.0-stage as the package existing: needs_otp at once, then the trust step without a second publish", async () => {
+		sleeps.length = 0;
+		const reg = fakeRegistry({ staged: { stageOnly: 100 }, otps: [OTP, OTP2] });
+		const first = await npmScaffold(args(), deps(fakeGitHub(), reg));
+		expect(first).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"] });
+		expect(sleeps).toEqual([]);
+		const second = await npmScaffold(args({ npm_otp: OTP2 }), deps(fakeGitHub(), reg));
+		expect(second).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"] });
+		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(1);
+		expect(reg.trust).toEqual([expect.objectContaining({ type: "github", claims: { repository: "CLDMV/new-thing", workflow_ref: { file: "publish.yml" } } })]);
+	});
+
+	it("returns pending when nothing shows up within the wait, and a later call goes on to the trust step", async () => {
+		// Two 404s fill a 1 ms wait (one look, one sleep, one more look); then only npm's stage shows.
+		const reg = fakeRegistry({ staged: { notFound: 2, stageOnly: 5 }, otps: [OTP, OTP2] });
+		const first = await npmScaffold(args(), { ...deps(fakeGitHub(), reg), liveWaitMs: 1 });
+		expect(first).toMatchObject({ status: "pending", done: ["publish"], remaining: ["trust"] });
+		expect(first.message).toMatch(/isn't on the registry yet/);
+		expect(first.message).not.toMatch(/staged packages/);
+		const again = await npmScaffold(args({ npm_otp: OTP2 }), deps(fakeGitHub(), reg));
+		expect(again).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"] });
+		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(1);
+	});
+
+	it("uses a real timer when no sleep is injected", async () => {
+		const reg = fakeRegistry({ staged: { notFound: 1 } });
+		const { sleep: _unused, ...plain } = deps(fakeGitHub(), reg);
+		const out = await npmScaffold(args(), { ...plain, livePollMs: 1 });
+		expect(out.status).toBe("needs_otp");
 	});
 
 	it("refuses an existing single 0.0.1-placeholder version that lacks the scaffold marker", async () => {
@@ -342,13 +413,24 @@ describe("npm_scaffold", () => {
 	});
 
 	it.each([
-		["npm's placeholder alone", false, { [NPM_STAGE_PLACEHOLDER]: { name: PKG } }],
 		["a real release next to our placeholder", true, { "1.0.0": { name: PKG } }],
 		["a marked version that isn't a placeholder version", true, { "1.0.0": { name: PKG, scaffoldedBy: SCAFFOLD_MARKER } }]
 	])("refuses a package with %s", async (_, withOurs, extra) => {
 		const versions = { ...(withOurs ? placeholderFor("CLDMV/new-thing").versions : {}), ...extra };
 		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions } } });
 		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/was not created by npm_scaffold/);
+	});
+
+	it("goes to the trust step, never a second publish, when the package holds only npm's 0.0.0-stage", async () => {
+		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { [NPM_STAGE_PLACEHOLDER]: { name: PKG } } } } });
+		const out = await npmScaffold(args(), deps(fakeGitHub(), reg));
+		expect(out).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"] });
+		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+	});
+
+	it("refuses a package with no versions at all", async () => {
+		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: {} } } });
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/already exists on the registry \(0 version\(s\)\)/);
 	});
 
 	it("refuses when any of several placeholders was made for another repo", async () => {
