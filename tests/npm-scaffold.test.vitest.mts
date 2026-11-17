@@ -100,7 +100,7 @@ function fakeRegistry(opts: RegistryOpts = {}) {
 	return { registry: new NpmRegistry({ token: TOKEN, fetch }), fetch, calls, packages, trust };
 }
 
-type RepoOpts = { private?: boolean; archived?: boolean; pkg?: unknown; pkgRaw?: string; workflow?: boolean; missing?: boolean; pkgIsDir?: boolean; plainEncoding?: boolean; bareRepo?: boolean };
+type RepoOpts = { private?: boolean; archived?: boolean; pkg?: unknown; pkgRaw?: string; workflow?: boolean; missing?: boolean; pkgIsDir?: boolean; plainEncoding?: boolean; bareRepo?: boolean; pkgPath?: string; branches?: string[]; readRef?: string };
 
 function fakeGitHub(o: RepoOpts = {}) {
 	const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
@@ -111,9 +111,13 @@ function fakeGitHub(o: RepoOpts = {}) {
 			if (o.bareRepo) return { data: { private: false } };
 			return { data: { full_name: "CLDMV/new-thing", private: o.private ?? false, archived: o.archived ?? false, default_branch: "master" } };
 		}
+		if (route === "GET /repos/{owner}/{repo}/branches/{branch}") {
+			if ((o.branches ?? ["master", "next"]).includes(p.branch)) return { data: { name: p.branch } };
+			throw notFound();
+		}
 		if (route === "GET /repos/{owner}/{repo}/contents/{path}") {
-			expect(p.ref).toBe(o.bareRepo ? "HEAD" : "master");
-			if (p.path === "package.json") {
+			expect(p.ref).toBe(o.readRef ?? (o.bareRepo ? "HEAD" : "master"));
+			if (p.path === (o.pkgPath ?? "package.json")) {
 				if (o.pkgIsDir) return { data: [{ type: "file", name: "x" }] };
 				if (o.pkg === undefined && o.pkgRaw === undefined) return file(JSON.stringify({ name: PKG, license: "Apache-2.0", description: "A new thing." }));
 				if (o.pkg === null) throw notFound();
@@ -400,6 +404,53 @@ describe("npm_scaffold", () => {
 		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/\(0 version\(s\)\) and was not created by npm_scaffold/);
 	});
 
+	it("reads a package.json in a subfolder on another branch, and the workflow from that branch", async () => {
+		const reg = fakeRegistry({ otps: [OTP] });
+		const gh = fakeGitHub({ pkgPath: "packaging/new-thing/package.json", readRef: "next" });
+		const out = await npmScaffold(args({ path: "packaging/new-thing/package.json", ref: "next" }), deps(gh, reg));
+		expect(out).toMatchObject({ status: "needs_otp", done: ["publish"], repository: "CLDMV/new-thing" });
+		const paths = gh.request.mock.calls.filter(([r]) => r === "GET /repos/{owner}/{repo}/contents/{path}").map(([, p]) => [p.path, p.ref]);
+		expect(paths).toEqual([
+			["packaging/new-thing/package.json", "next"],
+			[".github/workflows/publish.yml", "next"]
+		]);
+		expect(gh.request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/branches/{branch}", { owner: "cldmv", repo: "new-thing", branch: "next" });
+	});
+
+	it("reads a subfolder package.json on the default branch when no ref is given", async () => {
+		const gh = fakeGitHub({ pkgPath: "packaging/new-thing/package.json" });
+		await expect(npmScaffold(args({ path: "packaging/new-thing/package.json" }), deps(gh, fakeRegistry()))).resolves.toMatchObject({ done: ["publish"] });
+		expect(gh.request.mock.calls.some(([r]) => r === "GET /repos/{owner}/{repo}/branches/{branch}")).toBe(false);
+	});
+
+	it("refuses a ref that is not a branch of the repo, before any npm call", async () => {
+		const reg = fakeRegistry();
+		await expect(npmScaffold(args({ ref: "v1.0.0" }), deps(fakeGitHub(), reg))).rejects.toThrow(/CLDMV\/new-thing has no branch "v1\.0\.0"/);
+		expect(reg.calls).toHaveLength(0);
+	});
+
+	it("names the path and branch when the package.json there is missing, names another package, or is private", async () => {
+		const at = { path: "packaging/x/package.json", ref: "next" };
+		await expect(npmScaffold(args(at), deps(fakeGitHub({ readRef: "next" }), fakeRegistry()))).rejects.toThrow(/has no packaging\/x\/package\.json on next/);
+		await expect(npmScaffold(args(at), deps(fakeGitHub({ readRef: "next", pkgPath: at.path, pkg: { name: "@cldmv/other" } }), fakeRegistry()))).rejects.toThrow(/packaging\/x\/package\.json on next names "@cldmv\/other"/);
+		await expect(npmScaffold(args(at), deps(fakeGitHub({ readRef: "next", pkgPath: at.path, pkg: { name: PKG, private: true } }), fakeRegistry()))).rejects.toThrow(/packaging\/x\/package\.json on next is marked "private": true/);
+	});
+
+	it("refuses when the workflow file is missing on the given branch", async () => {
+		await expect(npmScaffold(args({ ref: "next" }), deps(fakeGitHub({ readRef: "next", workflow: false }), fakeRegistry()))).rejects.toThrow(/has no \.github\/workflows\/publish\.yml on next/);
+	});
+
+	it("passes a GitHub error other than 404 from the branch lookup through unchanged", async () => {
+		const boom = Object.assign(new Error("rate limited"), { status: 403 });
+		const gh = fakeGitHub();
+		const real = gh.request.getMockImplementation()!;
+		gh.request.mockImplementation(async (r: string, p: any) => {
+			if (r === "GET /repos/{owner}/{repo}/branches/{branch}") throw boom;
+			return real(r, p);
+		});
+		await expect(npmScaffold(args({ ref: "next" }), deps(gh, fakeRegistry()))).rejects.toBe(boom);
+	});
+
 	it("honours a custom workflow file name", async () => {
 		const reg = fakeRegistry({ otps: [OTP, OTP2] });
 		await npmScaffold(args({ workflow: "release.yaml" }), deps(fakeGitHub(), reg));
@@ -418,7 +469,22 @@ describe("npm_scaffold", () => {
 		[{ ...args(), npm_otp: "12ab56" }, /"npm_otp"/],
 		[{ ...args(), npm_otp: 123456 }, /"npm_otp"/],
 		[{ ...args(), workflow: "../publish.yml" }, /"workflow"/],
-		[{ ...args(), workflow: "publish.sh" }, /"workflow"/]
+		[{ ...args(), workflow: "publish.sh" }, /"workflow"/],
+		[{ ...args(), path: "/package.json" }, /"path"/],
+		[{ ...args(), path: "../other/package.json" }, /"path"/],
+		[{ ...args(), path: "packaging/../package.json" }, /"path"/],
+		[{ ...args(), path: "packaging/./package.json" }, /"path"/],
+		[{ ...args(), path: "packaging//package.json" }, /"path"/],
+		[{ ...args(), path: "packaging/thing/notpackage.json" }, /"path"/],
+		[{ ...args(), path: "packaging/thing" }, /"path"/],
+		[{ ...args(), path: "packaging\\package.json" }, /"path"/],
+		[{ ...args(), path: 7 }, /"path"/],
+		[{ ...args(), ref: "../master" }, /"ref"/],
+		[{ ...args(), ref: "-next" }, /"ref"/],
+		[{ ...args(), ref: "next.lock" }, /"ref"/],
+		[{ ...args(), ref: "feat//x" }, /"ref"/],
+		[{ ...args(), ref: "a b" }, /"ref"/],
+		[{ ...args(), ref: "" }, /"ref"/]
 	] as Array<[unknown, RegExp]>)("validates arguments strictly (%#)", async (input, msg) => {
 		const gh = fakeGitHub();
 		await expect(npmScaffold(input, deps(gh, fakeRegistry()))).rejects.toThrow(msg);

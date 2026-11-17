@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T15:02:48-08:00 (1794697368)
+ *	@Last modified time: 2026-11-16T16:09:10-08:00 (1794874150)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -59,7 +59,12 @@ export const NPM_STAGE_PLACEHOLDER = "0.0.0-stage";
 /** Versions an earlier release of this verb may have published as its placeholder. */
 const OUR_PLACEHOLDER = /^0\.0\.[01]-[a-z]+$/;
 const DEFAULT_WORKFLOW = "publish.yml";
-const INPUT_KEYS = new Set(["owner", "repo", "package", "npm_otp", "workflow"]);
+const INPUT_KEYS = new Set(["owner", "repo", "package", "npm_otp", "workflow", "path", "ref"]);
+const DEFAULT_PATH = "package.json";
+/** A repo-relative path to a file named package.json: plain segments, no "..", no leading "/". */
+const PACKAGE_JSON_PATH = /^(?:[A-Za-z0-9_@-][A-Za-z0-9._@-]*\/)*package\.json$/;
+/** A branch name: git's ref-name rules, narrowed to the characters CLDMV branches use. */
+const BRANCH_NAME = /^[A-Za-z0-9_][A-Za-z0-9._\/-]*$/;
 const PACKAGE_NAME = /^@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*$/;
 
 export interface NpmScaffoldInput {
@@ -74,6 +79,10 @@ export interface NpmScaffoldInput {
 	npm_otp: string;
 	/** The repo's publish workflow file name. Defaults to publish.yml. */
 	workflow?: string;
+	/** Repo-relative path of the package.json that names the package. Defaults to "package.json". */
+	path?: string;
+	/** Branch to read the package.json and the workflow file from. Defaults to the repo's default branch. */
+	ref?: string;
 }
 
 export const NPM_SCAFFOLD_SCHEMA = {
@@ -83,7 +92,9 @@ export const NPM_SCAFFOLD_SCHEMA = {
 		repo: { type: "string", description: "Repository whose package.json names the package." },
 		package: { type: "string", description: 'Scoped package name, e.g. "@cldmv/new-thing". Must be under a scope in config.npm.scopes.' },
 		npm_otp: { type: "string", description: "npm one-time password the user read from their authenticator. Ask the user for it right before calling; codes expire in about 30 seconds." },
-		workflow: { type: "string", description: 'The repo\'s publish workflow file in .github/workflows. Default "publish.yml".' }
+		workflow: { type: "string", description: 'The repo\'s publish workflow file in .github/workflows. Default "publish.yml".' },
+		path: { type: "string", description: 'Repo-relative path of the package.json that names the package, for a package that lives in a subfolder, e.g. "packaging/thing/package.json". Default "package.json".' },
+		ref: { type: "string", description: "Branch to read that package.json and the workflow file from, e.g. \"next\" for a package not released to the default branch yet. Must be an existing branch. Default: the repo's default branch." }
 	},
 	required: ["owner", "repo", "package", "npm_otp"],
 	additionalProperties: false
@@ -120,7 +131,9 @@ const fail = (msg: string): never => {
 	throw new Error(`npm_scaffold: ${msg}`);
 };
 
-function validate(input: unknown): Required<NpmScaffoldInput> {
+type ValidInput = Required<Omit<NpmScaffoldInput, "ref">> & { ref?: string };
+
+function validate(input: unknown): ValidInput {
 	if (typeof input !== "object" || input === null || Array.isArray(input)) fail("arguments must be an object");
 	const a = input as Record<string, unknown>;
 	const unknown = Object.keys(a).filter((k) => !INPUT_KEYS.has(k));
@@ -133,12 +146,20 @@ function validate(input: unknown): Required<NpmScaffoldInput> {
 	if (a.workflow !== undefined && (typeof a.workflow !== "string" || !/^[A-Za-z0-9._-]+\.ya?ml$/.test(a.workflow))) {
 		fail('"workflow" must be a workflow file name in .github/workflows, e.g. "publish.yml"');
 	}
+	if (a.path !== undefined && (typeof a.path !== "string" || a.path.length > 512 || !PACKAGE_JSON_PATH.test(a.path) || a.path.split("/").some((seg) => seg === ".." || seg === "."))) {
+		fail('"path" must be a repo-relative path to a package.json, e.g. "packaging/thing/package.json" (no leading "/", no "..")');
+	}
+	if (a.ref !== undefined && (typeof a.ref !== "string" || a.ref.length > 255 || !BRANCH_NAME.test(a.ref) || a.ref.includes("..") || a.ref.includes("//") || a.ref.endsWith("/") || a.ref.endsWith(".lock") || a.ref.endsWith("."))) {
+		fail('"ref" must be a branch name, e.g. "next"');
+	}
 	return {
 		owner: a.owner as string,
 		repo: a.repo as string,
 		package: a.package as string,
 		npm_otp: a.npm_otp as string,
-		workflow: (a.workflow as string | undefined) ?? DEFAULT_WORKFLOW
+		workflow: (a.workflow as string | undefined) ?? DEFAULT_WORKFLOW,
+		path: (a.path as string | undefined) ?? DEFAULT_PATH,
+		...(a.ref !== undefined ? { ref: a.ref as string } : {})
 	};
 }
 
@@ -165,7 +186,17 @@ interface RepoFacts {
 	description?: string;
 }
 
-async function checkRepo(octokit: Octokit, args: Required<NpmScaffoldInput>): Promise<RepoFacts> {
+async function branchExists(octokit: Octokit, owner: string, repo: string, branch: string): Promise<boolean> {
+	try {
+		await octokit.request("GET /repos/{owner}/{repo}/branches/{branch}", { owner, repo, branch });
+		return true;
+	} catch (err) {
+		if (statusOf(err) === 404) return false;
+		throw err;
+	}
+}
+
+async function checkRepo(octokit: Octokit, args: ValidInput): Promise<RepoFacts & { ref: string }> {
 	let info: { full_name?: string; private?: boolean; archived?: boolean; default_branch?: string };
 	try {
 		info = (await octokit.request("GET /repos/{owner}/{repo}", { owner: args.owner, repo: args.repo })).data as typeof info;
@@ -179,22 +210,28 @@ async function checkRepo(octokit: Octokit, args: Required<NpmScaffoldInput>): Pr
 	// The trusted publisher must name the repo that was routed and checked, so refuse that.
 	if (repository.toLowerCase() !== asked.toLowerCase()) fail(`${asked} redirects to ${repository} (renamed or transferred) — call with the repository's current owner and name`);
 	if (info.archived) fail(`repository ${repository} is archived`);
-	const ref = info.default_branch ?? "HEAD";
-	const raw = await repoFile(octokit, args.owner, args.repo, "package.json", ref);
-	if (raw === undefined) fail(`${repository} has no package.json on ${ref}`);
+	let ref = info.default_branch ?? "HEAD";
+	if (args.ref !== undefined) {
+		if (!(await branchExists(octokit, args.owner, args.repo, args.ref))) fail(`${repository} has no branch "${args.ref}"`);
+		ref = args.ref;
+	}
+	const file = args.path;
+	const raw = await repoFile(octokit, args.owner, args.repo, file, ref);
+	if (raw === undefined) fail(`${repository} has no ${file} on ${ref}`);
 	let pkg: { name?: unknown; license?: unknown; description?: unknown; private?: unknown };
 	try {
 		pkg = JSON.parse(raw as string) as typeof pkg;
 	} catch {
-		return fail(`${repository}'s package.json on ${ref} is not valid JSON`);
+		return fail(`${repository}'s ${file} on ${ref} is not valid JSON`);
 	}
-	if (pkg.name !== args.package) fail(`${repository}'s package.json on ${ref} names ${JSON.stringify(pkg.name)}, not "${args.package}"`);
-	if (pkg.private === true) fail(`${repository}'s package.json is marked "private": true, so it is not meant to be published`);
+	if (pkg.name !== args.package) fail(`${repository}'s ${file} on ${ref} names ${JSON.stringify(pkg.name)}, not "${args.package}"`);
+	if (pkg.private === true) fail(`${repository}'s ${file} on ${ref} is marked "private": true, so it is not meant to be published`);
 	if ((await repoFile(octokit, args.owner, args.repo, `.github/workflows/${args.workflow}`, ref)) === undefined) {
 		fail(`${repository} has no .github/workflows/${args.workflow} on ${ref} — the trusted publisher must name the workflow that publishes`);
 	}
 	return {
 		repository,
+		ref,
 		isPrivate: info.private !== false,
 		...(typeof pkg.license === "string" ? { license: pkg.license } : {}),
 		...(typeof pkg.description === "string" ? { description: pkg.description } : {})
