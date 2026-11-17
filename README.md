@@ -21,7 +21,7 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ### Latest: v0.11.2 (November 2026)
 
-- **`npm_scaffold` waits for npm's staged first publish.** npm makes a new package's first version live a minute or so after accepting it; the verb used to read the registry once and report a failure. It now waits up to two minutes and returns `status: "pending"` (call again later with a fresh code) instead of an error.
+- **`npm_scaffold` waits for npm's staged first publish.** npm stages a new package's first publish, and the verb used to read the registry once and report a failure. It now treats npm's `0.0.0-stage` or the placeholder as the package existing, moves on to the trusted publisher as soon as either shows, and returns `status: "pending"` instead of an error if neither shows within two minutes.
 - [View full v0.11.2 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.2.md)
 
 ### Recent Releases
