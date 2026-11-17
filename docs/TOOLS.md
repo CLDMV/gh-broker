@@ -693,18 +693,26 @@ npm only accepts a trusted publisher on a package that already exists, and that 
 { "owner": "cldmv", "repo": "new-thing", "package": "@cldmv/new-thing", "npm_otp": "123456" }
 ```
 
+A package published from a subfolder, before its `package.json` reaches the default branch:
+
+```json
+{ "owner": "cldmv", "repo": "slothlet", "package": "@cldmv/slothlet-migrate", "path": "packaging/slothlet-migrate/package.json", "ref": "next", "npm_otp": "123456" }
+```
+
 | Param | Type | Default | Notes |
 |---|---|---|---|
 | `owner` | string | — (required) | A configured owner. Its **read** PAT does the GitHub reads; the verb never writes to GitHub. |
-| `repo` | string | — (required) | The repo whose `package.json` names the package. |
+| `repo` | string | — (required) | The repo whose `package.json` (see `path`) names the package. |
 | `package` | string | — (required) | Lowercase scoped name, e.g. `@cldmv/new-thing`. Must be under a scope in `config.npm.scopes`. |
 | `npm_otp` | string | — (required) | 6–8 digit npm one-time password. Never logged or returned. (Named `npm_otp` because `otp` is the broker's own gate code, see [OTP gate](#otp-gate-and-otp_status); a gated `npm_scaffold` call carries both.) |
 | `workflow` | string | `publish.yml` | The repo's publish workflow file in `.github/workflows`; the trusted publisher names it. |
+| `path` | string | `package.json` | Repo-relative path of the `package.json` that names the package, for a package published from a subfolder (e.g. `packaging/thing/package.json`). No leading `/`, no `.` or `..` segments, and the file must be named `package.json`. |
+| `ref` | string | the default branch | Branch to read that `package.json` and the workflow file from, e.g. `next` for a package that only reaches the default branch with its first release. Must be an existing branch of the repo; tags and commit SHAs are refused. |
 
 **Guardrails, checked before any npm write.**
 
 - The scope is allowed by `config.npm.scopes`.
-- The repo exists under exactly the owner and name given (a renamed or transferred repo, which GitHub answers with a redirect, is refused), isn't archived, its `package.json` on the default branch names exactly this package and is not `"private": true`, and `.github/workflows/<workflow>` exists there.
+- The repo exists under exactly the owner and name given (a renamed or transferred repo, which GitHub answers with a redirect, is refused), isn't archived, the `package.json` at `path` on `ref` (the root `package.json` on the default branch unless given) names exactly this package and is not `"private": true`, and `.github/workflows/<workflow>` exists on that same branch. A `ref` that isn't a branch of the repo is refused.
 - The package does not exist on the registry yet. A package that exists is refused unless it is this verb's own placeholder from an earlier call (every version is a `0.0.0-…`/`0.0.1-…` prerelease marked `scaffoldedBy: "gh-broker"`, apart from npm's own `0.0.0-stage`), which is how an interrupted call resumes. npm's placeholder appears when a staged publish from an older broker went live later. Every placeholder's recorded repository must be the one in this call. The lookup uses `?write=true`, so it reads the registry's primary copy rather than a possibly stale cache. The verb can never publish a version of a real package.
 
 **What it writes.**
