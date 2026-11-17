@@ -19,17 +19,18 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.10.7 (November 2026)
+### Latest: v0.11.0 (November 2026)
 
-- **`npm_scaffold` resumes when a staged placeholder went live later.** An earlier `-stage` placeholder can show up on npm after the fact, next to npm's own `0.0.0-stage`. The verb now recognises that package as its own and goes on to add the trusted publisher.
-- [View full v0.10.7 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.7.md)
+- **`npm_scaffold` takes `path` and `ref`.** It can check a `package.json` in a subfolder and on a branch other than the default, so a satellite package can get its placeholder and trusted publisher before its first release reaches master.
+- **The core library takes shape.** The OTP gate runs on `@cldmv/lib-otp`, the tools are declared in a manifest, credentials reach the router through an injected token resolver, and the library code lives in `src/core/`. The daemon behaves the same.
+- [View full v0.11.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.0.md)
 
 ### Recent Releases
 
+- **v0.10.7** (November 2026) — `npm_scaffold` resumes when a staged placeholder went live later ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.7.md))
 - **v0.10.6** (November 2026) — the `npm_scaffold` placeholder is `0.0.1-placeholder`, and the verb checks it went live before moving on ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.6.md))
 - **v0.10.5** (November 2026) — a first fix for the `npm_scaffold` placeholder, and the first refactors toward the core library ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.5.md))
 - **v0.10.4** (November 2026) — the MCP handshake reports the installed version instead of `0.1.0`, and `typecheck` is renamed `types:check` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.4.md))
-- **v0.10.3** (November 2026) — the `gh-broker` command and installer are built from TypeScript in `src/`, and a checkout installs with `sudo ./deploy/install.sh` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.3.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 

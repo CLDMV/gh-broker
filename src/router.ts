@@ -7,49 +7,59 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-02T20:20:16-08:00 (1793679616)
+ *	@Last modified time: 2026-11-14T11:38:43-08:00 (1794685123)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { Caller, Config, SecretStore, ToolRule } from "./types.ts";
+import type { Caller, Config, OtpAudit, OtpGate, OtpRefusal, SecretStore, TokenResolver, ToolRule } from "./types.ts";
 import type { AppAuth } from "./appauth.ts";
-import { Octokit } from "@octokit/core";
 import { indexTools } from "./config.ts";
 import { audit } from "./audit.ts";
 import { unavailableReason } from "./availability.ts";
-// DEFERRED: link_issue is App-token-only and not wired in — see docs.
-// import { linkIssue, type LinkIssueInput } from "./verbs/link_issue.ts";
-import {
-	resolveReviewThread,
-	replyReviewThread,
-	type ResolveReviewThreadInput,
-	type ReplyReviewThreadInput
-} from "./verbs/review_thread.ts";
-import { reportUnlabeled, type ReportUnlabeledInput } from "./verbs/report_unlabeled.ts";
-import { reportDependents, type ReportDependentsInput } from "./verbs/report_dependents.ts";
-import { reportSecurityAlerts, type ReportSecurityAlertsInput } from "./verbs/report_security_alerts.ts";
-import { reportReleasePrs, type ReportReleasePrsInput } from "./verbs/report_release_prs.ts";
-import { reportReleaseChanges, type ReportReleaseChangesInput } from "./verbs/report_release_changes.ts";
-import { reportAlertStatus, type ReportAlertStatusInput } from "./verbs/report_alert_status.ts";
-import { issueLabels, type IssueLabelsInput } from "./verbs/issue_labels.ts";
-import { reportCiStatus, ciStatusForHeadSha, ciStatusForHeads, type ReportCiStatusInput, type FailedJobLogsFetcher } from "./verbs/report_ci_status.ts";
-import { npmScaffold } from "./verbs/npm_scaffold.ts";
-import { minimizeComment, type MinimizeCommentInput } from "./verbs/minimize_comment.ts";
-import { deleteBranch, type DeleteBranchInput } from "./verbs/delete_branch.ts";
-import { dismissAlert, type DismissAlertInput } from "./verbs/dismiss_alert.ts";
-import { NpmRegistry } from "./verbs/npm-registry.ts";
+import { otpSetupProblem } from "./otp/policy.ts";
+import { permissivePolicy } from "./manifest.ts";
 import { GhcrService } from "./verbs/ghcr_push.ts";
-import { OtpGate, type OtpAudit, type OtpRefusal } from "./otp/gate.ts";
+// The Router consumes the OtpGate SEAM (src/types.ts, design #175 §2e); the daemon's
+// concrete gate is imported only for the constructor default below — a host passes its
+// own implementation through the optional parameter.
+import { OtpGate as DaemonOtpGate } from "./otp/gate.ts";
 import { OTP_ARG, OTP_STATUS, isGated } from "./otp/policy.ts";
+// The dispatch layer (custom verbs, augmented forwards) is the library-facing router
+// core (src/router-core.ts, design #175 §1's split row); this wrapper owns the
+// allowlist, the gate, owner resolution and every audit row, and calls the core.
+import { dispatchAugmented, dispatchCustom, type GhcrVerbs, type RouteDeps, type Upstream } from "./router-core.ts";
+
+// The interface moved to the library-facing seams module (src/router-core.ts); re-exported
+// so the old import path keeps working.
+export type { Upstream } from "./router-core.ts";
 
 const GHCR_TOOLS = new Set(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
 
-/** What the router needs from the upstream (hosted-MCP) client pool. */
-export interface Upstream {
-	forward(tool: string, args: Record<string, unknown>, token: string): Promise<CallToolResult>;
+/**
+ * The daemon host's {@link TokenResolver} (design #175 §2a) — the owner+mode→PAT lookup
+ * over `config.owners` + the {@link SecretStore}. This is the only credential path the
+ * routing logic sees: the routing code never reads the store or `config.owners` for a
+ * token, it asks here, honoring the owner and the EFFECTIVE mode it was handed (a
+ * host-narrowed mode is what gets requested). Per call, never cached; `null` means no
+ * access and the caller turns it into the typed no-access error (fail closed).
+ *
+ * The `person` is irrelevant to owner resolution (the catalog's schema fetch passes
+ * NO_PERSON for it) and is ignored here. `kind: "npm"` is not per-owner and not
+ * mode-scoped — one granular token. `kind: "ghcr"` has no router path yet (the ghcr
+ * verbs run on GhcrService's own store, host-side) and fails closed.
+ */
+export function hostTokenResolver(config: Config, secrets: SecretStore): TokenResolver {
+	return async ({ owner, mode, kind }) => {
+		if (kind === "npm") return config.npm ? secrets.resolve(config.npm.token) : null;
+		if (kind === "ghcr") return null;
+		// Object.hasOwn: "constructor"/"toString" must hit the prototype, not resolve a token.
+		const creds = owner && Object.hasOwn(config.owners, owner) ? config.owners[owner] : undefined;
+		if (!creds) return null;
+		return secrets.resolve(mode === "write" ? creds.write : creds.read);
+	};
 }
 
 /**
@@ -62,23 +72,58 @@ export class Router {
 	private readonly upstream: Upstream;
 	private readonly appAuth?: AppAuth;
 	private readonly rules: Map<string, ToolRule>;
-	/** GHCR verbs run on config.ghcr's own credential, not the owner's GitHub PAT (created on first use). */
-	private ghcr?: GhcrService;
-	/** The OTP gate (#143). Inert without config.otp. */
+	/** The daemon host's resolver (design §2a): the only credential path the routing asks. */
+	private readonly resolveToken: TokenResolver;
+	/** What the dispatch layer (src/router-core.ts) runs with — fixed for the Router's lifetime. */
+	private readonly routeDeps: RouteDeps;
+	/** GHCR verbs run on config.ghcr's own credential, not the owner's GitHub PAT — the injected GhcrVerbs seam. */
+	private ghcr?: GhcrVerbs;
+	/** The OTP gate (#143), the injected OtpGate seam. Inert without config.otp. */
 	private readonly otp: OtpGate;
 
-	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth, otp?: OtpGate) {
+	/**
+	 * The constructor keeps its call shape (`new Router(config, secrets, upstream[, appAuth, gate[, ghcr]])`).
+	 * `gate` is the OtpGate SEAM (src/types.ts, design #175 §2e) and `ghcr` the GhcrVerbs
+	 * SEAM (src/router-core.ts, §2f) — the daemon composition (src/index.ts) constructs
+	 * both and passes them. The defaults still construct the daemon's own gate and ghcr
+	 * service: the suite's 58 test call sites rely on them, and a default of "must pass
+	 * one" would be a test-visible change. Any implementation of either seam is accepted
+	 * either way — the seam, not the class, is the contract.
+	 */
+	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth, otp?: OtpGate, ghcr?: GhcrVerbs, resolveToken?: TokenResolver) {
 		this.config = config;
 		this.secrets = secrets;
 		this.upstream = upstream;
 		this.appAuth = appAuth;
-		this.rules = indexTools(config.tools);
-		this.otp = otp ?? new OtpGate(config, secrets);
+		// The effective rules (design #175 §2h): the daemon serves the permissive policy
+		// explicitly — config.json keeps today's authority, so the effective mode equals
+		// the config's mode today. Routing asks the resolver for the rule's EFFECTIVE
+		// mode, so a host-narrowed mode is what the credential lookup honors.
+		this.rules = indexTools(permissivePolicy(config.tools).tools);
+		// The 7th parameter lets a host (or a test spy) supply the resolver — the daemon
+		// omits it and gets hostTokenResolver. Additive; no existing call site changes.
+		this.resolveToken = resolveToken ?? hostTokenResolver(config, secrets);
+		this.routeDeps = { resolveToken: this.resolveToken, upstream, ...(config.npm ? { npm: config.npm } : {}) };
+		this.otp = otp ?? new DaemonOtpGate(config, secrets);
+		this.ghcr = ghcr;
 	}
+
+	/**
+	 * The daemon's availability facts (design §2a's capability predicate): ref presence
+	 * over the store, plus the OTP setup check (which decodes the stored seed, so it
+	 * stays a host-side function over the store).
+	 */
+	private readonly unavailable = (rule: ToolRule): string | undefined =>
+		unavailableReason(
+			rule,
+			this.config,
+			(ref) => this.secrets.has(ref),
+			(config) => otpSetupProblem(config, this.secrets)
+		);
 
 	/** Tools advertised to the agent (used to build tools/list). */
 	advertisedTools(): ToolRule[] {
-		return this.config.tools.filter((rule) => !unavailableReason(rule, this.config, this.secrets));
+		return this.config.tools.filter((rule) => !this.unavailable(rule));
 	}
 
 	/** Run `tool` for `caller`, the agent user whose socket the call came in on. */
@@ -106,7 +151,7 @@ export class Router {
 			args = rest;
 		}
 		// An optional integration that isn't set up hides its tools: refuse them the same way.
-		const unavailable = unavailableReason(rule, this.config, this.secrets);
+		const unavailable = this.unavailable(rule);
 		if (unavailable) {
 			audit({ tool, user, decision: "deny", detail: `unavailable: ${unavailable}` });
 			throw new Error(`tool "${tool}" is not available on this broker: ${unavailable}`);
@@ -142,21 +187,25 @@ export class Router {
 		if (GHCR_TOOLS.has(tool)) return this.callGhcr(tool, args, rule, user, otp);
 		// Owner-less reads (global advisory DB, get_me, notifications) fall back to
 		// the configured defaultOwner's READ PAT. Writes never fall back — a write
-		// must always name the owner it targets.
+		// must always name the owner it targets. The config.owners read here is the
+		// ROUTING presence check (is defaultOwner configured at all), not a credential
+		// read: an unconfigured defaultOwner must fall through to "no owner in args",
+		// exactly as before — the token itself still comes only from the resolver.
 		let owner = createdIn ?? extractOwner(args);
-		if (!owner && rule.mode === "read" && this.config.defaultOwner && this.config.owners[this.config.defaultOwner]) {
+		if (!owner && rule.mode === "read" && this.config.defaultOwner && Object.hasOwn(this.config.owners, this.config.defaultOwner)) {
 			owner = this.config.defaultOwner.toLowerCase();
 		}
 		if (!owner) {
 			audit({ tool, user, decision: "error", detail: "no owner in args" });
 			throw new Error(`tool "${tool}": could not determine repo owner from arguments`);
 		}
-		const creds = this.config.owners[owner];
-		if (!creds) {
+		// The token comes from the resolver (design §2a) — the owner+mode→PAT lookup lives
+		// there, not here. null (unconfigured owner) is the typed no-access refusal below.
+		const token = await this.resolveToken({ person: user, owner, mode: rule.mode, kind: "github" });
+		if (token === null) {
 			audit({ tool, user, owner, decision: "error", detail: "no creds for owner" });
 			throw new Error(`no credentials configured for owner "${owner}" — add it to config.owners + creds`);
 		}
-		const token = this.secrets.resolve(rule.mode === "write" ? creds.write : creds.read);
 		const repoName = tool === "create_repository" ? args.name : args.repo;
 		const repo = typeof repoName === "string" ? `${owner}/${repoName}` : owner;
 		// A fork's audit line also names what was forked; owner/repo above are the new copy.
@@ -165,9 +214,9 @@ export class Router {
 		const decision = rule.custom ? "custom" : rule.augment ? "augment" : "forward";
 		try {
 			const out = rule.custom
-				? await this.dispatchCustom(tool, args, owner, token)
+				? await dispatchCustom(this.routeDeps, tool, args, owner, token, user)
 				: rule.augment
-					? await this.dispatchAugmented(tool, args, owner, token)
+					? await dispatchAugmented(this.routeDeps, tool, args, owner, token)
 					: await this.upstream.forward(tool, args, token);
 			audit({ tool, user, owner, mode: rule.mode, repo, ...forked, decision, ok: true, ...otp });
 			return out;
@@ -191,213 +240,6 @@ export class Router {
 			throw err;
 		}
 	}
-
-	private async dispatchCustom(
-		tool: string,
-		args: Record<string, unknown>,
-		owner: string,
-		token: string
-	): Promise<CallToolResult> {
-		switch (tool) {
-			// DEFERRED: link_issue (App-token-only addClosingIssueReference) is not wired in — see docs.
-			// Re-enable by restoring this case + the import above + the catalog block, adding a
-			// link_issue allowlist entry to config, and configuring config.app + owner installationId.
-			// case "link_issue": {
-			// 	const octokit = this.appAuth?.octokitFor(owner);
-			// 	if (!octokit) {
-			// 		throw new Error(`link_issue needs a GitHub App for "${owner}": set config.app + owners.${owner}.installationId + the app key cred (addClosingIssueReference is App-token-only — not available to fine-grained PATs)`);
-			// 	}
-			// 	const out = await linkIssue(octokit, args as unknown as LinkIssueInput);
-			// 	return { content: [{ type: "text", text: `linked: PR ${out.pullRequestId} → issue ${out.issueId}` }] };
-			// }
-			case "resolve_review_thread": {
-				// PAT-usable (Pull requests: write) — run on the resolved write PAT, not the App token.
-				const octokit = new Octokit({ auth: token });
-				const out = await resolveReviewThread(octokit, args as unknown as ResolveReviewThreadInput);
-				return { content: [{ type: "text", text: `thread ${out.threadId}: isResolved=${out.isResolved}` }] };
-			}
-			case "reply_review_thread": {
-				const octokit = new Octokit({ auth: token });
-				const out = await replyReviewThread(octokit, args as unknown as ReplyReviewThreadInput);
-				return { content: [{ type: "text", text: `replied: ${out.url}` }] };
-			}
-			case "issue_labels": {
-				// Per-label REST endpoints (Issues: write) on the resolved write PAT.
-				const octokit = new Octokit({ auth: token });
-				const out = await issueLabels(octokit, args as unknown as IssueLabelsInput);
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "report_unlabeled": {
-				const octokit = new Octokit({ auth: token });
-				const out = await reportUnlabeled(octokit, args as unknown as ReportUnlabeledInput);
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "report_security_alerts": {
-				const octokit = new Octokit({ auth: token });
-				const out = await reportSecurityAlerts(octokit, args as unknown as ReportSecurityAlertsInput);
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "report_dependents": {
-				const octokit = new Octokit({ auth: token });
-				const out = await reportDependents(octokit, args as unknown as ReportDependentsInput, this.config.npm?.registry ? { registry: this.config.npm.registry } : {});
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "report_release_prs": {
-				const octokit = new Octokit({ auth: token });
-				const out = await reportReleasePrs(octokit, args as unknown as ReportReleasePrsInput);
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "report_release_changes": {
-				const octokit = new Octokit({ auth: token });
-				const out = await reportReleaseChanges(octokit, args as unknown as ReportReleaseChangesInput);
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "report_alert_status": {
-				const octokit = new Octokit({ auth: token });
-				const out = await reportAlertStatus(octokit, args as unknown as ReportAlertStatusInput);
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "report_ci_status": {
-				const octokit = new Octokit({ auth: token });
-				const reportArgs = args as unknown as ReportCiStatusInput;
-				const out = await reportCiStatus(octokit, reportArgs, this.makeJobLogsFetcher(owner, reportArgs.repo, token));
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "npm_scaffold": {
-				const npm = this.config.npm!; // availability already required it
-				// The GitHub side only reads (repo metadata, package.json, workflow file), so it
-				// runs on the read PAT even though the verb is a write.
-				const octokit = new Octokit({ auth: this.secrets.resolve(this.config.owners[owner]!.read) });
-				const registry = new NpmRegistry({ token: this.secrets.resolve(npm.token), ...(npm.registry ? { registry: npm.registry } : {}) });
-				const out = await npmScaffold(args, { octokit, registry, scopes: npm.scopes });
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "minimize_comment": {
-				const out = await minimizeComment(new Octokit({ auth: token }), args as unknown as MinimizeCommentInput);
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "delete_branch": {
-				const out = await deleteBranch(new Octokit({ auth: token }), args as unknown as DeleteBranchInput);
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			case "dismiss_alert": {
-				const out = await dismissAlert(new Octokit({ auth: token }), args as unknown as DismissAlertInput);
-				return { content: [{ type: "text", text: JSON.stringify(out) }] };
-			}
-			default:
-				throw new Error(`custom verb "${tool}" not implemented`);
-		}
-	}
-
-	/**
-	 * A failing-run's job logs, via the hosted MCP's own `get_job_logs` tool
-	 * (`failed_only: true` fetches every failing job in the run in one call) rather
-	 * than a hand-rolled REST call — see report_ci_status.ts's FailedJobLogsFetcher
-	 * doc comment for why. Best-effort: any failure here (bad shape, upstream error)
-	 * just yields an empty map — report_ci_status treats a lookup miss as "no
-	 * logTail for this job", never a hard failure of the whole report.
-	 */
-	private makeJobLogsFetcher(owner: string, repo: string, token: string): FailedJobLogsFetcher {
-		return async (runId, tailLines) => {
-			const map = new Map<number, string>();
-			try {
-				const result = await this.upstream.forward("get_job_logs", { owner, repo, run_id: runId, failed_only: true, return_content: true, tail_lines: tailLines }, token);
-				const textBlock = result.content?.find((c) => (c as { type?: string }).type === "text") as { text?: string } | undefined;
-				if (!textBlock?.text) return map;
-				const parsed = JSON.parse(textBlock.text) as { logs?: Array<{ job_id?: unknown; logs_content?: unknown }> };
-				for (const entry of parsed.logs ?? []) {
-					if (typeof entry.job_id === "number" && typeof entry.logs_content === "string") map.set(entry.job_id, entry.logs_content);
-				}
-			} catch {
-				/* best-effort — see doc comment */
-			}
-			return map;
-		};
-	}
-
-	/**
-	 * Forwards to the hosted MCP like a plain proxy, then post-processes the result.
-	 * gh-broker presents its own MCP contract — a proxied tool's response is not
-	 * required to match the hosted MCP's shape verbatim (see [[broker-owns-its-mcp-contract]]
-	 * in project memory). `ciVerbosity`/`logLines` are gh-broker's own extension
-	 * params, stripped before forwarding since the upstream schema doesn't know them.
-	 *
-	 * Opt-in only: with no `ciVerbosity`, this is byte-identical to a plain forward —
-	 * augmenting every `pull_request_read` call by default would add an unrequested
-	 * API call (and cost) to every ordinary PR read.
-	 *
-	 * Best-effort: if the upstream response isn't the JSON-text shape expected (a
-	 * format this broker doesn't control), the original result is returned unmodified
-	 * rather than thrown — a shape mismatch should degrade to "no CI data added," not
-	 * break an otherwise-successful PR read.
-	 */
-	private async dispatchAugmented(tool: string, args: Record<string, unknown>, owner: string, token: string): Promise<CallToolResult> {
-		switch (tool) {
-			case "pull_request_read": {
-				const { ciVerbosity, logLines, ...upstreamArgs } = args as Record<string, unknown> & { ciVerbosity?: number; logLines?: number };
-				const result = await this.upstream.forward(tool, upstreamArgs, token);
-				if (ciVerbosity === undefined) return result;
-				if ((upstreamArgs.method ?? "get") !== "get") return result; // only the single-PR "get" shape is augmentable
-
-				const textBlock = result.content?.find((c) => (c as { type?: string }).type === "text") as { text?: string } | undefined;
-				if (!textBlock?.text) return result;
-				let pr: unknown;
-				try {
-					pr = JSON.parse(textBlock.text);
-				} catch {
-					return result;
-				}
-				const p = pr as { number?: unknown; head?: { sha?: unknown } };
-				if (typeof p.number !== "number" || typeof p.head?.sha !== "string") return result;
-
-				const repo = String(upstreamArgs.repo ?? "");
-				const octokit = new Octokit({ auth: token });
-				const ci = await ciStatusForHeadSha(octokit, owner, repo, p.number, p.head.sha, {
-					verbosity: Number(ciVerbosity),
-					logLines: logLines !== undefined ? Number(logLines) : undefined,
-					fetchFailedJobLogs: this.makeJobLogsFetcher(owner, repo, token)
-				});
-				textBlock.text = JSON.stringify({ ...(pr as object), ci });
-				return result;
-			}
-			case "list_pull_requests": {
-				// Same opt-in contract as pull_request_read, applied to each item of the list.
-				// Detail is capped by maxDetail; see ciStatusForHeads for the shared budget.
-				const { ciVerbosity, logLines, maxDetail, ...upstreamArgs } = args as Record<string, unknown> & { ciVerbosity?: number; logLines?: number; maxDetail?: number };
-				const result = await this.upstream.forward(tool, upstreamArgs, token);
-				if (ciVerbosity === undefined) return result;
-
-				const textBlock = result.content?.find((c) => (c as { type?: string }).type === "text") as { text?: string } | undefined;
-				if (!textBlock?.text) return result;
-				let list: unknown;
-				try {
-					list = JSON.parse(textBlock.text);
-				} catch {
-					return result;
-				}
-				if (!Array.isArray(list)) return result;
-				const heads: Array<{ number: number; sha: string }> = [];
-				for (const item of list as Array<{ number?: unknown; head?: { sha?: unknown } }>) {
-					if (typeof item?.number === "number" && typeof item.head?.sha === "string") heads.push({ number: item.number, sha: item.head.sha });
-				}
-				if (heads.length === 0) return result;
-
-				const repo = String(upstreamArgs.repo ?? "");
-				const octokit = new Octokit({ auth: token });
-				const cis = await ciStatusForHeads(octokit, owner, repo, heads, {
-					verbosity: Number(ciVerbosity),
-					logLines: logLines !== undefined ? Number(logLines) : undefined,
-					maxDetail: maxDetail !== undefined ? Number(maxDetail) : undefined,
-					fetchFailedJobLogs: this.makeJobLogsFetcher(owner, repo, token)
-				});
-				const byNumber = new Map(cis.map((c) => [c.pull, c]));
-				textBlock.text = JSON.stringify((list as Array<{ number?: unknown }>).map((item) => (typeof item?.number === "number" && byNumber.has(item.number) ? { ...item, ci: byNumber.get(item.number) } : item)));
-				return result;
-			}
-			default:
-				return this.upstream.forward(tool, args, token);
-		}
-	}
 }
 
 /** Tools that create a repo, whose PAT is picked by the org the repo lands in. */
@@ -416,7 +258,7 @@ export function creationOwner(tool: string, args: Record<string, unknown>, owner
 		throw new Error(`tool "${tool}": "organization" is required (the org the repo is created in); gh-broker doesn't create repos in a personal account`);
 	}
 	const org = args.organization.toLowerCase();
-	if (!owners[org]) throw new Error(`no credentials configured for owner "${org}" — add it to config.owners + creds`);
+	if (!Object.hasOwn(owners, org)) throw new Error(`no credentials configured for owner "${org}" — add it to config.owners + creds`);
 	if (tool === "create_repository" && typeof args.private !== "boolean") {
 		throw new Error('tool "create_repository": "private" is required, true or false; a repo\'s visibility is never left to a default');
 	}

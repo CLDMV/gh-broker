@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-11-14T11:05:05-08:00 (1794683105)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -18,7 +18,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import pkg from "../package.json" with { type: "json" };
 import type { Config } from "./types.ts";
-import type { Upstream } from "./router.ts";
+import type { Upstream } from "./router-core.ts";
 
 const CLIENT_INFO = { name: "cldmv-gh-broker", version: pkg.version };
 

@@ -82,6 +82,13 @@ describe("otp unlock", () => {
 		expect(err[0]).toBe("warning: the unlock could not be written to the journal: systemd-cat: not found");
 	});
 
+	it("still unlocks when SUDO_USER is set but empty (an empty by would be rejected)", async () => {
+		const { d, out } = makeDeps({ readState: () => stateWith({ repo: hard }), sudoUser: () => "" });
+		expect(await otpCommand("unlock", ["repo"], config, d)).toBe(0);
+		expect(d.audit).toHaveBeenCalledWith(expect.objectContaining({ by: "root" }));
+		expect(out[0]).toBe("unlocked repo. The code the authenticator shows now won't work, nor the one after it: wait 60 s for a fresh code.");
+	});
+
 	it("clears counters for a user who isn't hard-locked, and skips a user with no entry", async () => {
 		const { d, out } = makeDeps({ readState: () => stateWith({ repo: { ...emptyUser(), failures: 2 } }) });
 		await otpCommand("unlock", ["repo"], config, d);

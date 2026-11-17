@@ -2,39 +2,32 @@
  *
  *	@Project: @cldmv/gh-broker
  *	@Filename: /src/agents.ts
- *	@Date: 2026-11-01T21:30:00-08:00 (1793597400)
+ *	@Date: 2026-07-07T00:24:51-07:00 (1783409091)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T21:30:00-08:00 (1793597400)
+ *	@Last modified time: 2026-11-14T13:28:36-08:00 (1794691716)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 /**
- * The agent registry. An agent user `<u>` is registered when the group `gh-broker-agent-<u>`
- * exists with exactly the members `gh-broker` and `<u>`. The broker gives each one its own
- * socket, `<dir>/<u>.sock`, owned by that group with mode 0660, so the socket a call arrives
- * on says who made it (Node can't read SO_PEERCRED).
+ * The agent registry (the daemon's half of the split — design #175 §1's agents.ts row).
+ * An agent user `<u>` is registered when the group `gh-broker-agent-<u>` exists with
+ * exactly the members `gh-broker` and `<u>`. The broker gives each one its own socket,
+ * `<dir>/<u>.sock`, owned by that group with mode 0660, so the socket a call arrives on
+ * says who made it (Node can't read SO_PEERCRED). The name rules themselves
+ * ({@link isAgentUser} and friends) are library vocabulary in src/core/agents.ts,
+ * re-exported here so the old import path keeps working.
  */
 
 import { isAbsolute } from "node:path";
 
-/** Agent user names: a Linux login name short enough that the group name fits in 32 characters. */
-export const AGENT_USER = /^[a-z_][a-z0-9_-]{0,15}$/;
+import { AGENT_USER, RESERVED_AGENT_USERS, isAgentUser } from "./core/agents.ts";
 
-/**
- * Names that fit the pattern but are refused: "__proto__" is a special key in JS objects, and
- * root and the service user itself are never agents.
- */
-export const RESERVED_AGENT_USERS: readonly string[] = ["__proto__", "root", "gh-broker"];
-
-/** Whether `name` can be an agent user. */
-export function isAgentUser(name: string): boolean {
-	return AGENT_USER.test(name) && !RESERVED_AGENT_USERS.includes(name);
-}
+export { AGENT_USER, RESERVED_AGENT_USERS, isAgentUser };
 
 export const AGENT_GROUP_PREFIX = "gh-broker-agent-";
 
