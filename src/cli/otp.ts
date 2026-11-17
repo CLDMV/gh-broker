@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T07:38:51-08:00 (1794670731)
+ *	@Last modified time: 2026-11-16T17:59:18-08:00 (1794880758)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -28,10 +28,12 @@ import type { OtpConfig, SecretsConfig } from "../types.ts";
 import { emptyState, validState, type OtpState, type StateReading } from "../otp/state.ts";
 import { OTP_DEFAULTS } from "../otp/policy.ts";
 import { base32Encode } from "../otp/totp.ts";
-import { newSeed, otpauthUri as libOtpauthUri, renderQr as libRenderQr } from "@cldmv/lib-otp";
+import { newSeed, otpauthUri as libOtpauthUri } from "@cldmv/lib-otp";
+// The QR renderer is on its own subpath so the daemon, which bundles the main entry, never
+// pulls in qrcode (CommonJS, require("fs")) — see #208. Only this CLI imports it.
+import { renderQr as libRenderQr, type RenderQrOpts } from "@cldmv/lib-otp/qr";
 import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, fchmodSync, fchownSync, statSync, constants } from "node:fs";
 import { dirname, join, basename } from "node:path";
-import QRCode from "qrcode";
 
 export {
 	DEFAULT_MAX_FAILURES,
@@ -73,9 +75,12 @@ export function otpauthUri(seed: string, host: string): string {
 	return libOtpauthUri(seed, host, "gh-broker");
 }
 
-/** The URI as a terminal QR code. `toString` is the qrcode library's, injectable for tests. */
-export async function renderQr(uri: string, toString: (text: string, options: { type: "terminal"; small: boolean }) => Promise<string> = QRCode.toString): Promise<string> {
-	return (await libRenderQr(uri, { toString: toString as (text: string, options: Record<string, unknown>) => Promise<string> })) as string;
+/** The URI as a terminal QR code. `toString` defaults to the qrcode library's (through lib-otp), injectable for tests. */
+export async function renderQr(uri: string, toString?: (text: string, options: { type: "terminal"; small: boolean }) => Promise<string>): Promise<string> {
+	// No options object at all when nothing is injected: a plain {} inherits toString(), which
+	// type-checks as a clash with RenderQrOpts.toString (lib-otp reads own properties only).
+	const opts: RenderQrOpts | undefined = toString ? { toString: toString as (text: string, options: Record<string, unknown>) => Promise<string> } : undefined;
+	return (await libRenderQr(uri, opts)) as string;
 }
 
 /**
