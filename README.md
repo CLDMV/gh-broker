@@ -19,17 +19,17 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.11.1 (November 2026)
+### Latest: v0.11.2 (November 2026)
 
-- **The daemon loads again.** v0.11.0's daemon crashed at startup (`Dynamic require of "fs"`), so its install never deployed. The QR renderer now comes from `@cldmv/lib-otp/qr`, which keeps `qrcode` out of the daemon, and the build now runs the built daemon before anything can publish.
-- [View full v0.11.1 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.1.md)
+- **`npm_scaffold` waits for npm's staged first publish.** npm stages a new package's first publish, and the verb used to read the registry once and report a failure. It now treats npm's `0.0.0-stage` or the placeholder as the package existing, moves on to the trusted publisher as soon as either shows, and returns `status: "pending"` instead of an error if neither shows within two minutes.
+- [View full v0.11.2 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.2.md)
 
 ### Recent Releases
 
+- **v0.11.1** (November 2026) — the daemon loads again; `qrcode` is out of the daemon bundle and the build runs the built daemon before publishing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.1.md))
 - **v0.11.0** (November 2026) — `npm_scaffold` takes `path` and `ref`, and the core library takes shape; its daemon bundle didn't load, fixed in v0.11.1 ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.0.md))
 - **v0.10.7** (November 2026) — `npm_scaffold` resumes when a staged placeholder went live later ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.7.md))
 - **v0.10.6** (November 2026) — the `npm_scaffold` placeholder is `0.0.1-placeholder`, and the verb checks it went live before moving on ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.6.md))
-- **v0.10.5** (November 2026) — a first fix for the `npm_scaffold` placeholder, and the first refactors toward the core library ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.5.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
