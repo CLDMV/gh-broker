@@ -40,7 +40,9 @@ import { buildTarball, tarballDigests } from "./npm-tarball.ts";
  * Every npm write needs its own one-time password, so each call makes exactly one write:
  * the first call publishes the placeholder and returns `needs_otp` for the trusted
  * publisher; the second call (with the next code) adds it. A refused or expired code is
- * not an error either: the result is `needs_otp` naming what is left.
+ * not an error either: the result is `needs_otp` naming what is left. npm stages a new
+ * package's first publish and makes it live on its own shortly after; the call waits for that,
+ * and if it takes too long the result is `pending` (call again later with a fresh code).
  */
 
 /**
@@ -103,7 +105,11 @@ export const NPM_SCAFFOLD_SCHEMA = {
 export type NpmScaffoldStep = "publish" | "trust";
 
 export interface NpmScaffoldResult {
-	status: "done" | "needs_otp";
+	/**
+	 * done: finished. needs_otp: call again with the next npm code. pending: npm accepted the
+	 * first publish but is still making it live; call again with a fresh code in a minute.
+	 */
+	status: "done" | "needs_otp" | "pending";
 	package: string;
 	repository: string;
 	workflow: string;
@@ -125,7 +131,18 @@ export interface NpmScaffoldDeps {
 	octokit: Octokit;
 	registry: NpmRegistry;
 	scopes: string[];
+	/** How long to wait for a staged first publish to go live, and how often to look. */
+	liveWaitMs?: number;
+	livePollMs?: number;
+	/** Injected for tests. */
+	sleep?: (ms: number) => Promise<void>;
 }
+
+/** npm made a staged first publish live about 77 s after answering 202; allow some margin. */
+const LIVE_WAIT_MS = 120_000;
+const LIVE_POLL_MS = 5_000;
+const PENDING_MESSAGE =
+	"npm accepted the placeholder publish but is still making the first publish live (npm stages a new package's first version and publishes it on its own, usually within a couple of minutes; nothing needs approving). Wait a minute, then call again with a fresh npm code to add the trusted publisher.";
 
 const fail = (msg: string): never => {
 	throw new Error(`npm_scaffold: ${msg}`);
@@ -303,11 +320,21 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 			}
 			throw err;
 		}
-		// Only call it published once the registry serves it: npm has answered a publish with 2xx
-		// and then not shown the version (it was staged), which left the trust step with nothing.
-		const live = await deps.registry.packument(args.package);
+		// Only call it published once the registry serves it. npm stages a new package's first
+		// publish: it answers 202, creates the package with its own 0.0.0-stage at once, and
+		// makes our version live on its own a minute or so later. Wait for that here.
+		const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+		const waitMs = deps.liveWaitMs ?? LIVE_WAIT_MS;
+		const pollMs = deps.livePollMs ?? LIVE_POLL_MS;
+		let live = await deps.registry.packument(args.package);
+		for (let waited = 0; !live?.versions?.[PLACEHOLDER_VERSION] && waited < waitMs; waited += pollMs) {
+			await sleep(pollMs);
+			live = await deps.registry.packument(args.package);
+		}
 		if (!live?.versions?.[PLACEHOLDER_VERSION]) {
-			fail(`npm answered the placeholder publish with HTTP ${answer.status} (${answer.detail || "no message"}), but ${args.package}@${PLACEHOLDER_VERSION} isn't on the registry, so it may have been staged rather than published; check ${base.url} and npm's staged packages before trying again`);
+			// The publish was accepted (2xx) and the code is spent, so this is not an error: a
+			// later call finds the placeholder and goes on to the trusted publisher.
+			return { ...base, status: "pending", done: ["publish"], remaining: ["trust"], message: `${PENDING_MESSAGE} (npm answered HTTP ${answer.status}${answer.detail ? `: ${answer.detail}` : ""}.)` };
 		}
 		// That code is spent: every npm write needs its own one-time password, so don't
 		// send it again (a guaranteed refusal that counts as a failed 2FA attempt).
@@ -324,6 +351,11 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 	// Every version must be one of our marked placeholders or npm's own staging placeholder,
 	// with at least one of ours: a staged publish can go live later, next to npm's 0.0.0-stage.
 	const entries = Object.entries(existing.versions ?? {});
+	// Only npm's staging placeholder so far: a first publish (ours, if a call just made it) is
+	// still going live. Nothing is written, so a stage that isn't ours costs nothing here.
+	if (entries.length === 1 && existing.versions?.[NPM_STAGE_PLACEHOLDER]) {
+		return { ...base, status: "pending", done: [], remaining: ["trust"], message: PENDING_MESSAGE };
+	}
 	const placeholders = entries.filter(([v, doc]) => OUR_PLACEHOLDER.test(v) && doc?.scaffoldedBy === SCAFFOLD_MARKER).map(([, doc]) => doc);
 	const ours = placeholders.length > 0 && entries.length === placeholders.length + (existing.versions?.[NPM_STAGE_PLACEHOLDER] ? 1 : 0);
 	if (!ours) fail(`${args.package} already exists on the registry (${entries.length} version(s)) and was not created by npm_scaffold — set up its trusted publisher on npmjs.com instead`);
