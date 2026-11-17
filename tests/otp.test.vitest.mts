@@ -45,6 +45,16 @@ describe("showSeed", () => {
 		expect(text).toContain("otp rotate");
 	});
 
+	it("hands an injected toString to lib-otp's renderQr as a small terminal QR", async () => {
+		const calls: unknown[] = [];
+		const qr = await otp.renderQr("otpauth://totp/x?secret=ABC", async (text, options) => {
+			calls.push([text, options]);
+			return "QR";
+		});
+		expect(qr).toBe("QR");
+		expect(calls).toEqual([["otpauth://totp/x?secret=ABC", { type: "terminal", small: true }]]);
+	});
+
 	it("renders a real terminal QR by default", async () => {
 		const qr = await otp.renderQr("otpauth://totp/x?secret=ABC");
 		expect(qr.split("\n").length).toBeGreaterThan(5);
