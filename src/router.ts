@@ -161,6 +161,11 @@ export class Router {
 			audit({ tool, user, mode: rule.mode, decision: "custom", ok: true });
 			return { content: [{ type: "text", text: JSON.stringify(this.otp.status(user)) }] };
 		}
+		// The GHCR verbs authenticate with config.ghcr's own credential, never an owner's
+		// GitHub PAT, so they don't need (or touch) a config.owners entry. Checked BEFORE
+		// the gate: a Router built without GhcrVerbs refuses here, with an audit row, and
+		// no code is spent on a call that can't run.
+		if (GHCR_TOOLS.has(tool)) return this.callGhcr(tool, args, rule, user);
 		// Checked before the gate, so a call that can't run never asks for a code.
 		let createdIn: string | undefined;
 		if (REPO_CREATING.has(tool) || tool === "actions_run_trigger") {
@@ -182,9 +187,6 @@ export class Router {
 				throw err;
 			}
 		}
-		// The GHCR verbs authenticate with config.ghcr's own credential, never an owner's GitHub
-		// PAT, so they don't need (or touch) a config.owners entry.
-		if (GHCR_TOOLS.has(tool)) return this.callGhcr(tool, args, rule, user, otp);
 		// Owner-less reads (global advisory DB, get_me, notifications) fall back to
 		// the configured defaultOwner's READ PAT. Writes never fall back — a write
 		// must always name the owner it targets. The config.owners read here is the
@@ -223,16 +225,19 @@ export class Router {
 	}
 
 	/** GHCR verbs: config.ghcr checks the owner and image itself; no GitHub PAT is resolved. */
-	private async callGhcr(tool: string, args: Record<string, unknown>, rule: ToolRule, user: string, otp: OtpAudit | undefined): Promise<CallToolResult> {
+	private async callGhcr(tool: string, args: Record<string, unknown>, rule: ToolRule, user: string): Promise<CallToolResult> {
 		const owner = extractOwner(args) ?? "";
 		const repo = typeof args.image === "string" ? `${owner}/${args.image}` : owner;
-		if (!this.ghcr) throw new Error(`tool "${tool}" runs on the daemon's GHCR service, but no GhcrVerbs implementation was injected into this Router`);
+		if (!this.ghcr) {
+			audit({ tool, user, owner, mode: rule.mode, decision: "error", detail: "no ghcr service" });
+			throw new Error(`tool "${tool}" runs on the daemon's GHCR service, but no GhcrVerbs implementation was injected into this Router`);
+		}
 		try {
 			const out = tool === "ghcr_push" ? await this.ghcr.push(args) : tool === "ghcr_tags" ? await this.ghcr.tags(args) : this.ghcr.status(args);
-			audit({ tool, user, owner, mode: rule.mode, repo, decision: "custom", ok: true, ...otp });
+			audit({ tool, user, owner, mode: rule.mode, repo, decision: "custom", ok: true });
 			return { content: [{ type: "text", text: JSON.stringify(out) }] };
 		} catch (err) {
-			audit({ tool, user, owner, mode: rule.mode, repo, decision: "custom", ok: false, detail: (err as Error).message, ...otp });
+			audit({ tool, user, owner, mode: rule.mode, repo, decision: "custom", ok: false, detail: (err as Error).message });
 			throw err;
 		}
 	}
