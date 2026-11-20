@@ -341,6 +341,7 @@ export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { inv
 			// (report_ci_status's log fetch) is best-effort and tolerates the failure.
 			upstream: upstream ?? { forward: async () => { throw new InvokeError("no-upstream", "this host provides no upstream client (ctx.upstream)"); } },
 			signal,
+			...(ctx.timeoutMs !== undefined ? { timeoutMs: ctx.timeoutMs } : {}),
 			...(config.npm ? { npm: config.npm } : {})
 		};
 		const result = await dispatchCall(deps, rule, name, callArgs, owner, token, ctx.person);

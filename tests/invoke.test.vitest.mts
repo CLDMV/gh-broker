@@ -336,6 +336,7 @@ describe("run — the driver adapter (design #175 §2b, the rummage run shape)",
 describe("invoke — timeouts: timeoutMs × ctx.signal reach Octokit and the MCP transport (design #175 §2b)", () => {
 	beforeEach(() => {
 		requestMock.mockReset();
+		vi.mocked(Octokit).mockClear();
 	});
 
 	it("timeoutMs combines with ctx.signal via AbortSignal.any, and a hanging upstream is cut off", async () => {
@@ -375,11 +376,17 @@ describe("invoke — timeouts: timeoutMs × ctx.signal reach Octokit and the MCP
 		const { invoke } = createBroker(makeConfig());
 		const ctx = mkCtx({ timeoutMs: 1000 });
 		await invoke("issue_labels", { owner: "cldmv", repo: "x", issue_number: 1, add: ["bug"] }, ctx);
-		const constructed = vi.mocked(Octokit).mock.calls[0]![0] as { auth: string; request?: { signal?: AbortSignal } };
+		const constructed = vi.mocked(Octokit).mock.calls.at(-1)![0] as { auth: string; request?: { signal?: AbortSignal } };
 		expect(constructed.auth).toBe("token:cldmv:write");
 		expect(constructed.request?.signal).toBeInstanceOf(AbortSignal);
 		expect(constructed.request?.signal).not.toBe(ctx.signal); // combined with the timeout
-	});
+		// The combined signal actually fires with a TimeoutError when timeoutMs elapses —
+		// that is the property the SDK's request.signal plumbing delivers to a real call.
+		expect(constructed.request?.signal.aborted).toBe(false);
+		await new Promise((r) => setTimeout(r, 1100));
+		expect(constructed.request?.signal.aborted).toBe(true);
+		expect((constructed.request?.signal.reason as { name?: string }).name).toBe("TimeoutError");
+	}, 3000);
 
 	it("the library forwarder bounds the handshake with the signal and the tool call with the timeout", async () => {
 		const upstream = perCallUpstream("https://api.githubcopilot.com/mcp/");
@@ -399,5 +406,18 @@ describe("invoke — timeouts: timeoutMs × ctx.signal reach Octokit and the MCP
 		expect(connectMock.mock.calls[0]![1]).toEqual({ signal });
 		// timeoutMs reaches callTool's request options — the SDK's 60 s default can't cap it.
 		expect(callToolMock).toHaveBeenCalledWith({ name: "get_me", arguments: { a: 1 } }, undefined, { signal, timeout: 45_000 });
+	});
+
+	it("invoke threads timeoutMs through the router core into the forwarder's callTool options", async () => {
+		// The REAL path: invoke → dispatchCall → forwardCall → perCallUpstream — not a
+		// direct perCallUpstream call, which would skip the threading this pins.
+		const { invoke } = createBroker(makeConfig(), { upstreamUrl: "https://mcp.example/mcp/" });
+		const ctx = mkCtx({ timeoutMs: 45_000 });
+		delete (ctx as { upstream?: unknown }).upstream; // the library forwarder serves the call
+		await invoke("pull_request_read", { owner: "cldmv", repo: "x", pullNumber: 1 }, ctx);
+		expect(callToolMock).toHaveBeenCalledTimes(1);
+		const opts = callToolMock.mock.calls[0]![2] as { signal?: AbortSignal; timeout?: number };
+		expect(opts.timeout).toBe(45_000);
+		expect(opts.signal).toBeInstanceOf(AbortSignal); // the combined signal
 	});
 });

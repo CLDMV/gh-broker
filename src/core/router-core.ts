@@ -88,6 +88,13 @@ export interface RouteDeps {
 	 */
 	signal?: AbortSignal;
 	/**
+	 * The caller's timeoutMs (design #175 §2b), reaching the MCP transport's callTool
+	 * request options so the SDK's own 60 s default can't cap a longer caller timeout.
+	 * Absent on the daemon path. Only meaningful together with the signal, which carries
+	 * the AbortSignal.timeout half.
+	 */
+	timeoutMs?: number;
+	/**
 	 * The npm integration — npm_scaffold's registry base + scopes. Availability required
 	 * it before the tool was served, so the dispatch may assume it is present there.
 	 */
@@ -168,7 +175,7 @@ export async function dispatchCall(deps: RouteDeps, rule: ToolRule, tool: string
 		? dispatchCustom(deps, tool, args, owner, token, person)
 		: rule.augment
 			? dispatchAugmented(deps, tool, args, owner, token)
-			: forwardCall(deps.upstream, tool, args, token, deps.signal);
+			: forwardCall(deps.upstream, tool, args, token, deps.signal, deps.timeoutMs);
 }
 
 /**
@@ -234,7 +241,7 @@ export async function dispatchCustom(deps: RouteDeps, tool: string, args: Record
 		}
 		case "report_dependents": {
 			const octokit = client(deps, token);
-			const out = await reportDependents(octokit, args as unknown as ReportDependentsInput, deps.npm?.registry ? { registry: deps.npm.registry } : {});
+			const out = await reportDependents(octokit, args as unknown as ReportDependentsInput, { ...(deps.npm?.registry ? { registry: deps.npm.registry } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
 			return { content: [{ type: "text", text: JSON.stringify(out) }] };
 		}
 		case "report_release_prs": {
@@ -268,12 +275,12 @@ export async function dispatchCustom(deps: RouteDeps, tool: string, args: Record
 			// typed no-access error rather than handing null to a client. Unreachable on the
 			// daemon (config validation guarantees both refs; npm_scaffold is only served when
 			// the npm token is stored), but invoke's foreign resolvers make it reachable.
-			const githubToken = await deps.resolveToken({ person, owner, mode: "read", kind: "github" });
+			const githubToken = await deps.resolveToken({ person, owner, mode: "read", kind: "github", signal: deps.signal });
 			if (!githubToken) throw new Error(`no credentials configured for owner "${owner}" — add it to config.owners + creds`);
-			const npmToken = await deps.resolveToken({ person, owner, mode: "write", kind: "npm" });
+			const npmToken = await deps.resolveToken({ person, owner, mode: "write", kind: "npm", signal: deps.signal });
 			if (!npmToken) throw new Error(`no npm token configured — add npm.token to the config`);
 			const octokit = client(deps, githubToken);
-			const registry = new NpmRegistry({ token: npmToken, ...(npm.registry ? { registry: npm.registry } : {}) });
+			const registry = new NpmRegistry({ token: npmToken, signal: deps.signal, ...(npm.registry ? { registry: npm.registry } : {}) });
 			const out = await npmScaffold(args, { octokit, registry, scopes: npm.scopes });
 			return { content: [{ type: "text", text: JSON.stringify(out) }] };
 		}
@@ -340,7 +347,7 @@ export async function dispatchAugmented(deps: RouteDeps, tool: string, args: Rec
 	switch (tool) {
 		case "pull_request_read": {
 			const { ciVerbosity, logLines, ...upstreamArgs } = args as Record<string, unknown> & { ciVerbosity?: number; logLines?: number };
-			const result = await forwardCall(deps.upstream, tool, upstreamArgs, token, deps.signal);
+			const result = await forwardCall(deps.upstream, tool, upstreamArgs, token, deps.signal, deps.timeoutMs);
 			if (ciVerbosity === undefined) return result;
 			if ((upstreamArgs.method ?? "get") !== "get") return result; // only the single-PR "get" shape is augmentable
 
@@ -369,7 +376,7 @@ export async function dispatchAugmented(deps: RouteDeps, tool: string, args: Rec
 			// Same opt-in contract as pull_request_read, applied to each item of the list.
 			// Detail is capped by maxDetail; see ciStatusForHeads for the shared budget.
 			const { ciVerbosity, logLines, maxDetail, ...upstreamArgs } = args as Record<string, unknown> & { ciVerbosity?: number; logLines?: number; maxDetail?: number };
-			const result = await forwardCall(deps.upstream, tool, upstreamArgs, token, deps.signal);
+			const result = await forwardCall(deps.upstream, tool, upstreamArgs, token, deps.signal, deps.timeoutMs);
 			if (ciVerbosity === undefined) return result;
 
 			const textBlock = result.content?.find((c) => (c as { type?: string }).type === "text") as { text?: string } | undefined;
@@ -400,6 +407,6 @@ export async function dispatchAugmented(deps: RouteDeps, tool: string, args: Rec
 			return result;
 		}
 		default:
-			return forwardCall(deps.upstream, tool, args, token, deps.signal);
+			return forwardCall(deps.upstream, tool, args, token, deps.signal, deps.timeoutMs);
 	}
 }
