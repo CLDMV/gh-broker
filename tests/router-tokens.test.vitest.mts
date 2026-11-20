@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { Router, hostTokenResolver } from "../src/router.ts";
+import { hostTokenResolver } from "../src/router.ts";
+import { HostRouter as Router } from "./helpers/router-host.mts";
 
 // Security pins for design #175 §2a (slice 4): the TokenResolver is the router's ONLY
 // credential path, and it honors the owner and the EFFECTIVE mode it is asked for. A

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { Router } from "../src/router.ts";
+import { HostRouter as Router } from "./helpers/router-host.mts";
 import { OtpRefusal } from "../src/types.ts";
 import { unavailableReason } from "../src/availability.ts";
 import { GhcrService } from "../src/verbs/ghcr_push.ts";
@@ -229,22 +229,95 @@ describe("unavailableReason takes the injected capability predicate (design #175
 
 	it("an unstored npm credential hides npm_scaffold, exactly as before", () => {
 		const has = (ref: string) => ref !== "cred:npm-token";
-		expect(unavailableReason(rule("npm_scaffold"), config(), has, () => undefined)).toBe(
+		expect(unavailableReason(rule("npm_scaffold"), config(), { has, otpProblem: () => undefined })).toBe(
 			'its credential "npm-token" is not stored (re-run the installer with --npm)'
 		);
 	});
 
 	it("an unstored ghcr credential hides the ghcr verbs, exactly as before", () => {
-		expect(unavailableReason(rule("ghcr_push"), config(), () => false, () => undefined)).toBe(
+		expect(unavailableReason(rule("ghcr_push"), config(), { has: () => false, otpProblem: () => undefined })).toBe(
 			'no GHCR credential is stored ("alpha-ghcr"; re-run the installer to add one)'
 		);
 	});
 
 	it("a gated tool is hidden by the injected otpProblem (the host's seed-decoding check)", () => {
-		expect(unavailableReason(rule("merge_pull_request"), config(), () => true, () => "OTP is not set up")).toBe("OTP is not set up");
+		expect(unavailableReason(rule("merge_pull_request"), config(), { has: () => true, otpProblem: () => "OTP is not set up" })).toBe("OTP is not set up");
 	});
 
 	it("credentials stored + OTP ready → available", () => {
-		expect(unavailableReason(rule("ghcr_push"), config(), () => true, () => undefined)).toBeUndefined();
+		expect(unavailableReason(rule("ghcr_push"), config(), { has: () => true, otpProblem: () => undefined })).toBeUndefined();
+	});
+});
+
+describe("the Router's ghcr refusal runs before the gate (fix 8)", () => {
+	it("a Router built without GhcrVerbs refuses a ghcr tool BEFORE the gate, with an audit row", async () => {
+		const { Router } = await import("../src/router.ts");
+		const logLines: string[] = [];
+		const auditSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void logLines.push(a.join(" ")));
+		try {
+			const cfg = {
+				listen: "unix:/x.sock",
+				upstream: "https://api.githubcopilot.com/mcp/",
+				tools: [{ name: "ghcr_push", mode: "write" }],
+				owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
+				// The availability check must pass so the pin reaches the no-GhcrVerbs refusal.
+				ghcr: { dropDir: "/var/lib/gh-broker/drop", protectReleaseTags: true, maxArchiveBytes: 1_073_741_824, owners: { cldmv: { credential: "cred:ghcr-cldmv" } } }
+			};
+			const secrets = { resolve: vi.fn(() => "token:x"), has: vi.fn(() => true) };
+			const upstream = { forward: vi.fn() };
+			// otp: true on the rule so the call WOULD reach the gate if the branch were still
+			// after it — the pin is that the refusal happens before any code is asked for.
+			// The gate is REQUIRED since the default flips (slice 5) — a stub whose authorize
+			// throws proves the ghcr refusal happens before any gate interaction.
+			const gate = { enabled: true, hardLockRefusal: () => undefined, authorize: () => { throw new Error("the gate must not run for a ghcr call"); }, status: () => ({}) };
+			const r = new Router(cfg as any, secrets as any, upstream as any, undefined, gate, undefined);
+			await expect(r.call("ghcr_push", { image: "x" }, { user: "tester" })).rejects.toThrow(/no GhcrVerbs implementation was injected/);
+			expect(secrets.resolve).not.toHaveBeenCalled(); // no token resolved
+			expect(upstream.forward).not.toHaveBeenCalled();
+			const row = logLines.find((l) => l.includes('"decision":"error"'));
+			expect(JSON.parse(row!)).toMatchObject({ tool: "ghcr_push", user: "tester", decision: "error", detail: "no ghcr service" });
+		} finally {
+			auditSpy.mockRestore();
+		}
+	});
+});
+describe("a gated ghcr tool still goes through the gate (fix N1: the dispatch must stay after the gate)", () => {
+	it("a gated ghcr_push reaches authorize, is denied with no code, and dispatches with a good one", async () => {
+		const { Router } = await import("../src/router.ts");
+		const { OtpRefusal } = await import("../src/otp/gate.ts");
+		const logLines: string[] = [];
+		const auditSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void logLines.push(a.join(" ")));
+		try {
+			const cfg = {
+				listen: "unix:/x.sock",
+				upstream: "https://api.githubcopilot.com/mcp/",
+				// config.json can gate a ghcr tool ("otp": true) — validation only rejects
+				// that on otp_status — and a gated ghcr call must still be asked for a code.
+				tools: [{ name: "ghcr_push", mode: "write", otp: true }],
+				owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
+				ghcr: { dropDir: "/var/lib/gh-broker/drop", protectReleaseTags: true, maxArchiveBytes: 1_073_741_824, owners: { cldmv: { credential: "cred:ghcr-cldmv" } } },
+				otp: { seed: "cred:otp-seed" }
+			};
+			// The availability check decodes the stored seed, so the store must hand back a
+			// valid base32 seed for the otp credential (base32 of "12345678901234567890").
+			const secrets = { resolve: vi.fn((ref: string) => (ref === "cred:otp-seed" ? "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" : "token:x")), has: vi.fn(() => true) };
+			const upstream = { forward: vi.fn() };
+			const ghcr = { push: vi.fn().mockResolvedValue({ pushed: true }), tags: vi.fn(), status: vi.fn() };
+			const authorize = vi.fn(() => { throw new OtpRefusal("OTP required for ghcr_push. Nothing was run.", { otp: "refused" }); });
+			const gate = { enabled: true, hardLockRefusal: () => undefined, authorize, status: () => ({}) };
+			const r = new Router(cfg as any, secrets as any, upstream as any, undefined, gate, ghcr);
+			await expect(r.call("ghcr_push", { image: "x", otp: "000000" }, { user: "tester" })).rejects.toThrow(/OTP required/);
+			// The gate RAN: authorize was asked, and the deny row carries the otp fields.
+			expect(authorize).toHaveBeenCalledTimes(1);
+			const row = logLines.find((l) => l.includes('"decision":"deny"'));
+			expect(JSON.parse(row!)).toMatchObject({ tool: "ghcr_push", user: "tester", decision: "deny", detail: "otp" });
+			expect(ghcr.push).not.toHaveBeenCalled();
+			// And with a good code it dispatches through the ghcr service with the otp fields.
+			authorize.mockImplementationOnce(() => ({ otp: "opened", window: "w" }));
+			await r.call("ghcr_push", { image: "x", otp: "654321" }, { user: "tester" });
+			expect(ghcr.push).toHaveBeenCalledTimes(1);
+		} finally {
+			auditSpy.mockRestore();
+		}
 	});
 });

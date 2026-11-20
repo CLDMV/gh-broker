@@ -91,7 +91,7 @@ function legacyCatalogAuth(config: Config, store: SecretStore): { resolveToken: 
 		resolveToken: async () => (firstOwner ? store.resolve(firstOwner.read) : null),
 		upstreamTimeoutMs: Number(process.env.GH_BROKER_CATALOG_TIMEOUT_MS ?? 10000),
 		log: (message) => console.error(message),
-		unavailable: (rule) => unavailableReason(rule, config, (ref) => store.has(ref), (c) => otpSetupProblem(c, store))
+		unavailable: (rule) => unavailableReason(rule, config, { has: (ref) => store.has(ref), otpProblem: () => otpSetupProblem(config, store) })
 	};
 }
 

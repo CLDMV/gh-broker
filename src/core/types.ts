@@ -177,6 +177,9 @@ export interface TokenRequest {
 	owner?: string;
 	mode: Mode;
 	kind: "github" | "ghcr" | "npm";
+	/** The call's cancellation signal (design #175 §2b), for resolvers that fetch. The
+	 * daemon's resolver ignores it (its store reads are local). */
+	signal?: AbortSignal;
 }
 
 /**
@@ -231,6 +234,15 @@ export type SecurityEvent =
 	| { kind: "unlock"; person: string; by: string }
 	| { kind: "refused-mode"; tool: string; person: string; mode: Mode }
 	| { kind: "protected-write"; tool: string; person: string; detail: string };
+
+/**
+ * The library's optional audit surface (design #175 §2c): security events only, one
+ * injected sink. The per-call rows stay the host's — the library emits none. With no
+ * sink, nothing happens.
+ */
+export interface AuditSink {
+	security(event: SecurityEvent): void;
+}
 
 /** The audit fields a gated (or hard-locked) call adds to its log line (src/otp/gate.ts). */
 export type OtpOutcome = "window" | "opened" | "refused" | "locked" | "hard-locked";
