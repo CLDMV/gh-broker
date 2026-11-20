@@ -7,10 +7,21 @@
 	"bin": {
 		"gh-broker": "bin/gh-broker.mjs"
 	},
-	"main": "./dist/index.mjs",
+	"exports": {
+		".": {
+			"types": "./types/core/index.d.ts",
+			"default": "./dist/core/index.mjs"
+		},
+		"./core": {
+			"types": "./types/core/index.d.ts",
+			"default": "./dist/core/index.mjs"
+		}
+	},
+	"main": "./dist/core/index.mjs",
 	"files": [
 		"dist",
 		"!dist/**/*.map",
+		"types",
 		"bin",
 		"!bin/**/*.map",
 		"deploy/gh-broker.service",
@@ -18,7 +29,7 @@
 		"config.sample.json"
 	],
 	"engines": {
-		"node": ">=22.0.0"
+		"node": ">=20.19.0"
 	},
 	"devEngines": {
 		"runtime": {
