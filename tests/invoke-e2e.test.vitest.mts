@@ -154,14 +154,34 @@ describe("end to end: a strict host through invoke (design #175 §2b/§2h)", () 
 	});
 
 	it("a host rule otp:false on a manifest-gated tool still goes through approve (the gate is add-only in the strict policy)", async () => {
-		const h = host();
+		// The override MATTERS: the host's rule turns the gate OFF, and the strict policy's
+		// add-only rule must put it back — if invoke trusted the rule's otp, approve would
+		// never be called. (A tool list without the otp:false passes this pin trivially.)
+		const h = host({
+			tools: [
+				{ name: "pull_request_read", mode: "read" },
+				{ name: "issue_write", mode: "write" },
+				{ name: "merge_pull_request", mode: "write", otp: false },
+				{ name: "otp_status", mode: "read" }
+			]
+		});
 		const ctx = h.ctx({ approve: vi.fn(async () => "ok" as const) });
 		await h.broker.invoke("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1 }, ctx);
 		expect(ctx.approve).toHaveBeenCalledTimes(1);
 	});
 
 	it("a manifest-read tool configured as write still resolves the READ token (strict clamps to the manifest)", async () => {
-		const h = host();
+		// The override MATTERS: the host's rule asks for write on a manifest-read tool —
+		// strict clamps the effective mode to the manifest's, and the resolver must be
+		// asked for the READ token, never the write one.
+		const h = host({
+			tools: [
+				{ name: "pull_request_read", mode: "write" },
+				{ name: "issue_write", mode: "write" },
+				{ name: "merge_pull_request", mode: "write" },
+				{ name: "otp_status", mode: "read" }
+			]
+		});
 		await h.broker.invoke("pull_request_read", { owner: "cldmv", repo: "x", pullNumber: 1 }, h.ctx());
 		expect(h.requests.at(-1)).toMatchObject({ owner: "cldmv", mode: "read", kind: "github" });
 	});
