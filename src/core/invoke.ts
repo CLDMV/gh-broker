@@ -164,15 +164,26 @@ function toolOfRequest(request: DriverRequest): string {
  */
 export function perCallUpstream(url: string, clientInfo = { name: "cldmv-gh-broker", version: "0.0.0" }): Upstream {
 	return {
-		async forward(tool, args, token, signal) {
+		async forward(tool, args, token, signal, timeoutMs) {
 			const client = new Client(clientInfo);
 			const transport = new StreamableHTTPClientTransport(new URL(url), {
-				// The call's signal reaches the transport's fetches (design #175 §2b).
-				requestInit: { headers: { Authorization: `Bearer ${token}` }, ...(signal ? { signal } : {}) }
+				// The SDK's StreamableHTTPClientTransport overwrites requestInit.signal with
+				// its own abort controller — the call's signal bounds the HANDSHAKE instead,
+				// via connect's options (design #175 §2b).
+				requestInit: { headers: { Authorization: `Bearer ${token}` } }
 			});
 			try {
-				await client.connect(transport);
-				return (await (signal ? client.callTool({ name: tool, arguments: args }, undefined, { signal }) : client.callTool({ name: tool, arguments: args }))) as CallToolResult;
+				await client.connect(transport, signal ? { signal } : undefined);
+				// timeoutMs in the request options so the SDK's own 60 s default can't cap a
+				// longer caller timeout; the signal (which carries AbortSignal.timeout when
+				// timeoutMs was set) still aborts whichever fires first.
+				const requestOptions = signal || timeoutMs !== undefined
+					? { ...(signal ? { signal } : {}), ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}) }
+					: undefined;
+				// Without a signal or a timeout this is today's exact two-argument call.
+				return (await (requestOptions !== undefined
+					? client.callTool({ name: tool, arguments: args }, undefined, requestOptions)
+					: client.callTool({ name: tool, arguments: args }))) as CallToolResult;
 			} finally {
 				// The connection is per call: closed whatever the outcome, never cached.
 				await client.close().catch(() => {});

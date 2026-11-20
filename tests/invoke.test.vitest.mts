@@ -371,13 +371,23 @@ describe("invoke — timeouts: timeoutMs × ctx.signal reach Octokit and the MCP
 		expect(constructed.request?.signal).not.toBe(ctx.signal); // combined with the timeout
 	});
 
-	it("the library forwarder hands the signal to the transport and the tool call", async () => {
+	it("the library forwarder bounds the handshake with the signal and the tool call with the timeout", async () => {
 		const upstream = perCallUpstream("https://api.githubcopilot.com/mcp/");
 		const signal = new AbortController().signal;
-		await upstream.forward("get_me", { a: 1 }, "TOK", signal);
+		await upstream.forward("get_me", { a: 1 }, "TOK", signal, 45_000);
+		// The SDK's transport overwrites requestInit.signal with its own controller, so the
+		// call's signal bounds the HANDSHAKE via connect's options instead.
 		expect(StreamableHTTPClientTransport).toHaveBeenCalledWith(new URL("https://api.githubcopilot.com/mcp/"), {
-			requestInit: { headers: { Authorization: "Bearer TOK" }, signal }
+			requestInit: { headers: { Authorization: "Bearer TOK" } }
 		});
-		expect(callToolMock).toHaveBeenCalledWith({ name: "get_me", arguments: { a: 1 } }, undefined, { signal });
+		// The default handshake identity (a host's clientVersion flows through perCallUpstream's
+		// second parameter).
+		expect(Client).toHaveBeenCalledWith({ name: "cldmv-gh-broker", version: "0.0.0" });
+		// The transport instance is the mocked constructor's product; the signal bounds the
+		// handshake via connect's options.
+		expect(connectMock).toHaveBeenCalledTimes(1);
+		expect(connectMock.mock.calls[0]![1]).toEqual({ signal });
+		// timeoutMs reaches callTool's request options — the SDK's 60 s default can't cap it.
+		expect(callToolMock).toHaveBeenCalledWith({ name: "get_me", arguments: { a: 1 } }, undefined, { signal, timeout: 45_000 });
 	});
 });

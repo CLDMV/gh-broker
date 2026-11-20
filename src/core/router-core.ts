@@ -59,7 +59,7 @@ import { NpmRegistry } from "../verbs/npm-registry.ts";
 
 /** What the router needs from the upstream (hosted-MCP) client pool. */
 export interface Upstream {
-	forward(tool: string, args: Record<string, unknown>, token: string, signal?: AbortSignal): Promise<CallToolResult>;
+	forward(tool: string, args: Record<string, unknown>, token: string, signal?: AbortSignal, timeoutMs?: number): Promise<CallToolResult>;
 }
 
 /**
@@ -176,8 +176,13 @@ export async function dispatchCall(deps: RouteDeps, rule: ToolRule, tool: string
  * signal this is today's exact three-argument call — the daemon path, whose call shape
  * is pinned byte-identical by the router suite.
  */
-export function forwardCall(upstream: Upstream, tool: string, args: Record<string, unknown>, token: string, signal?: AbortSignal): Promise<CallToolResult> {
-	return signal ? upstream.forward(tool, args, token, signal) : upstream.forward(tool, args, token);
+export function forwardCall(upstream: Upstream, tool: string, args: Record<string, unknown>, token: string, signal?: AbortSignal, timeoutMs?: number): Promise<CallToolResult> {
+	// Each optional argument appears only when set — a signal-only call stays today's exact
+	// four-argument shape, and the daemon (neither set) stays at three.
+	if (signal !== undefined && timeoutMs !== undefined) return upstream.forward(tool, args, token, signal, timeoutMs);
+	if (signal !== undefined) return upstream.forward(tool, args, token, signal);
+	if (timeoutMs !== undefined) return upstream.forward(tool, args, token, undefined, timeoutMs);
+	return upstream.forward(tool, args, token);
 }
 
 /**
