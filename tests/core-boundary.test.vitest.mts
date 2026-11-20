@@ -20,11 +20,9 @@
  * script (#187) — it walks every .ts file under src/core/, resolves every relative
  * import, and classifies every bare specifier.
  *
- * The one documented exception: src/core/catalog.ts imports otpSettings/otpSetupProblem
- * from src/otp/policy.ts — the daemon's half of the otp/policy split, consumed by the
- * legacy SecretStore-compat shape that slice 3 kept for the pre-slice-3 catalog pins and
- * slice 6's packaging re-cut will remove. When that shape dies, this allowlist entry
- * should be deleted with it.
+ * There are no exceptions: every relative import under src/core/ resolves back into
+ * src/core/ (the legacy catalog→otp/policy.ts edge died with slice 6's packaging re-cut,
+ * which removed the SecretStore-compat shape along with its otpSetupProblem import).
  *
  * Pure re-export shims are treated as transparent: a relative import that lands outside
  * src/core/ passes when the target file consists only of `export ... from` statements
@@ -47,10 +45,10 @@ const allowedNpm = new Set(Object.keys(pkg.dependencies));
 
 /**
  * Relative imports allowed to leave src/core/, as "<file under src/core> -> <resolved
- * target under src/>". Catalog's legacy-compat edge is the only one — see the file
- * comment.
+ * target under src/>". Empty since slice 6: the catalog's legacy-compat edge died with
+ * the SecretStore-compat shape it served. The pin below keeps it that way.
  */
-const allowedOutside = new Set([["src/core/catalog.ts", "src/otp/policy.ts"].join(" -> ")]);
+const allowedOutside = new Set<string>();
 
 /**
  * Strips comments so prose like `told apart from "more than maxRepos"` can't read as an
@@ -197,9 +195,9 @@ describe("the src/core library boundary", () => {
 		expect(violations).toEqual([]);
 	});
 
-	it("allows exactly the documented outside edges", () => {
+	it("allows no outside edges at all", () => {
 		// The allowlist must never grow silently: if a future exception is added to
 		// allowedOutside, this pin forces it to be named here too.
-		expect([...allowedOutside]).toEqual(["src/core/catalog.ts -> src/otp/policy.ts"]);
+		expect([...allowedOutside]).toEqual([]);
 	});
 });

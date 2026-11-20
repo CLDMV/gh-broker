@@ -14,38 +14,33 @@
  */
 
 /**
- * The daemon's half of the old otp/policy module (design #175 §1's split row): the OTP
- * limits with their defaults, and the seed checks (whether OTP is set up at all — the
- * catalog's availability and the gate's readiness both ask here). The gating half —
- * OTP_STATUS, OTP_ARG, DEFAULT_GATED, isGated, windowText — is library vocabulary in
- * src/core/otp-policy.ts and is re-exported here so the old import path keeps working.
+ * The daemon's half of the old otp/policy module (design #175 §1's split row): the
+ * seed checks (whether OTP is set up at all — the catalog's availability and the gate's
+ * readiness both ask here) and the state file's location. The gating half — OTP_STATUS,
+ * OTP_ARG, DEFAULT_GATED, isGated, windowText — and the config-derived limit settings
+ * (OTP_DEFAULTS without statePath, otpSettings) are library vocabulary in
+ * src/core/otp-policy.ts and are re-exported/extended here so the old import path keeps
+ * working with its full shape.
  */
 
-import type { Config, OtpConfig, SecretStore } from "../types.ts";
+import type { Config, SecretStore } from "../types.ts";
 import { base32Decode } from "./totp.ts";
+import { OTP_DEFAULTS as LIB_OTP_DEFAULTS, otpSettings as libOtpSettings, type OtpSettings as LibOtpSettings } from "../core/otp-policy.ts";
 
 export { OTP_STATUS, OTP_ARG, DEFAULT_GATED, isGated, windowText } from "../core/otp-policy.ts";
 
-export const OTP_DEFAULTS = {
-	windowSeconds: 300,
-	maxFailures: 5,
-	lockoutSeconds: 600,
-	maxLockouts: 3,
-	statePath: "/var/lib/gh-broker/otp-state.json"
-} as const;
+/** The state file's default location — host knowledge, kept out of the library's settings shape (src/core/otp-policy.ts). */
+export const DEFAULT_STATE_PATH = "/var/lib/gh-broker/otp-state.json";
 
-export type OtpSettings = Required<Omit<OtpConfig, "seed">>;
+/** The daemon's OTP limits with their defaults, plus the state file's location. */
+export const OTP_DEFAULTS = { ...LIB_OTP_DEFAULTS, statePath: DEFAULT_STATE_PATH };
+
+/** The library's limit settings plus the host's state path. */
+export type OtpSettings = LibOtpSettings & { statePath: string };
 
 /** config.otp with every default filled in (defaults alone when there is no config.otp). */
 export function otpSettings(config: Config): OtpSettings {
-	const o = config.otp;
-	return {
-		windowSeconds: o?.windowSeconds ?? OTP_DEFAULTS.windowSeconds,
-		maxFailures: o?.maxFailures ?? OTP_DEFAULTS.maxFailures,
-		lockoutSeconds: o?.lockoutSeconds ?? OTP_DEFAULTS.lockoutSeconds,
-		maxLockouts: o?.maxLockouts ?? OTP_DEFAULTS.maxLockouts,
-		statePath: o?.statePath ?? OTP_DEFAULTS.statePath
-	};
+	return { ...libOtpSettings(config), statePath: config.otp?.statePath ?? OTP_DEFAULTS.statePath };
 }
 
 /** The decoded TOTP key, or why OTP isn't usable on this broker. */

@@ -17,12 +17,12 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { NO_PERSON, type Config, type SecretStore, type TokenResolver, type ToolRule } from "./types.ts";
 import { MANIFEST } from "./manifest.ts";
 import { unavailableReason } from "./availability.ts";
-import { OTP_ARG, isGated, windowText } from "./otp-policy.ts";
-// The two settings/setup readers are the daemon's half of otp/policy.ts (design #175 §1's
-// split row), consumed here by the legacy SecretStore-compat shape (slice 3's pre-slice-3
-// catalog pins, re-cut in slice 6) and by withOtp's window prose. One documented edge out
-// of src/core/ until that shape dies — see tests/core-boundary.test.vitest.mts's allowlist.
-import { otpSetupProblem, otpSettings } from "../otp/policy.ts";
+import { OTP_ARG, isGated, otpSettings, windowText } from "./otp-policy.ts";
+// The setup check is the daemon's half of otp/policy.ts (design #175 §1's split row),
+// consumed here by the legacy SecretStore-compat shape (slice 3's pre-slice-3 catalog
+// pins, re-cut in slice 6). One documented edge out of src/core/ until that shape dies —
+// see tests/core-boundary.test.vitest.mts's allowlist.
+import { otpSetupProblem } from "../otp/policy.ts";
 
 /**
  * Where buildCatalog's credentials and availability facts come from. The library shape
