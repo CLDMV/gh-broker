@@ -101,7 +101,9 @@ export interface InvokeCtx {
 	 * Returns "ok", or a typed refusal — which invoke rethrows verbatim as its own
 	 * typed error. Without it, a gated tool is refused (`otp-required`, fail closed).
 	 */
-	approve: (tool: string, person: string, args: unknown) => Promise<"ok" | { code: string; message: string }>;
+	/** The call's signal rides along (design #175 §2b) so an approve implementation can
+	 * abandon a long elicitation when the call is aborted or times out. */
+	approve: (tool: string, person: string, args: unknown, signal?: AbortSignal) => Promise<"ok" | { code: string; message: string; badCode?: boolean }>;
 }
 
 /**
@@ -154,6 +156,23 @@ function toolOfRequest(request: DriverRequest): string {
 		return request.tool;
 	}
 	throw new InvokeError("bad-request", `unsupported driver op "${String((request as { op?: unknown }).op)}" — expected "mcp", "graphql" or "rest"`);
+}
+
+/**
+ * The request's `op` must agree with what the manifest declares the tool to be: "mcp"
+ * forwards to the hosted MCP (a forwarded or config-only tool), "graphql"/"rest" run a
+ * LOCAL verb. A mismatch is the caller's bug — `{ op: "mcp", target: "issue_labels" }`
+ * would otherwise run the local verb as if it were a forward.
+ */
+function checkOpAgainstManifest(request: DriverRequest, name: string): void {
+	const decl = Object.hasOwn(MANIFEST, name) ? MANIFEST[name] : undefined;
+	if (decl === undefined) return; // a config-only tool has no kind to disagree with
+	if (request.op === "mcp" && decl.kind === "verb") {
+		throw new InvokeError("bad-args", `tool "${name}" is a local verb; a driver request cannot forward it with op "mcp"`);
+	}
+	if (request.op !== "mcp" && decl.kind === "forwarded") {
+		throw new InvokeError("bad-args", `tool "${name}" forwards to the hosted MCP; a driver request cannot run it with op "${request.op}"`);
+	}
 }
 
 /**
@@ -236,6 +255,15 @@ export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { inv
 		: undefined;
 
 	const invoke: InvokeFn = async (name, args, ctx) => {
+		// The call's signal (design #175 §2b): built and VALIDATED first — a negative or
+		// non-finite timeoutMs is a bad call, rejected before anything runs. The ctx signal,
+		// or the ctx signal combined with the caller's timeoutMs via AbortSignal.any —
+		// reaching approve, the resolver, Octokit as request.signal and the MCP transport
+		// as its signal. The timer exists only when a timeout was asked for.
+		if (ctx.timeoutMs !== undefined && (!Number.isFinite(ctx.timeoutMs) || ctx.timeoutMs <= 0)) {
+			throw new InvokeError("bad-args", `timeoutMs must be a positive number of milliseconds, got ${String(ctx.timeoutMs)}`);
+		}
+		const signal = ctx.timeoutMs !== undefined ? AbortSignal.any([ctx.signal, AbortSignal.timeout(ctx.timeoutMs)]) : ctx.signal;
 		// The policy gate: an unknown tool is refused, a disabled one too.
 		const rule = rules.get(name);
 		if (!rule) throw new InvokeError("unknown-tool", `tool "${name}" is not allowed`);
@@ -249,25 +277,53 @@ export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { inv
 		let callArgs = (args ?? {}) as Record<string, unknown>;
 		// Input validation before the approval, so a call that can't run never spends a
 		// code (the daemon's order — the creationOwner check is input validation, not a
-		// protected-write event, and runs before the gate).
+		// protected-write event, and runs before the gate). Bad arguments are typed
+		// bad-args errors, not raw throws.
 		let createdIn: string | undefined;
 		if (REPO_CREATING.has(name) || name === "actions_run_trigger") {
-			if (name === "actions_run_trigger") refuseLogDeletion(callArgs);
-			else createdIn = creationOwner(name, callArgs, config.owners);
+			try {
+				if (name === "actions_run_trigger") refuseLogDeletion(callArgs);
+				else createdIn = creationOwner(name, callArgs, config.owners);
+			} catch (err) {
+				throw new InvokeError("bad-args", (err as Error).message);
+			}
 		}
+		// Owner resolution — the daemon's exact shape: an owner named in the args, the
+		// creation org for repo-creating tools, or the configured defaultOwner's READ
+		// fallback for owner-less reads. Writes never fall back. Resolved BEFORE the
+		// approval: a call whose owner can't be determined must not spend a code.
+		let owner = createdIn ?? extractOwner(callArgs);
+		if (!owner && rule.mode === "read" && config.defaultOwner && Object.hasOwn(config.owners, config.defaultOwner)) {
+			owner = config.defaultOwner.toLowerCase();
+		}
+		if (!owner) throw new InvokeError("no-owner", `tool "${name}": could not determine repo owner from arguments`);
+		// A local verb needs no upstream (its best-effort sub-calls tolerate a missing one);
+		// a forwarded call fails closed without one. Checked before the approval for the
+		// same reason: nothing spends a code for a call that can't run.
+		const upstream = ctx.upstream ?? libraryUpstream;
+		if (!upstream && !rule.custom) throw new InvokeError("no-upstream", `tool "${name}" forwards to the hosted MCP, but this host provides no upstream client (ctx.upstream)`);
 		// The OTP approval seam (round-3 M5): every manifest-gated tool goes through it,
-		// with the raw args (the code rides in them until this point).
+		// with the raw args (the code rides in them until this point) and the call's signal.
 		if (isGated(rule)) {
 			if (typeof ctx.approve !== "function") {
 				// JS callers can omit the required seam; fail closed — no OTP, no gated call.
 				throw new InvokeError("otp-required", `tool "${name}" needs a one-time password, but this host provides no OTP approval (ctx.approve) — nothing was run`);
 			}
-			const verdict = await ctx.approve(name, ctx.person, callArgs);
+			const verdict = await ctx.approve(name, ctx.person, callArgs, signal);
 			if (verdict !== "ok") {
-				// The approval refused the call: the typed refusal passes through verbatim,
-				// and the security sink (if wired) sees the refused OTP check. invoke does
-				// not count failures — the approve implementation owns its counter.
-				ctx.audit?.security({ kind: "code-bad", tool: name, person: ctx.person, failures: 0 });
+				// The verdict must be a { code, message } refusal — anything else is the
+				// approve implementation's bug, refused as otp-refused rather than passed
+				// to the agent verbatim.
+				if (typeof verdict !== "object" || verdict === null || typeof (verdict as { code?: unknown }).code !== "string" || typeof (verdict as { message?: unknown }).message !== "string") {
+					throw new InvokeError("otp-refused", `the OTP approval returned a malformed verdict for tool "${name}" — nothing was run`);
+				}
+				// The security sink (if wired) sees a counted bad code ONLY when the refusal
+				// says so (its verdict carries badCode) — an expiry or lockout refusal is not
+				// a guess, and invoke does not count failures: the approve implementation
+				// owns its counter.
+				if ((verdict as { badCode?: boolean }).badCode) {
+					ctx.audit?.security({ kind: "code-bad", tool: name, person: ctx.person, failures: 0 });
+				}
 				throw new InvokeError(verdict.code, verdict.message);
 			}
 		}
@@ -277,25 +333,8 @@ export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { inv
 			const { [OTP_ARG]: _code, ...rest } = callArgs;
 			callArgs = rest;
 		}
-		// Owner resolution — the daemon's exact shape: an owner named in the args, the
-		// creation org for repo-creating tools, or the configured defaultOwner's READ
-		// fallback for owner-less reads. Writes never fall back.
-		let owner = createdIn ?? extractOwner(callArgs);
-		if (!owner && rule.mode === "read" && config.defaultOwner && Object.hasOwn(config.owners, config.defaultOwner)) {
-			owner = config.defaultOwner.toLowerCase();
-		}
-		if (!owner) throw new InvokeError("no-owner", `tool "${name}": could not determine repo owner from arguments`);
-		const token = await ctx.resolveToken({ person: ctx.person, owner, mode: rule.mode, kind: "github" });
+		const token = await ctx.resolveToken({ person: ctx.person, owner, mode: rule.mode, kind: "github", signal });
 		if (token === null) throw new InvokeError("no-access", `no credentials configured for owner "${owner}" — add it to config.owners + creds`);
-		// A local verb needs no upstream (its best-effort sub-calls tolerate a missing one);
-		// a forwarded call fails closed without one.
-		const upstream = ctx.upstream ?? libraryUpstream;
-		if (!upstream && !rule.custom) throw new InvokeError("no-upstream", `tool "${name}" forwards to the hosted MCP, but this host provides no upstream client (ctx.upstream)`);
-		// The call's signal (design #175 §2b): the ctx signal, or the ctx signal combined
-		// with the caller's timeoutMs via AbortSignal.any — reaching Octokit as
-		// request.signal and the MCP transport as its signal. The timer exists only when a
-		// timeout was asked for.
-		const signal = ctx.timeoutMs !== undefined ? AbortSignal.any([ctx.signal, AbortSignal.timeout(ctx.timeoutMs)]) : ctx.signal;
 		const deps: RouteDeps = {
 			resolveToken: ctx.resolveToken,
 			// A custom verb without an upstream still dispatches — its one upstream sub-call
@@ -314,7 +353,11 @@ export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { inv
 
 	// The rummage-shaped driver adapter (design #175 §2b): same code path, thin shape
 	// validation in front.
-	const run: RunFn = async (request, args, ctx) => invoke(toolOfRequest(request), args, ctx);
+	const run: RunFn = async (request, args, ctx) => {
+		const name = toolOfRequest(request);
+		checkOpAgainstManifest(request, name);
+		return invoke(name, args, ctx);
+	};
 
 	return { invoke, run };
 }

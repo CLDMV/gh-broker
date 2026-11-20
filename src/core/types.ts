@@ -177,6 +177,9 @@ export interface TokenRequest {
 	owner?: string;
 	mode: Mode;
 	kind: "github" | "ghcr" | "npm";
+	/** The call's cancellation signal (design #175 §2b), for resolvers that fetch. The
+	 * daemon's resolver ignores it (its store reads are local). */
+	signal?: AbortSignal;
 }
 
 /**
