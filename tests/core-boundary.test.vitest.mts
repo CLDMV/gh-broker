@@ -201,3 +201,22 @@ describe("the src/core library boundary", () => {
 		expect([...allowedOutside]).toEqual([]);
 	});
 });
+
+describe("the barrel's runtime surface carries every star module's exports (the silent-drop guard)", () => {
+	it("every runtime-named export of each `export *` module is present on the barrel", async () => {
+		// ES semantics: an `export *` name collision silently OMITS the name — the
+		// TruncatedReason collision was handled by an explicit export; this pin catches the
+		// NEXT silent drop. Type-only names never appear in runtime keys, so the type-level
+		// collision stays handled by the consumer typecheck + the shipped d.ts.
+		const src = readFileSync(join(root, "src", "core", "index.ts"), "utf8");
+		const starModules = [...src.matchAll(/export \* from "\.(\/[^"]+)";/g)].map((m) => m[1]!);
+		expect(starModules.length).toBeGreaterThan(0);
+		const barrel = (await import("../src/core/index.ts")) as Record<string, unknown>;
+		for (const mod of starModules) {
+			const exported = (await import(`../src/core${mod}`)) as Record<string, unknown>;
+			for (const name of Object.keys(exported)) {
+				expect(barrel[name], `${mod} exports "${name}" but the barrel omits it`).toBeDefined();
+			}
+		}
+	});
+});
