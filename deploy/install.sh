@@ -37,7 +37,7 @@ command -v npm >/dev/null 2>&1 || { echo "npm not found — needed to build the 
 # the build can replace it.
 owner="$(stat -c %u "$ROOT/package.json")"
 [[ "$owner" != 0 ]] || { echo "the checkout is owned by root; chown it to a normal user first (or install the npm package)" >&2; exit 1; }
-for d in dist bin node_modules; do
+for d in dist bin types node_modules; do
 	if [[ -e "$ROOT/$d" && -n "$(find "$ROOT/$d" ! -uid "$owner" -print -quit)" ]]; then
 		echo "==> $d/ has files owned by another user — removing it to rebuild"
 		rm -rf "${ROOT:?}/$d"

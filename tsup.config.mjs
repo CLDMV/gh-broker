@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-19T19:50:30-08:00 (1795146630)
+ *	@Last modified time: 2026-11-19T21:50:52-08:00 (1795153852)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -51,13 +51,13 @@ const shared = {
 };
 
 export default defineConfig([
-	{ ...shared, entry: { index: "src/index.ts" }, outDir: "dist", noExternal: [/./], clean: true },
-	{ ...shared, entry: { "gh-broker": "src/bin/gh-broker.ts" }, outDir: "bin", clean: true },
+	{ ...shared, entry: { index: "src/index.ts" }, outDir: "dist", noExternal: [/./], clean: false },
+	{ ...shared, entry: { "gh-broker": "src/bin/gh-broker.ts" }, outDir: "bin", clean: false },
 	// The library subpath (§6): dependencies stay external (tsup's default — the
 	// package's `dependencies`, unlike the daemon's noExternal above).
 	{ ...shared, entry: { "core/index": "src/core/index.ts" }, outDir: "dist", clean: false },
 	// The library's types (§6): a dedicated dts-only build of the same barrel → types/.
 	// `dts: { only: true }` is the config-file form of --dts-only (the `dtsOnly` flag is
 	// CLI-only); a bare `dts: true` would skip the build entirely here.
-	{ ...shared, dts: { only: true }, entry: { index: "src/core/index.ts" }, outDir: "types/core", sourcemap: false, clean: true }
+	{ ...shared, dts: { only: true }, entry: { index: "src/core/index.ts" }, outDir: "types/core", sourcemap: false, clean: false }
 ]);

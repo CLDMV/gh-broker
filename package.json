@@ -12,6 +12,7 @@
 			"types": "./types/core/index.d.ts",
 			"default": "./dist/core/index.mjs"
 		},
+		"./package.json": "./package.json",
 		"./core": {
 			"types": "./types/core/index.d.ts",
 			"default": "./dist/core/index.mjs"
@@ -29,7 +30,7 @@
 		"config.sample.json"
 	],
 	"engines": {
-		"node": ">=20.19.0"
+		"node": ">=22.0.0"
 	},
 	"devEngines": {
 		"runtime": {
@@ -40,6 +41,7 @@
 	},
 	"scripts": {
 		"types:check": "tsc -p tsconfig.json --noEmit",
+		"prebuild": "rm -rf dist types",
 		"build": "npm run types:check && tsup && npm run test:dist",
 		"start": "node dist/index.mjs",
 		"dev": "node --experimental-strip-types --watch src/index.ts",
@@ -101,5 +103,7 @@
 	"overrides": {
 		"katex": ">=0.19.1 <1.0.0",
 		"minimatch": "^11.0.3"
-	}
+	},
+	"types": "./types/core/index.d.ts",
+	"sideEffects": false
 }

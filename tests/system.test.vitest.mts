@@ -349,7 +349,9 @@ describe("directories, unit and service", () => {
 		route({ getent: ok("g:x:42:\n"), id: ok("1001\n"), sh: ok() });
 		f.existsSync.mockReturnValue(true);
 		sys.deployDist("/src/dist", "/opt/gh-broker", "svc", "g");
-		expect(calls()).toContain("rsync -a --delete /src/dist/ /opt/gh-broker/dist/");
+		// The library bundle (dist/core/) is excluded: its imports are external and cannot
+		// resolve from the no-node_modules /opt tree — the deployed daemon is dist/index.mjs.
+		expect(calls()).toContain("rsync -a --delete --exclude core/ /src/dist/ /opt/gh-broker/dist/");
 		expect(calls()).toContain("chown -R 1001:42 /opt/gh-broker");
 		expect(f.cpSync).not.toHaveBeenCalled();
 	});
