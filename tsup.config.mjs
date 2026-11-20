@@ -26,9 +26,11 @@
  * external for the same reason — a consumer resolves them from their own node_modules;
  * only the daemon bundle inlines.
  *
- * The daemon stays first: its `clean: true` wipes dist/, and the core entry must survive
- * it (`clean: false`) to land beside it at dist/core/index.mjs — the path the service's
- * ExecStart and the installer's deploy step have always used for the daemon.
+ * Nothing cleans a directory another config writes: tsup runs the array's configs
+ * CONCURRENTLY (Promise.all), so package.json's prebuild wipes dist/, types/ and bin/
+ * ONCE up front and every config below runs clean: false. The daemon ships as
+ * dist/index.mjs (the path the service's ExecStart runs); dist/core/ is the library
+ * (excluded from the /opt deploy — its imports are external).
  *
  * Sourcemaps are generated for local debugging but kept out of the published tarball by
  * the `!dist/**\/*.map` and `!bin/**\/*.map` negations in package.json `files`.
