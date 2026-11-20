@@ -131,11 +131,11 @@ describe("invoke — the approve seam (round-3 M5)", () => {
 		const ctx = mkCtx({ upstream });
 		await invoke("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "123456" }, ctx);
 		expect(ctx.approve).toHaveBeenCalledTimes(1);
-		expect(ctx.approve).toHaveBeenCalledWith("merge_pull_request", "tester", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "123456" });
+		expect(ctx.approve).toHaveBeenCalledWith("merge_pull_request", "tester", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "123456" }, ctx.signal);
 		expect(upstream.forward).toHaveBeenCalledWith("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1 }, "token:cldmv:write", ctx.signal);
 	});
 
-	it("an approve refusal is the typed refusal, verbatim, and the security sink sees it", async () => {
+	it("an approve refusal is the typed refusal, verbatim; the sink sees a code-bad only when the verdict says so", async () => {
 		const { invoke } = createBroker(makeConfig());
 		const security = vi.fn();
 		const ctx = mkCtx({ upstream, audit: { security }, approve: vi.fn(async () => ({ code: "otp-bad", message: "that code was not accepted" })) });
@@ -145,8 +145,18 @@ describe("invoke — the approve seam (round-3 M5)", () => {
 			expect((err as Error).message).toBe("that code was not accepted");
 			return true;
 		});
-		expect(security).toHaveBeenCalledWith({ kind: "code-bad", tool: "merge_pull_request", person: "tester", failures: 0 });
+		// An expiry/lockout/plain refusal is not a guess — no security event. invoke does
+		// not count failures: the approve implementation owns its counter.
+		expect(security).not.toHaveBeenCalled();
 		expect(upstream.forward).not.toHaveBeenCalled();
+	});
+
+	it("an approve refusal carrying badCode reaches the security sink as code-bad", async () => {
+		const { invoke } = createBroker(makeConfig());
+		const security = vi.fn();
+		const ctx = mkCtx({ upstream, audit: { security }, approve: vi.fn(async () => ({ code: "otp-bad", message: "that code was not accepted", badCode: true })) });
+		await expect(invoke("merge_pull_request", { owner: "cldmv", repo: "x", otp: "000000" }, ctx)).rejects.toMatchObject({ code: "otp-bad" });
+		expect(security).toHaveBeenCalledWith({ kind: "code-bad", tool: "merge_pull_request", person: "tester", failures: 0 });
 	});
 
 	it("a host without approve fails closed on a gated tool: otp-required, nothing run", async () => {

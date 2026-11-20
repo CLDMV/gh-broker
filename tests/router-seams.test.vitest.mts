@@ -248,3 +248,36 @@ describe("unavailableReason takes the injected capability predicate (design #175
 		expect(unavailableReason(rule("ghcr_push"), config(), { has: () => true, otpProblem: () => undefined })).toBeUndefined();
 	});
 });
+
+describe("the Router's ghcr refusal runs before the gate (fix 8)", () => {
+	it("a Router built without GhcrVerbs refuses a ghcr tool BEFORE the gate, with an audit row", async () => {
+		const { Router } = await import("../src/router.ts");
+		const logLines: string[] = [];
+		const auditSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void logLines.push(a.join(" ")));
+		try {
+			const cfg = {
+				listen: "unix:/x.sock",
+				upstream: "https://api.githubcopilot.com/mcp/",
+				tools: [{ name: "ghcr_push", mode: "write" }],
+				owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
+				// The availability check must pass so the pin reaches the no-GhcrVerbs refusal.
+				ghcr: { dropDir: "/var/lib/gh-broker/drop", protectReleaseTags: true, maxArchiveBytes: 1_073_741_824, owners: { cldmv: { credential: "cred:ghcr-cldmv" } } }
+			};
+			const secrets = { resolve: vi.fn(() => "token:x"), has: vi.fn(() => true) };
+			const upstream = { forward: vi.fn() };
+			// otp: true on the rule so the call WOULD reach the gate if the branch were still
+			// after it — the pin is that the refusal happens before any code is asked for.
+			// The gate is REQUIRED since the default flips (slice 5) — a stub whose authorize
+			// throws proves the ghcr refusal happens before any gate interaction.
+			const gate = { enabled: true, hardLockRefusal: () => undefined, authorize: () => { throw new Error("the gate must not run for a ghcr call"); }, status: () => ({}) };
+			const r = new Router(cfg as any, secrets as any, upstream as any, undefined, gate, undefined);
+			await expect(r.call("ghcr_push", { image: "x" }, { user: "tester" })).rejects.toThrow(/no GhcrVerbs implementation was injected/);
+			expect(secrets.resolve).not.toHaveBeenCalled(); // no token resolved
+			expect(upstream.forward).not.toHaveBeenCalled();
+			const row = logLines.find((l) => l.includes('"decision":"error"'));
+			expect(JSON.parse(row!)).toMatchObject({ tool: "ghcr_push", user: "tester", decision: "error", detail: "no ghcr service" });
+		} finally {
+			auditSpy.mockRestore();
+		}
+	});
+});
