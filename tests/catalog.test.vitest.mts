@@ -1,8 +1,38 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { buildCatalog } from "../src/catalog.ts";
+import { buildCatalog, type CatalogOpts } from "../src/catalog.ts";
+import type { TokenResolver } from "../src/types.ts";
+import { unavailableReason } from "../src/availability.ts";
+import { otpSetupProblem } from "../src/otp/policy.ts";
 
 function makeConfig(tools: any[], owners: Record<string, unknown> = { cldmv: { read: "cred:r", write: "cred:w" } }): any {
 	return { listen: "unix:/x", upstream: "https://api.githubcopilot.com/mcp/", tools, owners };
+}
+
+// The slice-6 re-cut (design #175 §2g): buildCatalog now takes a TokenResolver + opts
+// ONLY — the legacy SecretStore-compat shape died with it. This helper adapts the file's
+// SecretStore mock to that seam, reproducing the pre-slice-3 daemon defaults every pin
+// below asserts: the first configured owner's read PAT for the schema fetch, the
+// env-derived timeout (NaN included), the stderr (journald) sink, and the availability
+// check over the store with the host's OTP setup check. No assertion below changed —
+// the same behavior, delivered through the new seam.
+function legacyAuth(config: any, secrets: any): { resolveToken: TokenResolver; opts: CatalogOpts } {
+	const firstOwner = Object.values(config.owners)[0] as { read: string } | undefined;
+	return {
+		resolveToken: async () => (firstOwner ? secrets.resolve(firstOwner.read) : null),
+		opts: {
+			upstreamTimeoutMs: Number(process.env.GH_BROKER_CATALOG_TIMEOUT_MS ?? 10000),
+			log: (message: string) => console.error(message),
+			unavailable: (rule: any) => unavailableReason(rule, config, { has: (ref: string) => secrets.has(ref), otpProblem: () => otpSetupProblem(config, secrets) })
+		}
+	};
+}
+
+// Every call site below passes a SecretStore mock (the pre-slice-3 shape). The wrapper
+// applies the helper and calls buildCatalog with the library signature — the sites
+// themselves stay byte-identical apart from the callee's name.
+function buildCatalogLegacy(config: any, secrets: any, upstream: any) {
+	const { resolveToken, opts } = legacyAuth(config, secrets);
+	return buildCatalog(config, resolveToken, upstream, opts);
 }
 
 describe("buildCatalog", () => {
@@ -32,7 +62,7 @@ describe("buildCatalog", () => {
 			{ name: "reply_review_thread", mode: "write", custom: true },
 			{ name: "mystery_custom", mode: "read", custom: true }
 		]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 
 		expect(secrets.resolve).toHaveBeenCalledWith("cred:r");
 		const names = catalog.map((t) => t.name);
@@ -50,7 +80,7 @@ describe("buildCatalog", () => {
 	it("advertises report_unlabeled with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "report_unlabeled", mode: "read", custom: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "report_unlabeled" });
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
@@ -59,7 +89,7 @@ describe("buildCatalog", () => {
 	it("advertises report_security_alerts with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "report_security_alerts", mode: "read", custom: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "report_security_alerts" });
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
@@ -68,7 +98,7 @@ describe("buildCatalog", () => {
 	it("advertises report_dependents with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "report_dependents", mode: "read", custom: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "report_dependents" });
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "name"] });
@@ -77,7 +107,7 @@ describe("buildCatalog", () => {
 	it("advertises report_release_prs with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "report_release_prs", mode: "read", custom: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "report_release_prs" });
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
@@ -86,7 +116,7 @@ describe("buildCatalog", () => {
 	it("advertises report_release_changes with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "report_release_changes", mode: "read", custom: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "report_release_changes" });
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo", "pull"] });
@@ -94,7 +124,7 @@ describe("buildCatalog", () => {
 	it("advertises report_alert_status with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "report_alert_status", mode: "read", custom: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "report_alert_status" });
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner"] });
@@ -103,17 +133,17 @@ describe("buildCatalog", () => {
 	it("does not expose npm_scaffold without an npm block, or when its token is not stored", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const rules = [{ name: "npm_scaffold", mode: "write", custom: true }];
-		expect(await buildCatalog(makeConfig(rules), secrets as any, upstream as any)).toEqual([]);
+		expect(await buildCatalogLegacy(makeConfig(rules), secrets as any, upstream as any)).toEqual([]);
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"npm_scaffold" is not exposed: the npm integration is not configured/));
 		secrets.has.mockReturnValue(false);
 		const noToken = { ...makeConfig(rules), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
-		expect(await buildCatalog(noToken, secrets as any, upstream as any)).toEqual([]);
+		expect(await buildCatalogLegacy(noToken, secrets as any, upstream as any)).toEqual([]);
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"npm_scaffold" is not exposed: its credential "npm-token" is not stored/));
 	});
 
 	it("advertises npm_scaffold with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
-		const catalog = await buildCatalog({ ...makeConfig([{ name: "npm_scaffold", mode: "write", custom: true }]), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } }, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy({ ...makeConfig([{ name: "npm_scaffold", mode: "write", custom: true }]), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } }, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "npm_scaffold" });
 		expect(catalog[0]?.description).toMatch(/one-time password/);
@@ -123,7 +153,7 @@ describe("buildCatalog", () => {
 	it("advertises issue_labels with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "issue_labels", mode: "write", custom: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "issue_labels" });
 		expect(catalog[0]?.description).toMatch(/swap/);
@@ -133,7 +163,7 @@ describe("buildCatalog", () => {
 	it("warns on issue_write that labels replaces the set, pointing at issue_labels when it is allowlisted", async () => {
 		const upstreamTool = { name: "issue_write", description: "Create or update an issue.", inputSchema: { type: "object", properties: { labels: {} } } };
 		upstream.listToolsFor.mockResolvedValue([upstreamTool]);
-		const withVerb = await buildCatalog(
+		const withVerb = await buildCatalogLegacy(
 			makeConfig([{ name: "issue_write", mode: "write" }, { name: "issue_labels", mode: "write", custom: true }]),
 			secrets as any,
 			upstream as any
@@ -144,7 +174,7 @@ describe("buildCatalog", () => {
 		expect(iw.inputSchema).toBe(upstreamTool.inputSchema);
 		expect(upstreamTool.description).toBe("Create or update an issue."); // the fetched tool is not mutated
 
-		const without = await buildCatalog(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);
+		const without = await buildCatalogLegacy(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);
 		expect(without[0]?.description).toMatch(/REPLACES/);
 		expect(without[0]?.description).not.toMatch(/issue_labels/);
 		expect(without[0]?.description).toMatch(/pass the full set/);
@@ -152,20 +182,20 @@ describe("buildCatalog", () => {
 
 	it("warns on issue_write even when the upstream tool carries no description", async () => {
 		upstream.listToolsFor.mockResolvedValue([{ name: "issue_write", inputSchema: { type: "object" } }]);
-		const catalog = await buildCatalog(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);
 		expect(catalog[0]?.description).toMatch(/^WARNING \(gh-broker\): "labels" REPLACES/);
 	});
 
 	it("still warns on issue_write when the upstream fetch fails (minimal schema)", async () => {
 		upstream.listToolsFor.mockRejectedValue(new Error("down"));
-		const catalog = await buildCatalog(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(makeConfig([{ name: "issue_write", mode: "write" }]), secrets as any, upstream as any);
 		expect(catalog[0]?.description).toMatch(/^\(write\) proxied to the GitHub MCP WARNING/);
 	});
 
 	it("advertises report_ci_status with its local schema", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const config = makeConfig([{ name: "report_ci_status", mode: "read", custom: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect(catalog[0]).toMatchObject({ name: "report_ci_status" });
 		expect(catalog[0]?.inputSchema).toMatchObject({ type: "object", required: ["owner", "repo"] });
@@ -179,7 +209,7 @@ describe("buildCatalog", () => {
 		};
 		upstream.listToolsFor.mockResolvedValue([upstreamTool]);
 		const config = makeConfig([{ name: "pull_request_read", mode: "read", augment: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		const tool = catalog[0]!;
 		expect(tool.description).toContain("gh-broker extension");
@@ -197,7 +227,7 @@ describe("buildCatalog", () => {
 		};
 		upstream.listToolsFor.mockResolvedValue([upstreamTool]);
 		const config = makeConfig([{ name: "list_pull_requests", mode: "read", augment: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		const tool = catalog[0]!;
 		expect(tool.description).toContain("List pull requests.");
 		expect(tool.description).toContain("maxDetail");
@@ -211,14 +241,14 @@ describe("buildCatalog", () => {
 	it("still adds the extension params to list_pull_requests when the upstream fetch fails entirely", async () => {
 		upstream.listToolsFor.mockRejectedValue(new Error("network down"));
 		const config = makeConfig([{ name: "list_pull_requests", mode: "read", augment: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(Object.keys((catalog[0]!.inputSchema as any).properties)).toEqual(["ciVerbosity", "logLines", "maxDetail"]);
 	});
 
 	it("still adds ciVerbosity/logLines to pull_request_read when the upstream fetch fails entirely", async () => {
 		upstream.listToolsFor.mockRejectedValue(new Error("network down"));
 		const config = makeConfig([{ name: "pull_request_read", mode: "read", augment: true }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog).toHaveLength(1);
 		expect((catalog[0]!.inputSchema as any).properties).toEqual({
 			ciVerbosity: { type: "number", enum: [0, 1, 2, 3], description: expect.any(String) },
@@ -232,7 +262,7 @@ describe("buildCatalog", () => {
 			{ name: "get_me", mode: "read" },
 			{ name: "resolve_review_thread", mode: "write", custom: true }
 		]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 
 		const getMe = catalog.find((t) => t.name === "get_me");
 		expect(getMe).toEqual({ name: "get_me", description: "(read) proxied to the GitHub MCP", inputSchema: { type: "object" } });
@@ -242,7 +272,7 @@ describe("buildCatalog", () => {
 
 	it("skips the upstream fetch entirely when there are no owners", async () => {
 		const config = makeConfig([{ name: "get_me", mode: "read" }], {});
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(upstream.listToolsFor).not.toHaveBeenCalled();
 		expect(catalog).toEqual([{ name: "get_me", description: "(read) proxied to the GitHub MCP", inputSchema: { type: "object" } }]);
 	});
@@ -251,7 +281,7 @@ describe("buildCatalog", () => {
 		process.env.GH_BROKER_CATALOG_TIMEOUT_MS = "15";
 		upstream.listToolsFor.mockReturnValue(new Promise(() => {})); // never resolves
 		const config = makeConfig([{ name: "get_me", mode: "read" }]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog.map((t) => t.name)).toEqual(["get_me"]);
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/timed out after 15ms/));
 	});
@@ -267,7 +297,7 @@ describe("buildCatalog", () => {
 		const config = { ...makeConfig(ghcrTools), ghcr };
 		// Exposed as soon as any one GHCR owner's credential is stored.
 		secrets.has.mockImplementation((ref: string) => ref === "cred:other-packages");
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog.map((t) => t.name)).toEqual(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
 		expect(catalog[0]?.inputSchema).toMatchObject({ required: ["owner", "image", "tag", "archive"], additionalProperties: false });
 		expect(catalog[0]?.description).toMatch(/background job/);
@@ -276,11 +306,11 @@ describe("buildCatalog", () => {
 	it("does not expose the GHCR tools without config.ghcr, or while no GHCR credential is stored", async () => {
 		upstream.listToolsFor.mockResolvedValue([]);
 		const rules = [{ name: "ghcr_push", mode: "write", custom: true }];
-		expect(await buildCatalog(makeConfig(rules), secrets as any, upstream as any)).toEqual([]);
+		expect(await buildCatalogLegacy(makeConfig(rules), secrets as any, upstream as any)).toEqual([]);
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"ghcr_push" is not exposed: GHCR pushes are not configured/));
 		secrets.has.mockReturnValue(false);
 		const config = { ...makeConfig(rules), ghcr: { owners: { cldmv: { credential: "cred:cldmv-packages" } } } };
-		expect(await buildCatalog(config, secrets as any, upstream as any)).toEqual([]);
+		expect(await buildCatalogLegacy(config, secrets as any, upstream as any)).toEqual([]);
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/no GHCR credential is stored \("cldmv-packages"; re-run the installer/));
 	});
 
@@ -291,7 +321,7 @@ describe("buildCatalog", () => {
 			{ name: "delete_branch", mode: "write", custom: true, otp: false },
 			{ name: "dismiss_alert", mode: "write", custom: true, otp: false }
 		]);
-		const catalog = await buildCatalog(config, secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect(catalog.map((t) => [t.name, (t.inputSchema as any).required])).toEqual([
 			["minimize_comment", ["owner"]],
 			["delete_branch", ["owner", "repo", "branch"]],
@@ -312,7 +342,7 @@ describe("buildCatalog", () => {
 			{ name: "create_repository", mode: "write", otp: false },
 			{ name: "fork_repository", mode: "write", otp: false }
 		]);
-		const [create, fork] = await buildCatalog(config, secrets as any, upstream as any);
+		const [create, fork] = await buildCatalogLegacy(config, secrets as any, upstream as any);
 		expect((create!.inputSchema as any).required).toEqual(["name", "organization", "private"]);
 		expect(create!.description).toBe('Create a repo. gh-broker: "organization" and "private" are required; the repo is never created in a personal account or left public by default.');
 		expect((fork!.inputSchema as any).required).toEqual(["organization"]);
@@ -322,10 +352,10 @@ describe("buildCatalog", () => {
 
 	it("says on actions_run_trigger that log deletion is refused", async () => {
 		upstream.listToolsFor.mockResolvedValue([{ name: "actions_run_trigger", description: "Trigger.", inputSchema: { type: "object" } }]);
-		const [tool] = await buildCatalog(makeConfig([{ name: "actions_run_trigger", mode: "write", otp: false }]), secrets as any, upstream as any);
+		const [tool] = await buildCatalogLegacy(makeConfig([{ name: "actions_run_trigger", mode: "write", otp: false }]), secrets as any, upstream as any);
 		expect(tool!.description).toBe('Trigger. gh-broker: method "delete_workflow_run_logs" is refused; a run\'s logs are kept.');
 		upstream.listToolsFor.mockResolvedValue([{ name: "actions_run_trigger", inputSchema: { type: "object" } }]);
-		const [bare] = await buildCatalog(makeConfig([{ name: "actions_run_trigger", mode: "write", otp: false }]), secrets as any, upstream as any);
+		const [bare] = await buildCatalogLegacy(makeConfig([{ name: "actions_run_trigger", mode: "write", otp: false }]), secrets as any, upstream as any);
 		expect(bare!.description).toMatch(/^gh-broker: method "delete_workflow_run_logs"/);
 	});
 
@@ -335,15 +365,15 @@ describe("buildCatalog", () => {
 			{ name: "get_me", inputSchema: { type: "object" } }
 		]);
 		const seeded = { resolve: vi.fn((ref: string) => (ref === "cred:otp-seed" ? "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" : "tok")), has: vi.fn(() => true) };
-		const off = await buildCatalog({ ...makeConfig([{ name: "assign_copilot_to_issue", mode: "write" }, { name: "get_me", mode: "read", enabled: false }]), otp: { seed: "cred:otp-seed" } }, seeded as any, upstream as any);
+		const off = await buildCatalogLegacy({ ...makeConfig([{ name: "assign_copilot_to_issue", mode: "write" }, { name: "get_me", mode: "read", enabled: false }]), otp: { seed: "cred:otp-seed" } }, seeded as any, upstream as any);
 		expect(off).toEqual([]);
-		const [on] = await buildCatalog({ ...makeConfig([{ name: "assign_copilot_to_issue", mode: "write", enabled: true }]), otp: { seed: "cred:otp-seed" } }, seeded as any, upstream as any);
+		const [on] = await buildCatalogLegacy({ ...makeConfig([{ name: "assign_copilot_to_issue", mode: "write", enabled: true }]), otp: { seed: "cred:otp-seed" } }, seeded as any, upstream as any);
 		expect(on).toMatchObject({ name: "assign_copilot_to_issue", inputSchema: { required: ["otp"], properties: { otp: expect.any(Object) } } });
 	});
 
 	it("hides default-gated tools while OTP isn't set up", async () => {
 		upstream.listToolsFor.mockResolvedValue([{ name: "merge_pull_request", inputSchema: { type: "object" } }]);
-		const catalog = await buildCatalog(makeConfig([{ name: "merge_pull_request", mode: "write" }, { name: "delete_branch", mode: "write", custom: true }]), secrets as any, upstream as any);
+		const catalog = await buildCatalogLegacy(makeConfig([{ name: "merge_pull_request", mode: "write" }, { name: "delete_branch", mode: "write", custom: true }]), secrets as any, upstream as any);
 		expect(catalog).toEqual([]);
 		expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"merge_pull_request" is not exposed: OTP is not set up/));
 	});
@@ -357,7 +387,7 @@ describe("buildCatalog", () => {
 			const upstreamTool = { name: "merge_pull_request", description: "Merge a PR.", inputSchema: upstreamSchema };
 			upstream.listToolsFor.mockResolvedValue([upstreamTool, { name: "get_me", description: "me", inputSchema: { type: "object" } }]);
 			const before = JSON.stringify(upstreamTool);
-			const catalog = await buildCatalog(
+			const catalog = await buildCatalogLegacy(
 				otpConfig([{ name: "merge_pull_request", mode: "write", otp: true }, { name: "get_me", mode: "read" }, { name: "otp_status", mode: "read", custom: true }]) as any,
 				seedSecrets() as any,
 				upstream as any
@@ -379,7 +409,7 @@ describe("buildCatalog", () => {
 			const { NPM_SCAFFOLD_SCHEMA } = await import("../src/verbs/npm_scaffold.ts");
 			const before = JSON.stringify(NPM_SCAFFOLD_SCHEMA);
 			const cfg = { ...otpConfig([{ name: "npm_scaffold", mode: "write", custom: true, otp: true }], { windowSeconds: 90 }), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
-			const [tool] = await buildCatalog(cfg as any, seedSecrets() as any, upstream as any);
+			const [tool] = await buildCatalogLegacy(cfg as any, seedSecrets() as any, upstream as any);
 			expect(tool!.inputSchema).toMatchObject({ required: ["owner", "repo", "package", "npm_otp", "otp"], properties: { npm_otp: expect.any(Object), otp: expect.any(Object) } });
 			expect(tool!.description).toMatch(/for 90 seconds after the first call/);
 			expect(JSON.stringify(NPM_SCAFFOLD_SCHEMA)).toBe(before);
@@ -387,11 +417,11 @@ describe("buildCatalog", () => {
 
 		it("fills in a minimal schema and never lists otp twice", async () => {
 			upstream.listToolsFor.mockRejectedValue(new Error("offline"));
-			const [minimal] = await buildCatalog(otpConfig([{ name: "merge_pull_request", mode: "write", otp: true }]) as any, seedSecrets() as any, upstream as any);
+			const [minimal] = await buildCatalogLegacy(otpConfig([{ name: "merge_pull_request", mode: "write", otp: true }]) as any, seedSecrets() as any, upstream as any);
 			expect(minimal!.inputSchema).toEqual({ type: "object", properties: { otp: expect.any(Object) }, required: ["otp"] });
 
 			upstream.listToolsFor.mockResolvedValue([{ name: "merge_pull_request", inputSchema: { type: "object", required: ["otp"] } }]);
-			const [already] = await buildCatalog(otpConfig([{ name: "merge_pull_request", mode: "write", otp: true }]) as any, seedSecrets() as any, upstream as any);
+			const [already] = await buildCatalogLegacy(otpConfig([{ name: "merge_pull_request", mode: "write", otp: true }]) as any, seedSecrets() as any, upstream as any);
 			expect((already!.inputSchema as any).required).toEqual(["otp"]);
 			expect(already!.description).toMatch(/^Needs a broker OTP/);
 		});
@@ -399,10 +429,10 @@ describe("buildCatalog", () => {
 		it("hides gated tools while OTP isn't set up, saying why", async () => {
 			upstream.listToolsFor.mockResolvedValue([{ name: "merge_pull_request", inputSchema: { type: "object" } }]);
 			const rules = [{ name: "merge_pull_request", mode: "write", otp: true }, { name: "otp_status", mode: "read", custom: true }];
-			expect((await buildCatalog(makeConfig(rules), secrets as any, upstream as any)).map((t) => t.name)).toEqual(["otp_status"]);
+			expect((await buildCatalogLegacy(makeConfig(rules), secrets as any, upstream as any)).map((t) => t.name)).toEqual(["otp_status"]);
 			expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/"merge_pull_request" is not exposed: OTP is not set up on this broker/));
 			const noSeed = { resolve: vi.fn(() => "tok"), has: vi.fn((ref: string) => ref !== "cred:otp-seed") };
-			expect((await buildCatalog(otpConfig(rules) as any, noSeed as any, upstream as any)).map((t) => t.name)).toEqual(["otp_status"]);
+			expect((await buildCatalogLegacy(otpConfig(rules) as any, noSeed as any, upstream as any)).map((t) => t.name)).toEqual(["otp_status"]);
 		});
 	});
 });
