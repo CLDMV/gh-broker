@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T13:19:17-08:00 (1794691157)
+ *	@Last modified time: 2026-11-19T19:39:33-08:00 (1795145973)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -162,10 +162,8 @@ export class Router {
 			return { content: [{ type: "text", text: JSON.stringify(this.otp.status(user)) }] };
 		}
 		// The GHCR verbs authenticate with config.ghcr's own credential, never an owner's
-		// GitHub PAT, so they don't need (or touch) a config.owners entry. Checked BEFORE
-		// the gate: a Router built without GhcrVerbs refuses here, with an audit row, and
-		// no code is spent on a call that can't run.
-		// Only the MISSING-SERVICE refusal moves ahead of the gate: a Router built without
+		// GitHub PAT, so they don't need (or touch) a config.owners entry. Only the
+		// MISSING-SERVICE refusal moves ahead of the gate: a Router built without
 		// GhcrVerbs refuses here, with an audit row, and no code is spent on a call that
 		// can't run. The dispatch itself stays AFTER the gate — config.json can gate a ghcr
 		// tool ("otp": true; validation only rejects that on otp_status), and a gated ghcr

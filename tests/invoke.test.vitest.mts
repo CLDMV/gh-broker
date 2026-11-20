@@ -374,19 +374,20 @@ describe("invoke — timeouts: timeoutMs × ctx.signal reach Octokit and the MCP
 			throw new Error(`unexpected route ${route}`);
 		});
 		const { invoke } = createBroker(makeConfig());
-		const ctx = mkCtx({ timeoutMs: 1000 });
+		const ctx = mkCtx({ timeoutMs: 20 });
 		await invoke("issue_labels", { owner: "cldmv", repo: "x", issue_number: 1, add: ["bug"] }, ctx);
 		const constructed = vi.mocked(Octokit).mock.calls.at(-1)![0] as { auth: string; request?: { signal?: AbortSignal } };
 		expect(constructed.auth).toBe("token:cldmv:write");
 		expect(constructed.request?.signal).toBeInstanceOf(AbortSignal);
 		expect(constructed.request?.signal).not.toBe(ctx.signal); // combined with the timeout
-		// The combined signal actually fires with a TimeoutError when timeoutMs elapses —
-		// that is the property the SDK's request.signal plumbing delivers to a real call.
+		// The combined signal actually fires with a TimeoutError when the (20 ms) timeout
+		// elapses — that is the property the SDK's request.signal plumbing delivers to a
+		// real call. The verb's own fetches may not be done; the pin reads the signal only.
 		expect(constructed.request?.signal.aborted).toBe(false);
-		await new Promise((r) => setTimeout(r, 1100));
+		await new Promise((r) => setTimeout(r, 120));
 		expect(constructed.request?.signal.aborted).toBe(true);
 		expect((constructed.request?.signal.reason as { name?: string }).name).toBe("TimeoutError");
-	}, 3000);
+	});
 
 	it("the library forwarder bounds the handshake with the signal and the tool call with the timeout", async () => {
 		const upstream = perCallUpstream("https://api.githubcopilot.com/mcp/");
@@ -419,5 +420,20 @@ describe("invoke — timeouts: timeoutMs × ctx.signal reach Octokit and the MCP
 		const opts = callToolMock.mock.calls[0]![2] as { signal?: AbortSignal; timeout?: number };
 		expect(opts.timeout).toBe(45_000);
 		expect(opts.signal).toBeInstanceOf(AbortSignal); // the combined signal
+	});
+
+	it("item 4: a registry fetch receives the call's signal (NpmRegistry and latestVersion)", async () => {
+		const { NpmRegistry, latestVersion } = await import("../src/verbs/npm-registry.ts");
+		const calls: Array<{ url: string; init: { signal?: AbortSignal } }> = [];
+		const spy = async (url: string, init: { method: string; headers: Record<string, string> }) => {
+			calls.push({ url, init });
+			return { status: 200, text: async () => '{"version":"1.0.0"}' } as never;
+		};
+		const signal = new AbortController().signal;
+		const registry = new NpmRegistry({ token: "T", signal, fetch: spy as never });
+		await registry.packument("left-pad");
+		expect(calls[0]?.init.signal).toBe(signal);
+		await latestVersion("left-pad", { fetch: spy as never, signal });
+		expect(calls[1]?.init.signal).toBe(signal);
 	});
 });
