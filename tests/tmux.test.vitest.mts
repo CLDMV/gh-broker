@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { configDirOf, tmuxPaneText, tmuxPanes, tmuxSend, tmuxSockets } from "../src/cli/tmux.ts";
+import { configDirOf, tmuxPaneText, tmuxPanes, tmuxSend, tmuxSockets, type TmuxServer } from "../src/cli/tmux.ts";
 
 const INFO = { uid: 1000, gid: 1000, home: "/home/repo" };
+const SERVER = (socket = "/tmp/tmux-1000/default", binary = "tmux"): TmuxServer => ({ socket, binary });
 
 /** One process in the fake /proc. stat is the real /proc/<pid>/stat shape. */
 interface FakeProc {
@@ -12,9 +13,11 @@ interface FakeProc {
 	/** "<pid> (<comm>) <state> <ppid> <pgrp> <session> <tty_nr> <tpgid> ..." */
 	stat?: string;
 	environ?: string;
+	/** readlink(/proc/<pid>/exe); undefined -> ENOENT. */
+	exe?: string;
 }
 
-const stat = (pid: number | string, state = "S", ppid = 1, pgrp = 1, tpgid = 1): string => `${pid} (x) ${state} ${ppid} ${pgrp} 100 ${34828} ${tpgid} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0`;
+const stat = (pid: number | string, state = "S", ppid = 1, pgrp = 1, tpgid = 1): string => `${pid} (x) ${state} ${ppid} ${pgrp} 100 ${34828} ${tpgid} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0`;
 
 /** A fake /proc and /tmp for the tmux effects. Nothing real is touched. */
 function host({
@@ -27,7 +30,8 @@ function host({
 	listing,
 	capture = {},
 	tmuxFails = false,
-	procThrows = false
+	procThrows = false,
+	hasSetpriv = true
 }: {
 	dirs?: Record<string, string[]>;
 	files?: Record<string, string>;
@@ -39,6 +43,7 @@ function host({
 	capture?: Record<string, string>;
 	tmuxFails?: boolean;
 	procThrows?: boolean;
+	hasSetpriv?: boolean;
 }) {
 	const readdir = (path: string): string[] => {
 		if (path === "/proc") {
@@ -61,6 +66,12 @@ function host({
 		return { uid: owner(path), isSocket: () => isSocket(path), isDirectory: () => true };
 	};
 	const readlink = (path: string): string => {
+		const pid = /\/proc\/(\d+)\/exe$/.exec(path)?.[1];
+		if (pid) {
+			const exe = procs[pid]?.exe;
+			if (exe === undefined) throw new Error("ENOENT");
+			return exe;
+		}
 		const m = /\/proc\/(\d+)\/fd\/(.+)$/.exec(path);
 		const target = m && procs[m[1]!]?.fds?.[m[2]!];
 		if (target === undefined) throw new Error("ENOENT");
@@ -78,6 +89,8 @@ function host({
 	};
 	const exec = (cmd: string, args: string[], opts: { uid?: number; gid?: number; env?: NodeJS.ProcessEnv; cwd?: string } = {}): { stdout: string } => {
 		if (tmuxFails) throw new Error("no server running on " + args[1]);
+		lastCmd = cmd;
+		lastArgs = args;
 		lastOpts = opts;
 		if (args.includes("list-panes")) return { stdout: listing ?? "" };
 		if (args.includes("capture-pane")) {
@@ -87,8 +100,10 @@ function host({
 		}
 		throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
 	};
+	let lastCmd = "";
+	let lastArgs: string[] = [];
 	let lastOpts: { uid?: number; gid?: number; env?: NodeJS.ProcessEnv; cwd?: string } = {};
-	return { proc: "/proc", tmp: "/tmp", readdir, lstat, readlink, readHead, run: exec, lastOpts: () => lastOpts };
+	return { proc: "/proc", tmp: "/tmp", readdir, lstat, readlink, readHead, run: exec, has: () => hasSetpriv, last: () => ({ cmd: lastCmd, args: lastArgs, opts: lastOpts }) };
 }
 
 describe("tmuxSockets", () => {
@@ -98,7 +113,40 @@ describe("tmuxSockets", () => {
 			isSocket: (p) => !p.endsWith("stale"),
 			owner: (p) => (p.endsWith("borrowed") ? 0 : INFO.uid)
 		});
-		expect(tmuxSockets(INFO, h)).toEqual(["/tmp/tmux-1000/claude", "/tmp/tmux-1000/default"]);
+		expect(tmuxSockets(INFO, h)).toEqual([
+			{ socket: "/tmp/tmux-1000/claude", binary: "tmux" },
+			{ socket: "/tmp/tmux-1000/default", binary: "tmux" }
+		]);
+	});
+
+	it("pairs a socket found through a server pid with that server's own binary, and overrides the default-dir guess", () => {
+		const h = host({
+			dirs: { "/tmp/tmux-1000": ["default"] },
+			procs: { "500": { uid: INFO.uid, cmdline: "tmux\0-S\0/home/glm/.tmux/claude\0", fds: { 3: "socket:[77]", 4: "socket:[78]" }, exe: "/usr/local/bin/tmux" } },
+			files: {
+				"/proc/net/unix": [
+					"Num       RefCount Protocol Flags    Type St Inode Path",
+					"0000000000000000: 00000002 00000000 00010000 01 01 77 /home/glm/.tmux/claude",
+					"0000000000000000: 00000002 00000000 00010000 01 01 78 /tmp/tmux-1000/default"
+				].join("\n")
+			}
+		});
+		// both sockets belong to the pid-500 server: both get its own binary, even the one the
+		// default directory had already found with the PATH fallback
+		expect(tmuxSockets(INFO, h)).toEqual([
+			{ socket: "/home/glm/.tmux/claude", binary: "/usr/local/bin/tmux" },
+			{ socket: "/tmp/tmux-1000/default", binary: "/usr/local/bin/tmux" }
+		]);
+	});
+
+	it("falls back to PATH's tmux when the server's exe can't be resolved", () => {
+		const h = host({
+			procs: { "500": { uid: INFO.uid, cmdline: "tmux\0\0", fds: { 3: "socket:[77]" } } },
+			files: {
+				"/proc/net/unix": ["Num       RefCount Protocol Flags    Type St Inode Path", "0000000000000000: 00000002 00000000 00010000 01 01 77 /tmp/tmux-1000/default"].join("\n")
+			}
+		});
+		expect(tmuxSockets(INFO, h)).toEqual([{ socket: "/tmp/tmux-1000/default", binary: "tmux" }]);
 	});
 
 	it("refuses a symlinked /tmp/tmux-<uid> directory outright", () => {
@@ -106,22 +154,6 @@ describe("tmuxSockets", () => {
 		(h as unknown as { lstat: (p: string) => { isDirectory: () => boolean; isSocket: () => boolean; uid: number } }).lstat = (p: string) =>
 			p === "/tmp/tmux-1000" ? { isDirectory: () => false, isSocket: () => false, uid: INFO.uid } : { isDirectory: () => true, isSocket: () => true, uid: INFO.uid };
 		expect(tmuxSockets(INFO, h)).toEqual([]); // nothing enumerable: no default dir, no -S servers
-	});
-
-	it("finds a tmux server's custom -S socket through its fds and /proc/net/unix, ownership-checked", () => {
-		const h = host({
-			procs: { "500": { uid: INFO.uid, cmdline: "tmux\0-S\0/home/glm/.tmux/claude\0", fds: { 3: "socket:[77]" } } },
-			stat: { "/proc/500/stat": stat(500, "S", 1, 500, 500) },
-			files: {
-				"/proc/net/unix": [
-					"Num       RefCount Protocol Flags    Type St Inode Path",
-					"0000000000000000: 00000002 00000000 00010000 01 01 77 /home/glm/.tmux/claude",
-					"0000000000000000: 00000002 00000000 00010000 01 01 88 /run/user/0/not-the-agents"
-				].join("\n")
-			},
-			owner: (p) => (p === "/run/user/0/not-the-agents" ? 0 : INFO.uid)
-		});
-		expect(tmuxSockets(INFO, h)).toEqual(["/home/glm/.tmux/claude"]);
 	});
 
 	it("ignores other users' tmux servers, the agent's non-tmux processes, and unbound sockets", () => {
@@ -142,14 +174,14 @@ describe("tmuxSockets", () => {
 			}
 		});
 		// inode 100 also maps to the default socket: the set holds it once.
-		expect(tmuxSockets(INFO, h)).toEqual(["/tmp/tmux-1000/default"]);
+		expect(tmuxSockets(INFO, h)).toEqual([{ socket: "/tmp/tmux-1000/default", binary: "tmux" }]);
 	});
 
 	it("works with no default socket directory, an unreadable /proc, and an unreadable /proc/net/unix", () => {
 		const none = host({});
 		expect(tmuxSockets(INFO, none)).toEqual([]);
 		const noProc = host({ dirs: { "/tmp/tmux-1000": ["default"] }, procThrows: true });
-		expect(tmuxSockets(INFO, noProc)).toEqual(["/tmp/tmux-1000/default"]);
+		expect(tmuxSockets(INFO, noProc)).toEqual([SERVER()]);
 		const noTable = host({ procs: { "500": { uid: INFO.uid, cmdline: "tmux\0\0", fds: { 3: "socket:[77]" } } } });
 		expect(tmuxSockets(INFO, noTable)).toEqual([]); // /proc/net/unix unreadable: only the default dir was searched
 	});
@@ -162,7 +194,7 @@ describe("tmuxPanes", () => {
 
 	it("lists the panes whose foreground job is the agent's own Claude Code, with screen and mode flags", () => {
 		const h = host({
-			listing: "%0\t200\t0\t0\tclaude\n%1\t300\t0\t0\tbash\n%2\t400\t1\t0\tclaude\n%3\t500\t0\t1\tbash\n",
+			listing: "%0|@|200|@|0|@|0|@|claude\n%1|@|300|@|0|@|0|@|bash\n%2|@|400|@|1|@|0|@|claude\n%3|@|500|@|0|@|1|@|bash\n",
 			procs: {
 				"200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }),
 				// a background claude under a shell the user is typing at: same tree, not foreground
@@ -176,7 +208,7 @@ describe("tmuxPanes", () => {
 			},
 			capture: { "%0": "✻ Waiting for 1 background agent to finish\n\n❯ \n" }
 		});
-		const panes = tmuxPanes("/tmp/tmux-1000/default", INFO, h);
+		const panes = tmuxPanes(SERVER(), INFO, h);
 		expect(panes).toEqual([
 			{ id: "%0", pid: 200, text: "✻ Waiting for 1 background agent to finish\n\n❯ \n", foreground: true, inMode: false, synchronized: false, configDir: undefined },
 			{ id: "%1", pid: 301, text: "", foreground: false, inMode: false, synchronized: false, configDir: undefined },
@@ -184,22 +216,35 @@ describe("tmuxPanes", () => {
 		]);
 	});
 
-	it("runs every tmux command as the agent: its uid/gid, its HOME, no $TMUX, cwd /", () => {
-		const h = host({ listing: "", procs: {} });
-		tmuxPanes("/tmp/tmux-1000/default", INFO, h);
-		const opts = h.lastOpts();
-		expect(opts.uid).toBe(INFO.uid);
-		expect(opts.gid).toBe(INFO.gid);
+	it("runs every tmux command as the agent through setpriv (groups kept), with the server's own binary, its HOME, a UTF-8 locale and no $TMUX", () => {
+		const h = host({ listing: "", procs: {}, hasSetpriv: true });
+		tmuxPanes(SERVER("/tmp/tmux-1000/default", "/usr/local/bin/tmux"), INFO, h);
+		const { cmd, args, opts } = h.last();
+		expect(cmd).toBe("setpriv");
+		expect(args.slice(0, 5)).toEqual([`--reuid=${INFO.uid}`, `--regid=${INFO.gid}`, "--init-groups", "--", "/usr/local/bin/tmux"]);
+		expect(args.slice(5)).toEqual(["-S", "/tmp/tmux-1000/default", "list-panes", "-a", "-F", "#{pane_id}|@|#{pane_pid}|@|#{pane_in_mode}|@|#{pane_synchronized}|@|#{pane_current_command}"]);
+		expect(opts.uid).toBeUndefined(); // setpriv does the switch, with the agent's groups
 		expect(opts.cwd).toBe("/");
 		expect(opts.env!.HOME).toBe(INFO.home);
+		expect(opts.env!.LANG).toBe("C.UTF-8"); // a bare locale makes tmux write `_` for the tab in -F output
 		expect(opts.env!.PATH).toBeDefined();
 		expect(opts.env!.TMUX).toBeUndefined();
+	});
+
+	it("falls back to a uid/gid spawn when setpriv is missing", () => {
+		const h = host({ listing: "", procs: {}, hasSetpriv: false });
+		tmuxPanes(SERVER("/tmp/tmux-1000/default", "/usr/bin/tmux"), INFO, h);
+		const { cmd, args, opts } = h.last();
+		expect(cmd).toBe("/usr/bin/tmux");
+		expect(args.slice(0, 2)).toEqual(["-S", "/tmp/tmux-1000/default"]);
+		expect(opts.uid).toBe(INFO.uid);
+		expect(opts.gid).toBe(INFO.gid);
 	});
 
 	it("captures with -J (a wrapped indicator line must arrive joined), and reads the session's CLAUDE_CONFIG_DIR", () => {
 		const calls: string[][] = [];
 		const h = host({
-			listing: "%0\t200\t0\t0\tclaude\n",
+			listing: "%0|@|200|@|0|@|0|@|claude\n",
 			procs: { "200": proc(200, { cmdline: "claude\0", stat: claudeStat(200), environ: "PATH=/bin\0CLAUDE_CONFIG_DIR=/srv/glm/config/\0" }) },
 			capture: { "%0": "❯ \n" }
 		});
@@ -208,44 +253,41 @@ describe("tmuxPanes", () => {
 			calls.push(args);
 			return base(cmd, args, opts);
 		};
-		const [p] = tmuxPanes("/tmp/tmux-1000/default", INFO, h);
+		const [p] = tmuxPanes(SERVER(), INFO, h);
 		expect(p).toEqual({ id: "%0", pid: 200, text: "❯ \n", foreground: true, inMode: false, synchronized: false, configDir: "/srv/glm/config" });
-		expect(calls).toEqual([
-			["-S", "/tmp/tmux-1000/default", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}\t#{pane_in_mode}\t#{pane_synchronized}\t#{pane_current_command}"],
-			["-S", "/tmp/tmux-1000/default", "capture-pane", "-p", "-J", "-t", "%0"]
-		]);
+		expect(calls[1]).toEqual([`--reuid=${INFO.uid}`, `--regid=${INFO.gid}`, "--init-groups", "--", SERVER().binary, "-S", SERVER().socket, "capture-pane", "-p", "-J", "-t", "%0"]);
 	});
 
 	it("returns no panes for a socket that answers nothing, drops lines it can't parse, and survives an unreadable /proc", () => {
-		expect(tmuxPanes("/tmp/tmux-1000/default", INFO, host({ tmuxFails: true }))).toEqual([]);
-		const h = host({ listing: "garbage\n%2\tnot-a-pid\t0\t0\tclaude\n", procs: {} });
-		expect(tmuxPanes("/tmp/tmux-1000/default", INFO, h)).toEqual([]);
-		const noProc = host({ listing: "%0\t200\t0\t0\tclaude\n", procs: { "200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }) }, procThrows: true });
-		expect(tmuxPanes("/tmp/tmux-1000/default", INFO, noProc)).toEqual([]);
+		expect(tmuxPanes(SERVER(), INFO, host({ tmuxFails: true }))).toEqual([]);
+		const h = host({ listing: "garbage\n%2|@|not-a-pid|@|0|@|0|@|claude\n", procs: {} });
+		expect(tmuxPanes(SERVER(), INFO, h)).toEqual([]);
+		const noProc = host({ listing: "%0|@|200|@|0|@|0|@|claude\n", procs: { "200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }) }, procThrows: true });
+		expect(tmuxPanes(SERVER(), INFO, noProc)).toEqual([]);
 	});
 });
 
 describe("tmuxPaneText", () => {
 	it("re-captures a pane with -J, and undefined when the pane is gone", () => {
 		const h = host({ capture: { "%1": "❯ \n" } });
-		expect(tmuxPaneText("/tmp/tmux-1000/default", "%1", INFO, h)).toBe("❯ \n");
-		expect(tmuxPaneText("/tmp/tmux-1000/default", "%2", INFO, h)).toBeUndefined();
+		expect(tmuxPaneText(SERVER(), "%1", INFO, h)).toBe("❯ \n");
+		expect(tmuxPaneText(SERVER(), "%2", INFO, h)).toBeUndefined();
 	});
 });
 
 describe("tmuxSend", () => {
-	it("sends the text literally and Enter separately, as the agent", () => {
-		const calls: Array<{ args: string[]; opts: Record<string, unknown> }> = [];
+	it("sends the text literally and Enter separately, as the agent through the server's own binary", () => {
+		const calls: Array<{ cmd: string; args: string[] }> = [];
 		const h = host({});
 		const base = h.run;
 		h.run = (cmd: string, args: string[], opts: Parameters<typeof base>[2]) => {
-			calls.push({ args, opts: opts ?? {} });
+			calls.push({ cmd, args });
 			return { stdout: "" };
 		};
-		tmuxSend("/tmp/tmux-1000/default", "%1", "/mcp reconnect github", INFO, h);
+		tmuxSend(SERVER("/tmp/tmux-1000/default", "/usr/bin/tmux"), "%1", "/mcp reconnect github", INFO, h);
 		expect(calls).toEqual([
-			{ args: ["-S", "/tmp/tmux-1000/default", "send-keys", "-t", "%1", "-l", "/mcp reconnect github"], opts: expect.objectContaining({ uid: INFO.uid, gid: INFO.gid, cwd: "/" }) },
-			{ args: ["-S", "/tmp/tmux-1000/default", "send-keys", "-t", "%1", "Enter"], opts: expect.objectContaining({ uid: INFO.uid }) }
+			{ cmd: "setpriv", args: [`--reuid=${INFO.uid}`, `--regid=${INFO.gid}`, "--init-groups", "--", "/usr/bin/tmux", "-S", "/tmp/tmux-1000/default", "send-keys", "-t", "%1", "-l", "/mcp reconnect github"] },
+			{ cmd: "setpriv", args: [`--reuid=${INFO.uid}`, `--regid=${INFO.gid}`, "--init-groups", "--", "/usr/bin/tmux", "-S", "/tmp/tmux-1000/default", "send-keys", "-t", "%1", "Enter"] }
 		]);
 	});
 });

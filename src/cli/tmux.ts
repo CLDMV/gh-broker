@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:03:41-08:00 (1795291421)
+ *	@Last modified time: 2026-11-21T12:23:30-08:00 (1795292610)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -15,10 +15,22 @@
 
 /**
  * The real tmux effects for `agent reconnect` (#223). Root finds an agent's tmux servers without
- * the user's server-access ACL, but every tmux command RUNS AS THE AGENT (uid/gid, a minimal env
- * without $TMUX, the agent's HOME, cwd /): tmux's own server-access check then holds, so root is
- * never the one typing into a server, and the agent only reaches what it already could. The
- * socket list is checked too: a socket counts only when it is a real socket owned by the agent
+ * the user's server-access ACL, but every tmux command RUNS AS THE AGENT: through `setpriv
+ * --reuid --regid --init-groups` when it is available (a uid/gid spawn alone drops supplementary
+ * groups, which a custom -S socket reachable only through a group needs), else a uid/gid spawn.
+ * tmux's own server-access check then holds, so root is never the one typing into a server, and
+ * the agent only reaches what it already could.
+ *
+ * Each server is talked to with ITS OWN BINARY: clients of one tmux version can't reach a server
+ * of another ("server exited unexpectedly") and both may be installed, so the socket found
+ * through a server's pid is paired with /proc/<pid>/exe; only sockets with no known server pid
+ * (the /tmp/tmux-<uid> fallback) use PATH's tmux. The environment is minimal on purpose: the
+ * agent's HOME, root's PATH, no $TMUX (the client must talk to the -S socket), and
+ * LANG=C.UTF-8 — under a bare locale tmux writes `_` for the tab in -F output, which used to
+ * make every pane unparseable (#223 round 3, reproduced on tmux 3.8); the -F fields are
+ * separated by a printable `|@|` besides, so the listing survives either way.
+ *
+ * The socket list is checked: a socket counts only when it is a real socket owned by the agent
  * (the /tmp/tmux-<uid> directory is lstat-ed, never followed through a symlink, and every
  * /proc/net/unix path is lstat-ed — an agent can re-point a path after binding). A pane counts as
  * Claude Code only when a claude process owned by the agent runs in its tree AND is the pane
@@ -29,9 +41,17 @@
  */
 import { basename } from "node:path";
 import { lstatSync, readdirSync, readlinkSync } from "node:fs";
-import { run } from "./system.ts";
+import { has, run } from "./system.ts";
 import { isClaude, MAX_CMDLINE_BYTES, MAX_ENVIRON_BYTES, readHead } from "./mcp-config.ts";
 import type { UserInfo } from "./agents.ts";
+
+/** A tmux server: its socket and the binary that owns it. */
+export interface TmuxServer {
+	/** The server's socket path. */
+	socket: string;
+	/** The tmux binary to run against this socket: the server's own /proc/<pid>/exe when its pid is known, else PATH's tmux. */
+	binary: string;
+}
 
 /** One Claude Code pane on a tmux server. */
 export interface Pane {
@@ -60,28 +80,39 @@ export interface TmuxOptions {
 	readlink?: typeof readlinkSync;
 	readHead?: typeof readHead;
 	run?: typeof run;
+	has?: typeof has;
 }
 
-const resolve = ({ proc = "/proc", tmp = "/tmp", readdir = readdirSync, lstat = lstatSync, readlink = readlinkSync, readHead: head = readHead, run: exec = run }: TmuxOptions) => ({ proc, tmp, readdir, lstat, readlink, head, exec });
+const resolve = ({ proc = "/proc", tmp = "/tmp", readdir = readdirSync, lstat = lstatSync, readlink = readlinkSync, readHead: head = readHead, run: exec = run, has: hasCmd = has }: TmuxOptions) => ({ proc, tmp, readdir, lstat, readlink, head, exec, hasCmd });
 
-/** The environment a tmux command runs with as the agent: root's PATH, the agent's HOME, and deliberately no $TMUX (the client must talk to the -S socket, never an inherited one). */
-const agentEnv = (info: UserInfo): NodeJS.ProcessEnv => ({ PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", HOME: info.home });
+/** The environment a tmux command runs with as the agent: root's PATH, the agent's HOME, no $TMUX (the client must talk to the -S socket), and a UTF-8 locale (a bare one makes tmux write `_` for the tab in -F output). */
+const agentEnv = (info: UserInfo): NodeJS.ProcessEnv => ({ PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", HOME: info.home, LANG: "C.UTF-8" });
+
+/** The list-panes field separator: printable ASCII, so no locale can rewrite it (the tab once arrived as `_`). */
+const SEP = "|@|";
+const FORMAT = ["#{pane_id}", "#{pane_pid}", "#{pane_in_mode}", "#{pane_synchronized}", "#{pane_current_command}"].join(SEP);
 
 /** Run one tmux command as the agent user against its server socket. */
-function tmux(info: UserInfo, args: string[], exec: typeof run): ReturnType<typeof run> {
-	return exec("tmux", ["-S", ...args], { uid: info.uid, gid: info.gid, env: agentEnv(info), cwd: "/" });
+function tmux(server: TmuxServer, info: UserInfo, args: string[], exec: typeof run, hasCmd: typeof has): ReturnType<typeof run> {
+	// setpriv keeps the agent's supplementary groups (a uid/gid spawn drops them, which breaks a
+	// -S socket reachable only through a group); without it, fall back to the uid/gid spawn.
+	if (hasCmd("setpriv")) {
+		return exec("setpriv", [`--reuid=${info.uid}`, `--regid=${info.gid}`, "--init-groups", "--", server.binary, "-S", server.socket, ...args], { env: agentEnv(info), cwd: "/" });
+	}
+	return exec(server.binary, ["-S", server.socket, ...args], { uid: info.uid, gid: info.gid, env: agentEnv(info), cwd: "/" });
 }
 
 /**
- * The tmux sockets a user's tmux servers listen on: sockets under /tmp/tmux-<uid>/ (that directory
- * lstat-ed, never followed through a symlink; each entry a socket the agent owns) plus the
- * listening socket of each of their tmux server processes (found through the server's own fds and
- * /proc/net/unix, every path lstat-ed and ownership-checked — a re-pointed path is refused).
+ * The tmux servers a user runs: every socket they listen on, paired with the binary to reach it
+ * with. Sockets come from /tmp/tmux-<uid>/ (that directory lstat-ed, never followed through a
+ * symlink; each entry a socket the agent owns) and from each tmux server process's own fds via
+ * /proc/net/unix (every path lstat-ed and ownership-checked — a re-pointed path is refused); a
+ * socket found through a server pid is paired with that server's /proc/<pid>/exe.
  */
-export function tmuxSockets(info: UserInfo, opts: TmuxOptions = {}): string[] {
+export function tmuxSockets(info: UserInfo, opts: TmuxOptions = {}): TmuxServer[] {
 	const { proc, tmp, readdir, lstat, readlink, head } = resolve(opts);
 	const uid = info.uid;
-	const found = new Set<string>();
+	const servers = new Map<string, TmuxServer>();
 	const ownedSocket = (path: string): boolean => {
 		try {
 			const st = lstat(path);
@@ -95,7 +126,8 @@ export function tmuxSockets(info: UserInfo, opts: TmuxOptions = {}): string[] {
 		if (lstat(dir).isDirectory()) {
 			for (const entry of readdir(dir)) {
 				const path = `${dir}/${entry}`;
-				if (ownedSocket(path)) found.add(path);
+				// no known server pid yet: PATH's tmux, until a server pid claims the socket below
+				if (ownedSocket(path)) servers.set(path, { socket: path, binary: "tmux" });
 			}
 		}
 	} catch {
@@ -105,9 +137,9 @@ export function tmuxSockets(info: UserInfo, opts: TmuxOptions = {}): string[] {
 	try {
 		pids = readdir(proc).filter((n) => /^\d+$/.test(n));
 	} catch {
-		return [...found].sort();
+		return [...servers.values()].sort((a, b) => a.socket.localeCompare(b.socket));
 	}
-	const inodes = new Set<string>();
+	const owners = new Map<string, string>(); // socket inode -> the server binary that holds it
 	for (const pid of pids) {
 		try {
 			if (lstat(`${proc}/${pid}`).uid !== uid) continue;
@@ -115,28 +147,38 @@ export function tmuxSockets(info: UserInfo, opts: TmuxOptions = {}): string[] {
 			// socket; the fd walk below confirms it really holds a unix socket before anything
 			// is probed.
 			if (!basename(head(`${proc}/${pid}/cmdline`, MAX_CMDLINE_BYTES).split("\0")[0] ?? "").includes("tmux")) continue;
+			let binary = "tmux";
+			try {
+				// the server's own binary (root-owned, not agent-writable); a client of another
+				// version can't reach this server ("server exited unexpectedly")
+				const exe = readlink(`${proc}/${pid}/exe`);
+				if (exe) binary = exe.replace(/ \(deleted\)$/, "");
+			} catch {
+				// exe not resolvable: PATH's tmux is the fallback
+			}
 			for (const fd of readdir(`${proc}/${pid}/fd`)) {
 				const m = /^socket:\[(\d+)\]$/.exec(readlink(`${proc}/${pid}/fd/${fd}`));
-				if (m) inodes.add(m[1]!);
+				if (m) owners.set(m[1]!, binary);
 			}
 		} catch {
 			// the process exited while being read
 		}
 	}
-	if (inodes.size) {
+	if (owners.size) {
 		try {
 			// "Num RefCount Protocol Flags Type St Inode Path": the inode names the socket, the
 			// rest of the line is its path (empty for an unbound socket).
 			for (const line of head(`${proc}/net/unix`, MAX_ENVIRON_BYTES).split("\n").slice(1)) {
 				const cols = line.trim().split(/\s+/);
 				const path = cols.slice(7).join(" ");
-				if (cols[6] && inodes.has(cols[6]!) && path.startsWith("/") && ownedSocket(path)) found.add(path);
+				const binary = cols[6] && owners.get(cols[6]!);
+				if (path.startsWith("/") && binary && ownedSocket(path)) servers.set(path, { socket: path, binary });
 			}
 		} catch {
 			// /proc/net/unix can't be read: only the default directory was searched
 		}
 	}
-	return [...found].sort();
+	return [...servers.values()].sort((a, b) => a.socket.localeCompare(b.socket));
 }
 
 /** One process's argv, owner, parent, process group, tty foreground group and state, from one scan of /proc. */
@@ -194,14 +236,14 @@ function claudePidsInTree(pid: number, table: Map<number, ProcEntry>, childrenOf
 }
 
 /** The Claude Code panes on one tmux server (a socket that answers nothing has none). */
-export function tmuxPanes(socket: string, info: UserInfo, opts: TmuxOptions = {}): Pane[] {
-	const { proc, readdir, lstat, head, exec } = resolve(opts);
+export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions = {}): Pane[] {
+	const { proc, readdir, lstat, head, exec, hasCmd } = resolve(opts);
 	let listing: string;
 	try {
 		// -J joins a line the terminal wrapped (a long working-indicator line in a narrow pane
 		// otherwise splits past the detectors); the format also carries the flags the skip
 		// decisions need.
-		listing = tmux(info, [socket, "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}\t#{pane_in_mode}\t#{pane_synchronized}\t#{pane_current_command}"], exec).stdout;
+		listing = tmux(server, info, ["list-panes", "-a", "-F", FORMAT], exec, hasCmd).stdout;
 	} catch {
 		return []; // not a tmux socket the agent can reach (or no tmux): no panes
 	}
@@ -210,7 +252,7 @@ export function tmuxPanes(socket: string, info: UserInfo, opts: TmuxOptions = {}
 	for (const [pid, e] of table) if (Number.isInteger(e.ppid)) childrenOf.set(e.ppid, [...(childrenOf.get(e.ppid) ?? []), pid]);
 	const panes: Pane[] = [];
 	for (const line of listing.split("\n")) {
-		const [id, pidText, inMode, synchronized, command] = line.split("\t");
+		const [id, pidText, inMode, synchronized, command] = line.split(SEP);
 		const panePid = Number(pidText);
 		if (!id?.startsWith("%") || !Number.isInteger(panePid)) continue;
 		const candidates = claudePidsInTree(panePid, table, childrenOf);
@@ -228,7 +270,7 @@ export function tmuxPanes(socket: string, info: UserInfo, opts: TmuxOptions = {}
 		}
 		let text = "";
 		try {
-			text = tmux(info, [socket, "capture-pane", "-p", "-J", "-t", id], exec).stdout;
+			text = tmux(server, info, ["capture-pane", "-p", "-J", "-t", id], exec, hasCmd).stdout;
 		} catch {
 			// the pane died or can't be captured: an empty screen reads as "no prompt", so it is skipped
 		}
@@ -246,20 +288,20 @@ export function tmuxPanes(socket: string, info: UserInfo, opts: TmuxOptions = {}
 }
 
 /** Re-capture one pane's screen right before sending (the check-to-send gap); undefined when the pane is gone or can't be captured. */
-export function tmuxPaneText(socket: string, pane: string, info: UserInfo, opts: TmuxOptions = {}): string | undefined {
-	const { exec } = resolve(opts);
+export function tmuxPaneText(server: TmuxServer, pane: string, info: UserInfo, opts: TmuxOptions = {}): string | undefined {
+	const { exec, hasCmd } = resolve(opts);
 	try {
-		return tmux(info, [socket, "capture-pane", "-p", "-J", "-t", pane], exec).stdout;
+		return tmux(server, info, ["capture-pane", "-p", "-J", "-t", pane], exec, hasCmd).stdout;
 	} catch {
 		return undefined;
 	}
 }
 
 /** Send literal text to a pane as the agent, then press Enter in a separate send-keys (so the text can't be eaten as key names). */
-export function tmuxSend(socket: string, pane: string, text: string, info: UserInfo, opts: TmuxOptions = {}): void {
-	const { exec } = resolve(opts);
-	tmux(info, [socket, "send-keys", "-t", pane, "-l", text], exec);
-	tmux(info, [socket, "send-keys", "-t", pane, "Enter"], exec);
+export function tmuxSend(server: TmuxServer, pane: string, text: string, info: UserInfo, opts: TmuxOptions = {}): void {
+	const { exec, hasCmd } = resolve(opts);
+	tmux(server, info, ["send-keys", "-t", pane, "-l", text], exec, hasCmd);
+	tmux(server, info, ["send-keys", "-t", pane, "Enter"], exec, hasCmd);
 }
 
 /** The CLAUDE_CONFIG_DIR a process runs with (root can read another user's environ), or undefined. */
