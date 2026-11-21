@@ -24,12 +24,20 @@ No organization permissions. If the org requires approval for fine-grained PATs,
 
 The installer also creates the drop directory from `ghcr.dropDir` (default `/srv/gh-broker/ghcr-drop`) as `2750 <agent-user>:gh-broker`: the agent writes archives there, the setgid bit gives each file the broker's group, and nobody else can look in. Archives must be group-readable (`chmod g+r`); the broker can only read them, so the agent deletes them after a push. See [`../docs/TOOLS.md`](../docs/TOOLS.md#ghcr_push).
 
-## 2. Install (first install AND upgrade — same command)
+## 2. Install (first install — and upgrade, usually as `gh-broker upgrade`)
 
 ```sh
-sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker   # install, or upgrade with @latest
+sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker   # first install
 sudo gh-broker install [agent-user]
 ```
+
+**Upgrade** with one sudo:
+
+```sh
+sudo gh-broker upgrade
+```
+
+which runs, in order and stopping at the first failure (reported, with the commands to finish by hand): the npm install (`@latest`, or `@<version>` with `--version <v>`), the **newly installed binary's** `gh-broker install` as a child process with the same flags (`--claude-config <user>:<dir>`, `--no-mcp-config`, …), and `agent reconnect` — the restart drops every running Claude Code session's connection, so `/mcp reconnect <key>` is typed into each of the agent's tmux panes (see [Agents](#3-agents-one-socket-and-one-mcp-config-each); `--no-reconnect` skips the step, `--force` reinstalls when the target version is already installed). The two commands above are still the way to do a first install, and `deploy/install.sh` the way from a checkout.
 
 `--prefix /usr/local` puts the package in `/usr/local/lib/node_modules/@cldmv/gh-broker` and the command at `/usr/local/bin/gh-broker`, independent of the Node version and on `sudo`'s PATH. `--ignore-scripts` because a global install runs as root on the box that holds the tokens. The package ships a prebuilt `dist/`, so there is nothing to build. A copy installed under an nvm version folder breaks when Node is upgraded; `gh-broker install` warns if it finds one. One-offs still work: `sudo npx @cldmv/gh-broker install [agent-user]`, and from a checkout `sudo ./deploy/install.sh [agent-user]`.
 
@@ -134,6 +142,7 @@ sudo gh-broker agent add <user>      # group, MCP config, restart, smoke test ov
 sudo gh-broker agent remove <user>   # empty the group, restart (closes the socket), then the MCP entry (backup first) and the user's lock state
 sudo gh-broker agent list            # socket path, whether it exists, and whether the MCP config points at it (ok / missing / points elsewhere)
 sudo gh-broker agent sync [<user>]   # re-apply the MCP config for one agent or all
+sudo gh-broker agent reconnect [<user>]   # /mcp reconnect <key> in the agent's running Claude Code sessions (--dry-run lists)
 ```
 
 `agent remove` empties the agent's group rather than deleting it. Processes the user already has running keep that group's id, so deleting it would let a later `agent add` reuse the id and give those processes the new agent's socket. An empty group isn't an agent; `agent add` for the same user fills it again.
@@ -148,7 +157,9 @@ sudo gh-broker agent sync [<user>]   # re-apply the MCP config for one agent or 
 }
 ```
 
-If an existing entry already mentions `/run/gh-broker/` (the old shared socket or the new one) that entry is updated in place and keeps its name; otherwise the entry is added as `github`, or `gh-broker` when that name is taken. Nothing else in the file changes. The file is parsed, edited, written to a temp file in the same directory and renamed, keeping its owner and mode, and `~/.claude.json.gh-broker.bak` keeps the previous copy (overwritten each time). A missing file is created `0600`; a file that doesn't parse is left alone and the entry is printed to add by hand. The home directory belongs to the agent user and the command runs as root, so it reads the file without following a symlink and only touches a plain file the user owns with a single link; anything else (a symlink, a hard link, someone else's file) is left alone with a warning, and the temp file is created with a random name that can't be pre-planted. Running Claude sessions for that user must be restarted to pick the change up, and `agent sync <user>` puts the entry back if a running session overwrote the file.
+If an existing entry already mentions `/run/gh-broker/` (the old shared socket or the new one) that entry is updated in place and keeps its name; otherwise the entry is added as `github`, or `gh-broker` when that name is taken. Nothing else in the file changes. The file is parsed, edited, written to a temp file in the same directory and renamed, keeping its owner and mode, and `~/.claude.json.gh-broker.bak` keeps the previous copy (overwritten each time). A missing file is created `0600`; a file that doesn't parse is left alone and the entry is printed to add by hand. The home directory belongs to the agent user and the command runs as root, so it reads the file without following a symlink and only touches a plain file the user owns with a single link; anything else (a symlink, a hard link, someone else's file) is left alone with a warning, and the temp file is created with a random name that can't be pre-planted. Running Claude sessions for that user must be restarted to pick the change up (or, after a broker restart, told to reconnect: `agent reconnect`); `agent sync <user>` puts the entry back if a running session overwrote the file.
+
+**`agent reconnect`.** A restart (from `install`, `upgrade`, `agent add` or `remove`) closes every agent's socket, and each running Claude Code session shows its `github` (or `gh-broker`, or `gh-broker-<user>`) MCP server as failed until its operator types `/mcp reconnect <key>` — where `<key>` is that file's entry name, read back from the agent's `.claude.json` files. `agent reconnect [<user>]` does it for them, as root: it finds the agent user's tmux servers (the sockets under `/tmp/tmux-<uid>/` plus every `tmux -S <path>` server it runs, found through the server processes' own fds — no server-access ACL needed), lists their panes, and to each pane running Claude Code it sends `/mcp reconnect <key>` (`tmux send-keys -l`, then a separate `Enter`). One output line per pane: user, socket, pane, key, sent or skipped and why. A pane is **never** sent to when its composer isn't empty or Claude is working (the screen's working indicator) — those are listed as skipped with the pane id so they can be retried, and nothing the user typed is ever cleared. The detectors are heuristics over Claude Code's screen, so they err toward skipping. `--dry-run` lists what it would send where.
 
 **Other Claude config folders.** A Claude session started with `CLAUDE_CONFIG_DIR` reads `$CLAUDE_CONFIG_DIR/.claude.json` and ignores `~/.claude.json`, so the entry also goes into the `.claude.json` of the agent's other Claude config folders. Only registered agents' folders are looked at:
 

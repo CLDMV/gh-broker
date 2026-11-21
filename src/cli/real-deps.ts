@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
+ *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,12 +19,14 @@
  * cli.ts so the installer can import it without pulling in the dispatcher.
  */
 import { readFileSync, existsSync, readdirSync, rmSync, renameSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseGroups, parsePasswd } from "./agents.ts";
 import { stateStore, writeFileAtomic, storeSeed } from "./otp.ts";
 import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./mcp-config.ts";
+import { configDirOf, tmuxPanes, tmuxSend, tmuxSockets } from "./tmux.ts";
 import { readSecretsFile, writeSecretsFile } from "./secret-store.ts";
 import { smokeTest } from "./smoke.ts";
 import type { CliDeps } from "./cli.ts";
@@ -104,6 +106,31 @@ export function realDeps(): CliDeps {
 			});
 		},
 		restart: restartService,
+		tmuxSockets: (uid) => tmuxSockets(uid),
+		tmuxPanes: (socket) => tmuxPanes(socket),
+		tmuxSend: (socket, pane, text) => tmuxSend(socket, pane, text),
+		paneConfigDir: (pid) => configDirOf(pid),
+		installedVersion: () => {
+			try {
+				const v = JSON.parse(readFileSync("/usr/local/lib/node_modules/@cldmv/gh-broker/package.json", "utf8")).version;
+				return typeof v === "string" ? v : undefined;
+			} catch {
+				return undefined; // no global install
+			}
+		},
+		latestVersion: () => {
+			const r = run("npm", ["view", "@cldmv/gh-broker", "version"], { allowFail: true });
+			const v = r.stdout.trim();
+			return /^\d/.test(v) ? v : undefined;
+		},
+		npmInstall: (spec) => run("npm", ["install", "-g", "--prefix", "/usr/local", "--ignore-scripts", `@cldmv/gh-broker@${spec}`]),
+		runNewInstall: (flags) => {
+			// The NEW binary installs the NEW package: a child process, never this running CLI (which
+			// is still the old code until the process exits). stdio is inherited so its prompts work.
+			const r = spawnSync("/usr/local/bin/gh-broker", ["install", ...flags], { stdio: "inherit" });
+			if (r.error) throw new Error(`/usr/local/bin/gh-broker install: ${r.error.message}`);
+			if (r.status !== 0) throw new Error(`/usr/local/bin/gh-broker install exited ${r.status}`);
+		},
 		sudoUser: () => process.env.SUDO_USER,
 		// Same journal identifier as the daemon (SyslogIdentifier=gh-broker), so `journalctl -t gh-broker` shows both.
 		audit: (entry) => run("systemd-cat", ["--identifier=gh-broker", "--priority=notice"], { input: `${JSON.stringify(entry)}\n` })
