@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
-import { npmScaffold, placeholderDocument, NPM_SCAFFOLD_SCHEMA, PLACEHOLDER_VERSION, SCAFFOLD_MARKER, NPM_STAGE_PLACEHOLDER } from "../src/verbs/npm_scaffold.ts";
+import { npmScaffold, trustExpired, placeholderDocument, NPM_SCAFFOLD_SCHEMA, PLACEHOLDER_VERSION, SCAFFOLD_MARKER, NPM_STAGE_PLACEHOLDER } from "../src/verbs/npm_scaffold.ts";
 import { NpmRegistry, NpmOtpRequired, NpmHttpError, escapePackageName, type FetchLike } from "../src/verbs/npm-registry.ts";
 import { buildTarball, tarballDigests } from "../src/verbs/npm-tarball.ts";
 
@@ -267,6 +267,60 @@ describe("npm_scaffold", () => {
 		expect(out).toMatchObject({ status: "done", done: [], skipped: ["publish", "trust"], trustId: "t-old" });
 		// The list was read without sending the code again.
 		expect(reg.calls.find((c) => c.method === "GET" && c.url.endsWith("/trust"))!.headers["npm-otp"]).toBeUndefined();
+	});
+
+	it("warns about npm's 2-day window when the existing trusted publisher shows no expiry", async () => {
+		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") }, existingTrust: [trustFor("CLDMV/new-thing")] });
+		const out = await npmScaffold(args(), deps(fakeGitHub(), reg));
+		expect(out.status).toBe("done");
+		expect(out.message).toMatch(/No release has used it yet: npm expires a trusted publisher that hasn't published within 2 days/);
+		expect(out.message).toContain("https://www.npmjs.com/package/@cldmv/new-thing/access");
+	});
+
+	it("warns about npm's 2-day window when it adds the trusted publisher", async () => {
+		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") } });
+		const out = await npmScaffold(args(), deps(fakeGitHub(), reg));
+		expect(out).toMatchObject({ status: "done", done: ["trust"] });
+		expect(out.message).toMatch(/npm expires a trusted publisher that hasn't published within 2 days of being added/);
+		expect(out.message).not.toMatch(/No release has used it yet/);
+	});
+
+	const NOW = Date.parse("2026-11-21T12:00:00Z");
+	it.each([
+		["a status", { status: "Expired" }],
+		["a flag", { expired: true }],
+		["an expiry time in the past", { expires_at: "2026-11-20T00:00:00Z" }],
+		["a creation time over 2 days ago", { createdAt: "2026-11-19T11:59:59Z" }]
+	])("reports an expired trusted publisher for this repo as expired (%s), writing nothing", async (_, extra) => {
+		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") }, existingTrust: [{ ...trustFor("CLDMV/new-thing"), ...extra }] });
+		const out = await npmScaffold(args(), { ...deps(fakeGitHub(), reg), now: () => NOW });
+		expect(out).toMatchObject({ status: "expired", done: [], remaining: ["trust"], skipped: ["publish"], trustId: "t-old" });
+		expect(out.message).toMatch(/expired: npm drops one that hasn't published within 2 days.*Delete it at https:\/\/www\.npmjs\.com\/package\/@cldmv\/new-thing\/access/);
+		expect(reg.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+	});
+
+	it("leaves the expired result's trust id out when npm's entry has none", async () => {
+		const { id: _id, ...noId } = trustFor("CLDMV/new-thing");
+		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") }, existingTrust: [{ ...noId, expired: true }] });
+		const out = await npmScaffold(args(), deps(fakeGitHub(), reg));
+		expect(out.status).toBe("expired");
+		expect(out).not.toHaveProperty("trustId");
+	});
+
+	describe("trustExpired", () => {
+		it.each([
+			[{}, false],
+			[{ status: "valid" }, false],
+			[{ state: "EXPIRED" }, true],
+			[{ status: 3 }, false],
+			[{ expiresAt: NOW + 1 }, false],
+			[{ expires: NOW }, true],
+			[{ expires_at: "not a date" }, false],
+			[{ created_at: NOW - 47 * 3600_000 }, false],
+			[{ created: new Date(NOW - 48 * 3600_000).toISOString() }, true]
+		])("%j → %s", (config, expected) => {
+			expect(trustExpired(config as Record<string, unknown>, NOW)).toBe(expected);
+		});
 	});
 
 	it.each([
