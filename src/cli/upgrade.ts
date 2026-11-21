@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-21T11:36:59-08:00 (1795289819)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -117,8 +117,9 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 		return 0;
 	}
 	const steps = upgradeSteps(target, args.installFlags, !args.noReconnect);
+	const downgrade = installed !== undefined && target !== "latest" && installed !== target && installed > target;
 	for (const [i, step] of steps.entries()) {
-		d.log(`==> step ${i + 1}/${steps.length}: ${step.name}`);
+		d.log(`==> step ${i + 1}/${steps.length}: ${step.name}${i === 0 && downgrade ? " (downgrade)" : ""}`);
 		try {
 			// steps[0] is always the npm install, steps[1] the new binary's install, and an
 			// optional steps[2] the reconnect — see upgradeSteps.

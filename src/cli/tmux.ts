@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-21T11:36:59-08:00 (1795289819)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -80,7 +80,10 @@ export function tmuxSockets(uid: number, opts: TmuxOptions = {}): string[] {
 	for (const pid of pids) {
 		try {
 			if (lstat(`${proc}/${pid}`).uid !== uid) continue;
-			if (basename(head(`${proc}/${pid}/cmdline`, MAX_CMDLINE_BYTES).split("\0")[0] ?? "") !== "tmux") continue;
+			// basename.includes("tmux") also catches a renamed copy started with a custom -S
+			// socket; the cmdline check stays cheap and the fd walk below confirms it really
+			// holds a unix socket before anything is probed.
+			if (!basename(head(`${proc}/${pid}/cmdline`, MAX_CMDLINE_BYTES).split("\0")[0] ?? "").includes("tmux")) continue;
 			for (const fd of readdir(`${proc}/${pid}/fd`)) {
 				const m = /^socket:\[(\d+)\]$/.exec(readlink(`${proc}/${pid}/fd/${fd}`));
 				if (m) inodes.add(m[1]!);

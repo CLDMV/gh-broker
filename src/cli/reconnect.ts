@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-21T11:36:59-08:00 (1795289819)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -63,7 +63,7 @@ export function busyPane(text: string): boolean {
 	});
 }
 
-/** The state of Claude Code's input line in the pane: "empty" (a "> " line with nothing typed), "typing" (text in it) or "none" (no input line on screen — a dialog, or bash/memory input mode). */
+/** The state of Claude Code's input line in the pane: "empty" (a "> " line with nothing typed), "typing" (text in it) or "none" (no input line on screen — a dialog, or a bash/memory pane with no transcript "> " line; a bash pane whose transcript shows a "> " reads "typing", which errs toward skipping — safe either way). */
 export function composerState(text: string): "empty" | "typing" | "none" {
 	const lines = text.split("\n");
 	// The input line is the bottom-most ">" line: user messages in the transcript carry a ">" too,
@@ -161,6 +161,22 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				if (dryRun) {
 					d.log(`${user} ${socket} ${pane.id} ${key} would send`);
 				} else {
+					// Re-capture this pane right before sending: the upfront capture can be
+					// stale by the time this pane's turn comes (earlier panes' sends, the key
+					// lookups), and the check is moment-to-moment — a pane can still change
+					// between this check and the two send-keys (tmux has no atomic
+					// check-and-send), which is why skipped panes are listed for retry.
+					const fresh = d.tmuxPanes(socket).find((p) => p.id === pane.id);
+					if (!fresh) {
+						d.log(`${user} ${socket} ${pane.id} ${key} skipped (pane gone since capture)`);
+						skipped++;
+						continue;
+					}
+					if (busyPane(fresh.text) || composerState(fresh.text) !== "empty") {
+						d.log(`${user} ${socket} ${pane.id} ${key} skipped (changed since capture: ${busyPane(fresh.text) ? "busy" : `composer ${composerState(fresh.text)}`})`);
+						skipped++;
+						continue;
+					}
 					try {
 						d.tmuxSend(socket, pane.id, `/mcp reconnect ${key}`);
 					} catch (err) {
