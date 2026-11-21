@@ -19,17 +19,17 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.11.2 (November 2026)
+### Latest: v0.12.0 (November 2026)
 
-- **`npm_scaffold` waits for npm's staged first publish.** npm stages a new package's first publish, and the verb used to read the registry once and report a failure. It now treats npm's `0.0.0-stage` or the placeholder as the package existing, moves on to the trusted publisher as soon as either shows, and returns `status: "pending"` instead of an error if neither shows within two minutes.
-- [View full v0.11.2 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.2.md)
+- **The broker's core is a library.** `@cldmv/gh-broker` (and `@cldmv/gh-broker/core`) now exports `createBroker`, which gives a host `invoke(name, args, ctx)` and a `run` driver adapter running the same policy, OTP and dispatch code as the daemon. The host brings its own config, token resolver and OTP check (`ctx.approve`, required for gated tools), gets typed `InvokeError` codes, and can cap any call with `ctx.signal` or `ctx.timeoutMs`. Nothing changes for the daemon.
+- [View full v0.12.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.12.0.md)
 
 ### Recent Releases
 
+- **v0.11.2** (November 2026) — `npm_scaffold` waits for npm's staged first publish and returns `status: "pending"` instead of failing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.2.md))
 - **v0.11.1** (November 2026) — the daemon loads again; `qrcode` is out of the daemon bundle and the build runs the built daemon before publishing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.1.md))
 - **v0.11.0** (November 2026) — `npm_scaffold` takes `path` and `ref`, and the core library takes shape; its daemon bundle didn't load, fixed in v0.11.1 ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.0.md))
 - **v0.10.7** (November 2026) — `npm_scaffold` resumes when a staged placeholder went live later ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.7.md))
-- **v0.10.6** (November 2026) — the `npm_scaffold` placeholder is `0.0.1-placeholder`, and the verb checks it went live before moving on ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.6.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
