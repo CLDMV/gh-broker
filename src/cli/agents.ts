@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:13-08:00 (1793974333)
+ *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -66,6 +66,13 @@ export interface RegisteredAgent {
 	complete: boolean;
 }
 
+/** An agent user's passwd entry (see parsePasswd). */
+export interface UserInfo {
+	uid: number;
+	gid: number;
+	home: string;
+}
+
 /** Parse the contents of /etc/group (or `getent group` output) into { name, gid, members }. */
 export function parseGroups(text: string): Group[] {
 	const groups: Group[] = [];
@@ -112,8 +119,8 @@ export function migrationPlan(groups: Group[], registered: RegisteredAgent[]): {
 	return { add, skipped };
 }
 
-/** Parse one `getent passwd` line into { uid, gid, home }, or undefined. */
-export function parsePasswd(line: string): { uid: number; gid: number; home: string } | undefined {
+/** Parse one `getent passwd` line into a UserInfo, or undefined. */
+export function parsePasswd(line: string): UserInfo | undefined {
 	const f = line.trim().split(":");
 	if (f.length < 6) return undefined;
 	const uid = Number(f[2]);
@@ -135,7 +142,7 @@ export function classifyInstall(packageDir: string): "global" | "nvm" | "checkou
 /** A warning when the npm package and the deployed /opt copy differ, else undefined. */
 export function versionWarning(pkgVersion: string | undefined, deployedVersion: string | undefined): string | undefined {
 	if (!deployedVersion || !pkgVersion || pkgVersion === deployedVersion) return undefined;
-	return `warning: the installed package is ${pkgVersion} but the deployed service is ${deployedVersion}; run "sudo gh-broker install"`;
+	return `warning: the installed package is ${pkgVersion} but the deployed service is ${deployedVersion}; run "sudo gh-broker upgrade"`;
 }
 
 export const NPM_INSTALL_COMMAND = "sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker@latest";

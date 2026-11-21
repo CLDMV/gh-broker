@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:13-08:00 (1793974333)
+ *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,19 +19,12 @@
  * and an entry in the agent user's Claude Code MCP config: `~/.claude.json`, plus the
  * `.claude.json` in each other Claude config folder the user has (#163). Every effect is injected.
  */
-import { agentGroup, agentsDir, assertAgentName, registeredAgents, socketPath, versionWarning, type Group, type RegisteredAgent } from "./agents.ts";
-import { applyMcpConfig, mcpEntry, mcpFileStatus, removeMcpConfig, SkippedFolder, MCP_BACKUP, MCP_FILE, type McpEntry, type McpIo, type PinFolder } from "./mcp-config.ts";
+import { agentGroup, agentsDir, assertAgentName, registeredAgents, socketPath, versionWarning, type Group, type RegisteredAgent, type UserInfo } from "./agents.ts";
+import { applyMcpConfig, extraFolders, inFolder, mcpEntry, mcpFileStatus, removeMcpConfig, SkippedFolder, MCP_BACKUP, MCP_FILE, type FolderIo, type McpEntry, type Place } from "./mcp-config.ts";
 import { statePathOf, type OtpDeps } from "./otp-cli.ts";
-import { absoluteFolders, addClaudeConfigDirs, type ConfigLayer } from "./config-merge.ts";
+import { addClaudeConfigDirs, type ConfigLayer } from "./config-merge.ts";
 import { spendRecentCodes, withoutUser } from "./otp.ts";
 import type { SmokeResult } from "./smoke.ts";
-
-/** An agent user's passwd entry. */
-export interface UserInfo {
-	uid: number;
-	gid: number;
-	home: string;
-}
 
 /** The effects the `agent` commands (and the installer's agent step) use. */
 export interface AgentDeps extends Pick<OtpDeps, "log" | "error" | "now" | "readState" | "writeState" | "versions" | "restart"> {
@@ -40,20 +33,10 @@ export interface AgentDeps extends Pick<OtpDeps, "log" | "error" | "now" | "read
 	ensureGroup: (user: string) => void;
 	removeGroup: (user: string) => void;
 	/** File access, plus how to find an agent's other Claude config folders (all optional). */
-	mcpIO: McpIo & {
-		scan?: (home: string) => string[];
-		sessions?: (uid: number) => string[];
-		pin?: PinFolder;
-	};
+	mcpIO: FolderIo;
 	writeConfig: (config: ConfigLayer) => void;
 	socketExists: (path: string) => boolean;
 	smoke: (socketPath: string) => Promise<Pick<SmokeResult, "tools">>;
-}
-
-/** One Claude config folder other than the home directory; `saved` means it was named with --claude-config. */
-interface Place {
-	folder: string;
-	saved: boolean;
 }
 
 /** What configuring one folder came to (an `applyMcpConfig` status, or why nothing was written). */
@@ -110,44 +93,6 @@ function rememberFolders(config: ConfigLayer, user: string, dirs: string[], d: A
 }
 
 const registry = (d: Pick<AgentDeps, "groups">): RegisteredAgent[] => registeredAgents(d.groups());
-
-/**
- * The agent's Claude config folders other than the home directory (#163): the ones saved for it
- * with --claude-config, its `~/.claude*` folders, and the `CLAUDE_CONFIG_DIR` of its running
- * `claude` sessions. Only these users' own folders are looked at, never anyone else's. Saved
- * folders were named by root, so they may be outside the home directory; found ones may not.
- */
-function extraFolders(info: UserInfo, d: AgentDeps, config: ConfigLayer, user: string): Place[] {
-	const home = info.home.replace(/\/+$/, "");
-	const saved = absoluteFolders(config.claudeConfigDirs?.[user]);
-	const found = [...(d.mcpIO.scan?.(info.home) ?? []), ...(d.mcpIO.sessions?.(info.uid) ?? [])];
-	const seen = new Set([home, info.home]);
-	const out: Place[] = [];
-	for (const [list, isSaved] of [[saved, true], [found, false]] as const) {
-		for (const folder of list) {
-			if (seen.has(folder)) continue;
-			seen.add(folder);
-			out.push({ folder, saved: isSaved });
-		}
-	}
-	return out;
-}
-
-/**
- * Run `fn(io)` for the files in `folder`. The home directory uses the io as is; any other folder is
- * pinned first (it must be a real directory the agent owns, and unless it was saved with
- * --claude-config, inside the agent's home). Returns undefined when the folder is gone.
- */
-function inFolder<T>({ folder, saved }: Place, info: UserInfo, d: AgentDeps, fn: (io: McpIo) => T): T | undefined {
-	if (folder === info.home || !d.mcpIO.pin) return fn(d.mcpIO);
-	const pinned = d.mcpIO.pin(folder, info.uid, saved ? undefined : info.home);
-	if (!pinned) return undefined;
-	try {
-		return fn(pinned.io);
-	} finally {
-		pinned.close();
-	}
-}
 
 const BAD = ["failed", "unsafe", "unreadable"];
 

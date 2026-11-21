@@ -75,7 +75,7 @@ describe("passwd, install location, versions", () => {
 	});
 
 	it("warns only when the package and the deployed version differ", () => {
-		expect(a.versionWarning("0.10.0", "0.9.0")).toContain('package is 0.10.0 but the deployed service is 0.9.0; run "sudo gh-broker install"');
+		expect(a.versionWarning("0.10.0", "0.9.0")).toContain('package is 0.10.0 but the deployed service is 0.9.0; run "sudo gh-broker upgrade"');
 		expect(a.versionWarning("0.9.0", "0.9.0")).toBeUndefined();
 		expect(a.versionWarning("0.9.0", undefined)).toBeUndefined();
 		expect(a.versionWarning(undefined, "0.9.0")).toBeUndefined();
