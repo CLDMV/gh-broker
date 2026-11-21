@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:03:41-08:00 (1795291421)
+ *	@Last modified time: 2026-11-21T12:23:30-08:00 (1795292610)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -27,7 +27,7 @@
  */
 import { agentsDir, assertAgentName, registeredAgents, type Group, type UserInfo } from "./agents.ts";
 import { brokerKeyOf, extraFolders, inFolder, MCP_FILE, type FolderIo, type Place } from "./mcp-config.ts";
-import type { Pane } from "./tmux.ts";
+import type { Pane, TmuxServer } from "./tmux.ts";
 import type { ConfigLayer } from "./config-merge.ts";
 
 export const RECONNECT_HELP = `agent reconnect [<user>] [--dry-run]
@@ -47,14 +47,14 @@ export interface ReconnectDeps {
 	groups: () => Group[];
 	userInfo: (user: string) => UserInfo | undefined;
 	mcpIO: FolderIo;
-	/** The tmux sockets the user's tmux servers listen on (each verified as the agent's own). */
-	tmuxSockets: (info: UserInfo) => string[];
+	/** The agent's tmux servers: socket + the binary that owns it (a client of one version can't reach a server of another). */
+	tmuxSockets: (info: UserInfo) => TmuxServer[];
 	/** The Claude Code panes on one tmux server, with their screen and foreground/mode state. */
-	tmuxPanes: (socket: string, info: UserInfo) => Pane[];
+	tmuxPanes: (server: TmuxServer, info: UserInfo) => Pane[];
 	/** Re-capture one pane's screen right before sending; undefined when the pane is gone. */
-	tmuxPaneText: (socket: string, pane: string, info: UserInfo) => string | undefined;
+	tmuxPaneText: (server: TmuxServer, pane: string, info: UserInfo) => string | undefined;
 	/** Send literal text to a pane as the agent and press Enter (tmux send-keys -l, then a separate Enter). */
-	tmuxSend: (socket: string, pane: string, text: string, info: UserInfo) => void;
+	tmuxSend: (server: TmuxServer, pane: string, text: string, info: UserInfo) => void;
 }
 
 /**
@@ -64,8 +64,8 @@ export interface ReconnectDeps {
  * working. A skipped pane is listed with its id, so it can be retried.
  */
 
-/** Spinner glyphs Claude Code's working indicator uses (✻✽✳✶✷✸✹✢✦ and the thin ·), starting a line of text. */
-const SPINNER = /^\s*[✻✽✳✶✷✸✹✢✦·]\s*\S/;
+/** Spinner glyphs Claude Code's working indicator uses (✻✽✳✶✷✸✹✢✦· — the installed build also rotates through * when TERM isn't xterm-ghostty, i.e. always inside tmux), starting a line of text. */
+const SPINNER = /^\s*[✻✽✳✶✷✸✹✢✦·*]\s*\S/;
 /** A finished turn's banner ("✻ Baked for 29s · done 9:55 AM") — a spinner glyph, but not working. */
 const DONE_BANNER = /· done\b/;
 
@@ -77,16 +77,23 @@ const DONE_BANNER = /· done\b/;
  * unjoined, so a narrow pane reads as busy either way.
  */
 export function busyPane(text: string): boolean {
-	return text.split("\n").some((line) => {
-		const l = line.replace(/\s+$/, "");
-		return /esc to interrupt/i.test(l) || (SPINNER.test(l) && !DONE_BANNER.test(l));
+	const lines = text.split("\n").map((l) => l.replace(/\s+$/, ""));
+	const topRule = (i: number): boolean => RULE.test(lines[i]!) && /^[❯>]/.test(lines[i + 1] ?? "");
+	return lines.some((l, i) => {
+		if (/esc to interrupt/i.test(l)) return true;
+		if (SPINNER.test(l) && !DONE_BANNER.test(l)) return true;
+		// Sturdier: whatever non-blank line sits directly above the composer's top rule is the
+		// working indicator unless it is the finished-turn banner — a future indicator shape
+		// stays caught. (A transcript line that touches the rule reads busy too: skipped, safe.)
+		if (topRule(i + 1) && l.trim() !== "" && !DONE_BANNER.test(l) && !RULE.test(l)) return true;
+		return false;
 	});
 }
 
 /** The composer box's rule line ("────"). */
 const RULE = /^\s*─+\s*$/;
-/** Footer and widget lines under the box ("⏵⏵ accept edits on …", "? for shortcuts", "● main" tasks). */
-const FOOTER = /^\s*[?⏵●◯]/;
+/** Footer lines under the box — only the known shapes ("⏵⏵ accept edits on …", "? for shortcuts", the "◯" task bullet, "new task?"), so a draft's own continuation starting with "?" or "●" doesn't end the scan. */
+const FOOTER = /^\s*(?:⏵|◯)|\b(?:for shortcuts|to cycle|to manage|new task\?)/;
 
 /**
  * The state of Claude Code's input line in the pane: "empty" (a "❯"/"> " line with nothing typed),
@@ -119,8 +126,8 @@ export function composerState(text: string): "empty" | "typing" | "none" {
  */
 export const safeKey = (key: string): boolean => /^[A-Za-z0-9_.-]{1,64}$/.test(key);
 
-/** Control characters never reach root's terminal in a log line: a socket path or pane id carrying them is blanked out. */
-const clean = (s: string): string => s.replace(/[\x00-\x1f\x7f]/g, "?");
+/** Control characters never reach root's terminal in a log line: a socket path, pane id or a tmux error message carrying C0 or C1 controls (U+009B is CSI on some terminals) is blanked out. */
+const clean = (s: string): string => s.replace(/[\x00-\x1f\x7f\x80-\x9f]/g, "?");
 
 /** Split `agent reconnect` arguments into the agent users (at most one), --dry-run and --help. */
 function parseReconnectArgs(rest: string[]): { users: string[]; dryRun: boolean; help: boolean } {
@@ -195,9 +202,10 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		const places: Place[] = [{ folder: info.home, saved: false }, ...extraFolders(info, d, config, user)];
 		const keys = keysOf(places, info, dir, d);
 		let panes = 0;
-		const sockets = d.tmuxSockets(info);
-		for (const socket of sockets) {
-			for (const pane of d.tmuxPanes(socket, info)) {
+		const servers = d.tmuxSockets(info);
+		for (const server of servers) {
+			const socket = server.socket;
+			for (const pane of d.tmuxPanes(server, info)) {
 				panes++;
 				if (pane.inMode) {
 					skip(user, socket, pane.id, undefined, "pane is in copy mode");
@@ -240,7 +248,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				} else {
 					// Re-capture between the check and the send: the operator may have started
 					// typing (or the pane died) while the checks ran.
-					const fresh = d.tmuxPaneText(socket, pane.id, info);
+					const fresh = d.tmuxPaneText(server, pane.id, info);
 					if (fresh === undefined) {
 						skip(user, socket, pane.id, key, "gone since capture");
 						continue;
@@ -254,9 +262,9 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 						continue;
 					}
 					try {
-						d.tmuxSend(socket, pane.id, `/mcp reconnect ${key}`, info);
+						d.tmuxSend(server, pane.id, `/mcp reconnect ${key}`, info);
 					} catch (err) {
-						skip(user, socket, pane.id, key, `send failed: ${(err as Error).message}`);
+						skip(user, socket, pane.id, key, `send failed: ${clean((err as Error).message)}`);
 						continue;
 					}
 					d.log(`${user} ${clean(socket)} ${clean(pane.id)} ${key} sent`);
@@ -264,7 +272,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				sent++;
 			}
 		}
-		if (panes === 0) d.log(`${user}: no Claude Code sessions running${sockets.length ? "" : " (no tmux server)"}`);
+		if (panes === 0) d.log(`${user}: no Claude Code sessions running${servers.length ? "" : " (no tmux server)"}`);
 	}
 	d.log(dryRun ? `dry run: ${sent} pane(s) would get "/mcp reconnect"` : `sent ${sent}, skipped ${skipped}`);
 	return skipped === 0 ? 0 : 1;

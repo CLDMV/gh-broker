@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { busyPane, composerState, reconnect, safeKey, RECONNECT_HELP } from "../src/cli/reconnect.ts";
 import { brokerKeyOf, mcpEntry, SkippedFolder } from "../src/cli/mcp-config.ts";
-import type { Pane } from "../src/cli/tmux.ts";
+import type { Pane, TmuxServer } from "../src/cli/tmux.ts";
 import { makeDeps, config, GROUPS } from "./helpers/cli-deps.mjs";
 
 const DIR = "/run/gh-broker/agents";
@@ -56,6 +56,29 @@ interrupt · 32s)`;
 const PS2_SHELL = `$ for f in *; do
 >
 `;
+// The installed Claude Code (2.1.326) rotates its spinner through "*", "·" and "✢" frames too
+// whenever TERM isn't xterm-ghostty — i.e. always inside tmux; a capture on the "*" frame used to
+// read idle (roughly one capture in six, and the re-capture often lands on the same frame).
+const STAR_FRAME = `* Considering what to do next
+
+${RULE}
+❯
+${RULE}
+  ⏵⏵ accept edits on (shift+tab to cycle)`;
+// A working-indicator shape the glyph list doesn't know, sitting directly above the composer's
+// top rule: still busy.
+const ABOVE_RULE = `⌛ Crunching the numbers
+${RULE}
+❯
+${RULE}
+  ⏵⏵ accept edits on (shift+tab to cycle)`;
+// A draft whose continuation lines start with "?" or "●" — the footer detector must not stop on them.
+const DRAFT_QUESTION = `${RULE}
+❯
+  ? why does the socket drop
+  ● and list the suspects
+${RULE}
+  ⏵⏵ accept edits on (shift+tab to cycle)`;
 
 describe("busyPane (heuristic over Claude Code's screen)", () => {
 	it("sees the working indicator of the current TUI and of older ones", () => {
@@ -71,6 +94,14 @@ describe("busyPane (heuristic over Claude Code's screen)", () => {
 		expect(busyPane(DONE)).toBe(false);
 		expect(busyPane(BLANK_FIRST_DRAFT)).toBe(false);
 		expect(busyPane(PS2_SHELL)).toBe(false);
+	});
+
+	it("sees the * spinner frame and any working line directly above the composer's top rule", () => {
+		expect(busyPane(STAR_FRAME)).toBe(true);
+		expect(busyPane("* Waiting for 1 background agent to finish")).toBe(true);
+		expect(busyPane(ABOVE_RULE)).toBe(true);
+		// the finished-turn banner above the rule is not working
+		expect(busyPane(DONE)).toBe(false);
 	});
 
 	it("is not fooled by transcript lines and the task widget", () => {
@@ -99,6 +130,10 @@ describe("composerState (heuristic over Claude Code's screen)", () => {
 		expect(composerState("Do you want to proceed?\n❯ 1. Yes\n  2. No (esc)")).toBe("typing");
 		expect(composerState("!\n  ! for bash mode")).toBe("none");
 		expect(composerState("")).toBe("none");
+	});
+
+	it("a draft whose continuation starts with ? or ● is still typing — only the known footers stop the scan", () => {
+		expect(composerState(DRAFT_QUESTION)).toBe("typing");
 	});
 
 	it("takes the bottom-most prompt line, so a user message in the transcript doesn't count", () => {
@@ -130,9 +165,10 @@ describe("brokerKeyOf (what mcp-config wrote, read back)", () => {
 describe("agent reconnect", () => {
 	const info = { uid: 1000, gid: 1000, home: "/home/repo" };
 	/** Deps whose tmux has `panes` on SOCK; tmuxPaneText re-captures `fresh` (an idle screen by default; `null` means the pane is gone). */
+	const SERVER: TmuxServer = { socket: SOCK, binary: "/usr/bin/tmux" };
 	function withPanes(panes: Pane[], over: Record<string, unknown> = {}, files: Record<string, string> = {}, fresh: string | null = "❯ \n") {
 		return makeDeps(
-			{ tmuxSockets: vi.fn(() => [SOCK]), tmuxPanes: vi.fn((_socket: string, _info: unknown) => panes), tmuxPaneText: vi.fn(() => (fresh === null ? undefined : fresh)), ...over },
+			{ tmuxSockets: vi.fn(() => [SERVER]), tmuxPanes: vi.fn((_server: TmuxServer, _info: unknown) => panes), tmuxPaneText: vi.fn(() => (fresh === null ? undefined : fresh)), ...over },
 			{ [claude("repo")]: entry, ...files }
 		);
 	}
@@ -142,10 +178,10 @@ describe("agent reconnect", () => {
 		const { d, out } = withPanes([pane("%3", IDLE), pane("%4", IDLE, { foreground: false })]);
 		expect(reconnect(["repo"], config, d)).toBe(1);
 		expect(d.tmuxSockets).toHaveBeenCalledWith(info);
-		expect(d.tmuxPanes).toHaveBeenCalledWith(SOCK, info);
-		expect(d.tmuxPaneText).toHaveBeenCalledWith(SOCK, "%3", info);
+		expect(d.tmuxPanes).toHaveBeenCalledWith(SERVER, info);
+		expect(d.tmuxPaneText).toHaveBeenCalledWith(SERVER, "%3", info);
 		expect(d.tmuxSend).toHaveBeenCalledTimes(1);
-		expect(d.tmuxSend).toHaveBeenCalledWith(SOCK, "%3", "/mcp reconnect github", info);
+		expect(d.tmuxSend).toHaveBeenCalledWith(SERVER, "%3", "/mcp reconnect github", info);
 		expect(out).toContain(`repo ${SOCK} %3 github sent`);
 		expect(out).toContain(`repo ${SOCK} %4 github skipped (claude is not the pane's foreground job)`);
 		expect(out[out.length - 1]).toBe("sent 1, skipped 1");
@@ -195,7 +231,7 @@ describe("agent reconnect", () => {
 		const saved = JSON.stringify({ mcpServers: { "gh-broker": mcpEntry("repo", DIR) } });
 		const { d, out } = makeDeps(
 			{
-				tmuxSockets: vi.fn(() => [SOCK]),
+				tmuxSockets: vi.fn(() => [{ socket: SOCK, binary: "tmux" }]),
 				tmuxPanes: vi.fn(() => [pane("%1", IDLE, { configDir: "/home/repo/.claude-alt" })]),
 				mcpIO: { read: (p: string) => (p === `${SAVED}/.claude.json` ? { text: saved, stat: { uid: 1000, gid: 1000, mode: 0o100600 } } : undefined), write: () => {} }
 			},
@@ -211,7 +247,7 @@ describe("agent reconnect", () => {
 		const ALT = "/home/repo/.claude-alt";
 		const files = { [claude("repo")]: entry, [`${ALT}/.claude.json`]: JSON.stringify({ mcpServers: { "gh-broker-repo": mcpEntry("repo", DIR) } }) };
 		const { d, out } = makeDeps(
-			{ tmuxSockets: vi.fn(() => [SOCK]), tmuxPanes: vi.fn(() => [pane("%1", IDLE, { configDir: ALT }), pane("%2", IDLE)]), mcpIO: { read: (p: string) => (files[p] === undefined ? undefined : { text: files[p], stat: { uid: 1000, gid: 1000, mode: 0o100600 } }), write: () => {}, scan: (home: string) => (home === "/home/repo" ? [ALT] : []) } },
+			{ tmuxSockets: vi.fn(() => [{ socket: SOCK, binary: "tmux" }]), tmuxPanes: vi.fn(() => [pane("%1", IDLE, { configDir: ALT }), pane("%2", IDLE)]), mcpIO: { read: (p: string) => (files[p] === undefined ? undefined : { text: files[p], stat: { uid: 1000, gid: 1000, mode: 0o100600 } }), write: () => {}, scan: (home: string) => (home === "/home/repo" ? [ALT] : []) } },
 			files
 		);
 		expect(reconnect(["repo"], config, d)).toBe(0);
@@ -229,7 +265,7 @@ describe("agent reconnect", () => {
 	});
 
 	it("blank control characters out of a socket path in the log line, and refuse an unsafe pane id", () => {
-		const { d, out } = withPanes([pane("%1", IDLE)], { tmuxSockets: vi.fn(() => ["/tmp/tmux-1000/evil\rsock"]) });
+		const { d, out } = withPanes([pane("%1", IDLE)], { tmuxSockets: vi.fn(() => [{ socket: "/tmp/tmux-1000/evil\rsock", binary: "tmux" }]) });
 		expect(reconnect(["repo"], config, d)).toBe(0);
 		expect(out).toContain("repo /tmp/tmux-1000/evil?sock %1 github sent");
 		const badId = withPanes([pane("%1\r!x", IDLE)]);
@@ -241,7 +277,7 @@ describe("agent reconnect", () => {
 		const BROKEN = "/home/repo/.claude-broken";
 		const { d, out } = makeDeps(
 			{
-				tmuxSockets: vi.fn(() => [SOCK]),
+				tmuxSockets: vi.fn(() => [{ socket: SOCK, binary: "tmux" }]),
 				tmuxPanes: vi.fn(() => [pane("%1", IDLE)]),
 				mcpIO: {
 					read: (p: string) => (p === claude("repo") ? { text: entry, stat: { uid: 1000, gid: 1000, mode: 0o100600 } } : undefined),
@@ -259,14 +295,14 @@ describe("agent reconnect", () => {
 	});
 
 	it("lists panes from every tmux server the agent runs, with the socket in the line", () => {
-		const OTHER = "/home/repo/.tmux/claude";
+		const OTHER: TmuxServer = { socket: "/home/repo/.tmux/claude", binary: "tmux" };
 		const { d, out } = makeDeps(
-			{ tmuxSockets: vi.fn(() => [SOCK, OTHER]), tmuxPanes: vi.fn((socket: string) => (socket === SOCK ? [pane("%1", IDLE)] : socket === OTHER ? [pane("%7", IDLE)] : [])) },
+			{ tmuxSockets: vi.fn(() => [SERVER, OTHER]), tmuxPanes: vi.fn((server: TmuxServer) => (server.socket === SOCK ? [pane("%1", IDLE)] : server.socket === OTHER.socket ? [pane("%7", IDLE)] : [])) },
 			{ [claude("repo")]: entry }
 		);
 		expect(reconnect(["repo"], config, d)).toBe(0);
 		expect(out).toContain(`repo ${SOCK} %1 github sent`);
-		expect(out).toContain(`repo ${OTHER} %7 github sent`);
+		expect(out).toContain(`repo ${OTHER.socket} %7 github sent`);
 	});
 
 	it("covers every registered agent when none is named", () => {
@@ -283,11 +319,17 @@ describe("agent reconnect", () => {
 		expect(out[out.length - 1]).toBe("sent 0, skipped 0");
 	});
 
-	it("keeps going when a send fails, and counts it as skipped", () => {
-		const { d, out } = withPanes([pane("%1", IDLE), pane("%2", IDLE)], { tmuxSend: vi.fn((_s: string, p: string, _t: string, _i: unknown) => { if (p === "%1") throw new Error("pane died"); }) });
+	it("keeps going when a send fails, counts it as skipped, and sanitises the tmux error", () => {
+		const { d, out } = withPanes([pane("%1", IDLE), pane("%2", IDLE)], {
+			tmuxSend: vi.fn((_s: unknown, p: string, _t: string, _i: unknown) => {
+				if (p === "%1") throw new Error("server exited unexpectedly\x1b[31m\x9b and a C1 CSI");
+			})
+		});
 		expect(reconnect(["repo"], config, d)).toBe(1);
 		expect(d.tmuxSend).toHaveBeenCalledTimes(2);
-		expect(out).toContain(`repo ${SOCK} %1 github skipped (send failed: pane died)`);
+		expect(out).toContain(`repo ${SOCK} %1 github skipped (send failed: server exited unexpectedly?[31m? and a C1 CSI)`);
+		expect(out.join("\n")).not.toContain("\x1b");
+		expect(out.join("\n")).not.toContain("\x9b");
 		expect(out).toContain(`repo ${SOCK} %2 github sent`);
 	});
 
