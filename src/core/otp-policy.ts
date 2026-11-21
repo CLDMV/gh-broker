@@ -15,13 +15,16 @@
 
 /**
  * Which tools need a broker OTP (design #175 §1's otp/policy.ts split row: the gating
- * half). Catalog, router and availability all ask here, so the advertised schema, the
- * availability check and the gate itself can never disagree about a tool. The daemon's
- * half of the old module — OTP_DEFAULTS, otpSettings, readSeed, otpSetupProblem — stays
- * in src/otp/policy.ts, which re-exports this gating half from the old path.
+ * half), plus the config-derived OTP limit settings (slice 6: re-homed here from the
+ * daemon's half — pure mapping over config.otp, no host knowledge). Catalog, router and
+ * availability all ask here, so the advertised schema, the availability check and the
+ * gate itself can never disagree about a tool. The rest of the old module stays host:
+ * the statePath default (the daemon's /var/lib location) and the seed checks —
+ * readSeed/otpSetupProblem — live in src/otp/policy.ts, which re-exports this half from
+ * the old path and re-adds statePath to the settings shape.
  */
 
-import type { ToolRule } from "./types.ts";
+import type { Config, OtpConfig, ToolRule } from "./types.ts";
 
 /** The status verb. Never gated and never blocked by a lock, so a locked agent can still report. */
 export const OTP_STATUS = "otp_status";
@@ -58,4 +61,30 @@ export function isGated(rule: ToolRule): boolean {
 export function windowText(seconds: number): string {
 	if (seconds % 60 === 0) return `${seconds / 60} minute${seconds === 60 ? "" : "s"}`;
 	return `${seconds} seconds`;
+}
+
+/**
+ * The OTP limits' defaults (config.otp's four knobs). No statePath: where lock state is
+ * persisted is host knowledge (the daemon's default lives in src/otp/policy.ts; a
+ * library host keeps its own store), so it never enters the library's settings shape.
+ */
+export const OTP_DEFAULTS = {
+	windowSeconds: 300,
+	maxFailures: 5,
+	lockoutSeconds: 600,
+	maxLockouts: 3
+} as const;
+
+/** config.otp's limits with every default filled in (statePath excluded — host knowledge). */
+export type OtpSettings = Required<Omit<OtpConfig, "seed" | "statePath">>;
+
+/** config.otp's limits with every default filled in (defaults alone when there is no config.otp). */
+export function otpSettings(config: Pick<Config, "otp">): OtpSettings {
+	const o = config.otp;
+	return {
+		windowSeconds: o?.windowSeconds ?? OTP_DEFAULTS.windowSeconds,
+		maxFailures: o?.maxFailures ?? OTP_DEFAULTS.maxFailures,
+		lockoutSeconds: o?.lockoutSeconds ?? OTP_DEFAULTS.lockoutSeconds,
+		maxLockouts: o?.maxLockouts ?? OTP_DEFAULTS.maxLockouts
+	};
 }

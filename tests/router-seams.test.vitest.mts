@@ -312,10 +312,13 @@ describe("a gated ghcr tool still goes through the gate (fix N1: the dispatch mu
 			const row = logLines.find((l) => l.includes('"decision":"deny"'));
 			expect(JSON.parse(row!)).toMatchObject({ tool: "ghcr_push", user: "tester", decision: "deny", detail: "otp" });
 			expect(ghcr.push).not.toHaveBeenCalled();
-			// And with a good code it dispatches through the ghcr service with the otp fields.
+			// And with a good code it dispatches through the ghcr service with the otp fields
+			// on the ok:true row (nit 3).
 			authorize.mockImplementationOnce(() => ({ otp: "opened", window: "w" }));
 			await r.call("ghcr_push", { image: "x", otp: "654321" }, { user: "tester" });
 			expect(ghcr.push).toHaveBeenCalledTimes(1);
+			const okRow = logLines.find((l) => l.includes('"decision":"custom"') && l.includes('"ok":true'));
+			expect(JSON.parse(okRow!)).toMatchObject({ tool: "ghcr_push", decision: "custom", ok: true, otp: "opened", window: "w" });
 		} finally {
 			auditSpy.mockRestore();
 		}
