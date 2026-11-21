@@ -109,8 +109,10 @@ export interface NpmScaffoldResult {
 	/**
 	 * done: finished. needs_otp: call again with the next npm code. pending: npm accepted the
 	 * first publish but is still making it live; call again with a fresh code in a minute.
+	 * expired: the package's trusted publisher for this repo expired before any release used it;
+	 * delete it on the package's access page and call again with a fresh code.
 	 */
-	status: "done" | "needs_otp" | "pending";
+	status: "done" | "needs_otp" | "pending" | "expired";
 	package: string;
 	repository: string;
 	workflow: string;
@@ -137,6 +139,8 @@ export interface NpmScaffoldDeps {
 	livePollMs?: number;
 	/** Injected for tests. */
 	sleep?: (ms: number) => Promise<void>;
+	/** The clock, for the trusted publisher's expiry check. Injected for tests. */
+	now?: () => number;
 }
 
 /** npm made a staged first publish live about 77 s after answering 202; allow some margin. */
@@ -146,6 +150,39 @@ const PENDING_MESSAGE =
 	"npm accepted the placeholder publish, but the package isn't on the registry yet (npm stages a new package's first version and shows it on its own shortly after; nothing needs approving). Wait a minute, then call again with a fresh npm code to add the trusted publisher.";
 /** The package exists on the registry once it shows our placeholder or npm's staging placeholder. */
 const exists = (p: { versions?: Record<string, unknown> } | undefined) => Boolean(p?.versions?.[PLACEHOLDER_VERSION] || p?.versions?.[NPM_STAGE_PLACEHOLDER]);
+
+/**
+ * npm expires a trusted publisher that has not published anything within 2 days of being
+ * added. The expired entry stays listed but can't be used or edited, only deleted.
+ */
+const TRUST_UNUSED_LIFETIME_MS = 48 * 60 * 60 * 1000;
+const TRUST_WINDOW_NOTE =
+	"npm expires a trusted publisher that hasn't published within 2 days of being added, so merge the release that first publishes this package before then.";
+
+/** The first of these keys holding a parseable timestamp, in ms. */
+function timeField(c: Record<string, unknown>, keys: string[]): number | undefined {
+	for (const k of keys) {
+		const v = c[k];
+		const t = typeof v === "number" ? v : typeof v === "string" ? Date.parse(v) : NaN;
+		if (Number.isFinite(t)) return t;
+	}
+	return undefined;
+}
+
+/**
+ * Whether npm's listing marks this configuration expired. npm does not document the trust
+ * list's fields, so this reads every signal it might carry: an expired status or flag, an
+ * expiry time in the past, or a creation time over 2 days ago (the verb only gets here while
+ * the package holds placeholders alone, so no release has ever used the configuration).
+ */
+export function trustExpired(c: Record<string, unknown>, now: number): boolean {
+	if (c.expired === true) return true;
+	for (const k of ["status", "state"]) if (typeof c[k] === "string" && /expired/i.test(c[k] as string)) return true;
+	const expires = timeField(c, ["expires_at", "expiresAt", "expires"]);
+	if (expires !== undefined && expires <= now) return true;
+	const created = timeField(c, ["created_at", "createdAt", "created"]);
+	return created !== undefined && now - created >= TRUST_UNUSED_LIFETIME_MS;
+}
 
 const fail = (msg: string): never => {
 	throw new Error(`npm_scaffold: ${msg}`);
@@ -407,6 +444,19 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 			const existingList = configs.map((c) => `${String(c.type)} ${String(claimsOf(c).repository)} (${String(claimsOf(c).workflow_ref?.file)})`).join("; ") || "unreadable";
 			fail(`${args.package} already has a different trusted publisher: ${existingList}. Change it at ${access}`);
 		}
+		// fail() above never returns, so matches is set here.
+		const found = matches as Record<string, unknown>;
+		if (trustExpired(found, (deps.now ?? Date.now)())) {
+			return {
+				...base,
+				status: "expired",
+				done: [],
+				remaining: ["trust"],
+				skipped: ["publish"],
+				...(typeof found.id === "string" ? { trustId: found.id } : {}),
+				message: `${args.package}'s trusted publisher for ${facts.repository} (.github/workflows/${args.workflow}) expired: npm drops one that hasn't published within 2 days of being added, and an expired one can only be deleted. Delete it at ${access}, then call again with a fresh npm code close to the release that first publishes the package.`
+			};
+		}
 		alreadyThere = true;
 		out = { config: matches, conflict: true };
 	}
@@ -418,6 +468,6 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 		done: alreadyThere ? [] : ["trust"],
 		skipped: alreadyThere ? ["publish", "trust"] : ["publish"],
 		...(trustId ? { trustId } : {}),
-		message: `${args.package} exists with a trusted publisher for ${facts.repository} (.github/workflows/${args.workflow}); its next release can publish through OIDC.`
+		message: `${args.package} exists with a trusted publisher for ${facts.repository} (.github/workflows/${args.workflow}); its next release can publish through OIDC. ${alreadyThere ? `No release has used it yet: ${TRUST_WINDOW_NOTE} Check https://www.npmjs.com/package/${args.package}/access shows it as valid.` : TRUST_WINDOW_NOTE}`
 	};
 }

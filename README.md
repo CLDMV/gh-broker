@@ -123,6 +123,12 @@ npm only accepts a trusted publisher on a package that already exists, so every 
 
 🐳 **Full parameter reference and threat model: [docs/TOOLS.md](docs/TOOLS.md#ghcr_push)**
 
+### 📚 **The Core as a Library**
+
+`@cldmv/gh-broker` (and `@cldmv/gh-broker/core`) exports the broker's core for other hosts: `createBroker` gives a host `invoke(name, args, ctx)` running the same policy, OTP checks and dispatch as the daemon, while the host keeps its own tokens, OTP flow and audit log. The daemon itself is not part of the export.
+
+📚 **Host guide: [docs/LIBRARY.md](docs/LIBRARY.md)**
+
 ### 🔧 **Extensible By Design**
 
 The broker presents its **own** MCP contract to the agent — a proxied tool's schema and response are not required to match the hosted MCP's exactly. Adding a custom verb or extending a proxied tool with new parameters follows a documented pattern, not a one-off hack.
