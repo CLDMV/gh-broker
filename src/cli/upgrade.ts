@@ -166,20 +166,32 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 	// nothing has been installed yet, not after the npm step. A flag this release's parser
 	// doesn't know passes through only as --flag=value: that form can't swallow the next
 	// argument, and the NEW binary's own parser validates it (and everything else) before it
-	// does anything. A bare unknown flag is refused — it may be a near-miss of one of upgrade's
-	// own flags, or a typo about to install the package and then die in the child.
-	let installArgs: ReturnType<typeof parseArgs> | undefined;
-	try {
-		installArgs = parseArgs(args.installFlags);
-	} catch (err) {
-		const unknown = /unknown flag: (\S+)/.exec((err as Error).message)?.[1];
-		if (!unknown) throw new Error(`install flags: ${(err as Error).message}`);
-		if (!unknown.includes("=")) {
-			const near = nearOwnFlag(unknown);
-			throw new Error(near ? `unknown flag: ${unknown} — did you mean ${near}?` : `unknown flag: ${unknown} — pass flags the new release knows as --flag=value`);
+	// does anything. parseArgs throws at the FIRST unknown flag, so the split walks left to
+	// right: each unknown --flag=value arg is set aside and the rest re-parsed, so a
+	// positional, a typo or a missing value AFTER a pass-through flag still fails here. A
+	// bare unknown flag is refused — it may be a near-miss of one of upgrade's own flags, or
+	// a typo about to install the package and then die in the child — and so is one of those
+	// flags' typos in --flag=value form. The split is validation only: the new binary
+	// receives the flags verbatim, in the original order.
+	const passThrough: string[] = [];
+	const validated = (): ReturnType<typeof parseArgs> => {
+		for (;;) {
+			const pending = args.installFlags.filter((f) => !passThrough.includes(f));
+			try {
+				return parseArgs(pending);
+			} catch (err) {
+				const unknown = /unknown flag: (.+?) \(see --help\)$/.exec((err as Error).message)?.[1];
+				if (!unknown || !pending.includes(unknown)) throw new Error(`install flags: ${(err as Error).message}`);
+				const name = unknown.includes("=") ? unknown.slice(0, unknown.indexOf("=")) : unknown;
+				const near = nearOwnFlag(name);
+				if (near) throw new Error(`unknown flag: ${unknown} — did you mean ${near}?`);
+				if (!unknown.includes("=")) throw new Error(`unknown flag: ${unknown} — pass flags the new release knows as --flag=value`);
+				passThrough.push(unknown);
+			}
 		}
-	}
-	if (installArgs?.positional.length) throw new Error(`upgrade takes only flags — "${installArgs.positional.join(" ")}" would be an install argument; pass --agent-user <name> instead`);
+	};
+	const installArgs = validated();
+	if (installArgs.positional.length) throw new Error(`upgrade takes only flags — "${installArgs.positional.join(" ")}" would be an install argument; pass --agent-user <name> instead`);
 	const target = args.version ?? d.latestVersion() ?? "latest";
 	const installed = d.installedVersion();
 	const deployed = d.deployedVersion();

@@ -118,10 +118,36 @@ describe("upgradeCommand", () => {
 		expect(d3.d.npmInstall).not.toHaveBeenCalled();
 	});
 
+	it("validation reaches past a pass-through --flag=value flag (parseArgs stops at the first unknown)", () => {
+		// a positional after a pass-through flag would reach install as an argument — refused
+		const positional = makeDeps();
+		expect(() => upgradeCommand(["--new=1", "bob"], config, positional.d)).toThrow(/upgrade takes only flags — "bob"/);
+		expect(positional.d.npmInstall).not.toHaveBeenCalled();
+		expect(positional.d.runNewBinary).not.toHaveBeenCalled();
+		// a typo of upgrade's own flags after a pass-through flag is named, before npm runs
+		const typo = makeDeps();
+		expect(() => upgradeCommand(["--new=1", "--no-reconect"], config, typo.d)).toThrow(/unknown flag: --no-reconect — did you mean --no-reconnect\?/);
+		expect(typo.d.npmInstall).not.toHaveBeenCalled();
+		expect(typo.d.runNewBinary).not.toHaveBeenCalled();
+		// a value-taking flag left without its value after a pass-through flag is refused too
+		const missing = makeDeps();
+		expect(() => upgradeCommand(["--new=1", "--agent-user"], config, missing.d)).toThrow(/install flags: --agent-user requires a value/);
+		expect(missing.d.npmInstall).not.toHaveBeenCalled();
+		// a near-miss of upgrade's own flags in --flag=value form is refused as well
+		const typoValue = makeDeps();
+		expect(() => upgradeCommand(["--no-reconect=1"], config, typoValue.d)).toThrow(/unknown flag: --no-reconect=1 — did you mean --no-reconnect\?/);
+		expect(typoValue.d.npmInstall).not.toHaveBeenCalled();
+	});
+
 	it("an unknown flag in --flag=value form passes through to the new binary, which validates it before it does anything", () => {
 		const future = makeDeps();
 		expect(upgradeCommand(["--a-flag-only-vnext-knows=x", "--no-reconnect"], config, future.d)).toBe(0);
 		expect(future.d.runNewBinary).toHaveBeenCalledWith(["install", "--a-flag-only-vnext-knows=x"]);
+		// several pass-through flags mixed with known ones: validated around them, passed verbatim in the original order
+		const mixed = makeDeps();
+		expect(upgradeCommand(["--new=1", "--claude-config", "repo:/srv/x", "--other=2"], config, mixed.d)).toBe(0);
+		expect(mixed.d.npmInstall).toHaveBeenCalledWith("latest");
+		expect(mixed.d.runNewBinary).toHaveBeenCalledWith(["install", "--new=1", "--claude-config", "repo:/srv/x", "--other=2"]);
 	});
 
 	it("editDistance / nearOwnFlag pin the typo detection", () => {
