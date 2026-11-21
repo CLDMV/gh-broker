@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:23:30-08:00 (1795292610)
+ *	@Last modified time: 2026-11-21T12:33:48-08:00 (1795293228)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -55,7 +55,7 @@ Stops at the first failed step and prints what to run to finish. --no-reconnect 
 The target must be a semantic version (--version 0.12.1); a downgrade needs --force. When the
 package is installed AND deployed at the target, nothing runs unless --force. Other flags pass
 through to install (e.g. --claude-config <user>:<dir>, --no-mcp-config) and are validated before
-anything runs.`;
+anything runs; a flag the new release may add passes through as --flag=value.`;
 
 /** What `upgrade` parses to. Everything that isn't upgrade's own flag is an install flag, passed through verbatim. */
 export interface UpgradeArgs {
@@ -77,13 +77,14 @@ export function parseUpgradeArgs(rest: string[]): UpgradeArgs {
 		if (a === "--force") args.force = true;
 		else if (a === "--no-reconnect") args.noReconnect = true;
 		else if (a === "-h" || a === "--help") args.help = true;
-		else if (a === "--version") {
-			const v = rest[++i];
+		else if (a === "--version" || a.startsWith("--version=")) {
 			// The version is handed to npm as a spec: anything but semver (a dist-tag, a URL, a
 			// git or file path) could make npm run arbitrary code as root, so it is refused here.
+			const v = a === "--version" ? rest[++i] : a.slice("--version=".length);
 			if (v === undefined || v.startsWith("-") || !SEMVER.test(v.replace(/^v/, ""))) throw new Error("--version takes a semantic version to install, e.g. --version 0.12.1");
 			args.version = v.replace(/^v/, "");
-		} else args.installFlags.push(a);
+		} else if (/^--(?:force|no-reconnect|help)=/.test(a)) throw new Error(`${a.slice(0, a.indexOf("="))} takes no value`);
+		else args.installFlags.push(a);
 	}
 	return args;
 }
@@ -100,6 +101,26 @@ export function semverLess(a: string, b: string): boolean {
 	const y = semverHead(b);
 	if (!x || !y) return false;
 	return x[0] !== y[0] ? x[0] < y[0] : x[1] !== y[1] ? x[1] < y[1] : x[2] < y[2];
+}
+
+/** The flags `upgrade` itself parses (near-misses of these are refused before anything runs). */
+const OWN_FLAGS = ["version", "force", "no-reconnect", "help"];
+
+/** Levenshtein distance between two flag names. */
+export function editDistance(a: string, b: string): number {
+	const d: number[][] = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0) as number[]);
+	for (let i = 0; i <= a.length; i++) d[i]![0] = i;
+	for (let j = 0; j <= b.length; j++) d[0]![j] = j;
+	for (let i = 1; i <= a.length; i++)
+		for (let j = 1; j <= b.length; j++)
+			d[i]![j] = Math.min(d[i - 1]![j]! + 1, d[i]![j - 1]! + 1, d[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+	return d[a.length]![b.length]!;
+}
+
+/** The upgrade flag `flag` is a near-miss of ("--no-reconect" → "--no-reconnect"), or undefined. */
+export function nearOwnFlag(flag: string): string | undefined {
+	const name = flag.replace(/^--?/, "");
+	return OWN_FLAGS.map((f) => `--${f}`).find((f) => editDistance(name, f.slice(2)) <= 2);
 }
 
 /** One step `upgrade` runs, with the command an operator would run it by hand. */
@@ -143,14 +164,20 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 	}
 	// The install flags are validated before anything runs: a misspelled flag must fail while
 	// nothing has been installed yet, not after the npm step. A flag this release's parser
-	// doesn't know yet passes through — the NEW binary's own parser validates everything before
-	// it does anything, so an unknown flag still fails before any effect (its error just comes
-	// from the child).
+	// doesn't know passes through only as --flag=value: that form can't swallow the next
+	// argument, and the NEW binary's own parser validates it (and everything else) before it
+	// does anything. A bare unknown flag is refused — it may be a near-miss of one of upgrade's
+	// own flags, or a typo about to install the package and then die in the child.
 	let installArgs: ReturnType<typeof parseArgs> | undefined;
 	try {
 		installArgs = parseArgs(args.installFlags);
 	} catch (err) {
-		if (!/unknown flag/.test((err as Error).message)) throw new Error(`install flags: ${(err as Error).message}`);
+		const unknown = /unknown flag: (\S+)/.exec((err as Error).message)?.[1];
+		if (!unknown) throw new Error(`install flags: ${(err as Error).message}`);
+		if (!unknown.includes("=")) {
+			const near = nearOwnFlag(unknown);
+			throw new Error(near ? `unknown flag: ${unknown} — did you mean ${near}?` : `unknown flag: ${unknown} — pass flags the new release knows as --flag=value`);
+		}
 	}
 	if (installArgs?.positional.length) throw new Error(`upgrade takes only flags — "${installArgs.positional.join(" ")}" would be an install argument; pass --agent-user <name> instead`);
 	const target = args.version ?? d.latestVersion() ?? "latest";

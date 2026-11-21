@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { finishLines, parseUpgradeArgs, semverHead, semverLess, shellQuote, upgradeCommand, upgradeSteps, UPGRADE_HELP, type UpgradeStep } from "../src/cli/upgrade.ts";
+import { editDistance, finishLines, nearOwnFlag, parseUpgradeArgs, semverHead, semverLess, shellQuote, upgradeCommand, upgradeSteps, UPGRADE_HELP, type UpgradeStep } from "../src/cli/upgrade.ts";
 import { makeDeps, config } from "./helpers/cli-deps.mjs";
 
 describe("parseUpgradeArgs", () => {
@@ -9,6 +9,12 @@ describe("parseUpgradeArgs", () => {
 			noReconnect: true,
 			installFlags: ["--claude-config", "repo:/srv/x", "--no-mcp-config"]
 		});
+	});
+
+	it("reads --version in = form too, and refuses a value on the valueless own flags", () => {
+		expect(parseUpgradeArgs(["--version=0.12.1"]).version).toBe("0.12.1");
+		expect(() => parseUpgradeArgs(["--version=latest"])).toThrow(/--version takes a semantic version/);
+		for (const a of ["--force=true", "--no-reconnect=1", "--help=x"]) expect(() => parseUpgradeArgs([a])).toThrow(/takes no value/);
 	});
 
 	it("reads --version with or without a leading v, prereleases included, and takes nothing else", () => {
@@ -84,7 +90,7 @@ describe("upgradeSteps / finishLines", () => {
 });
 
 describe("upgradeCommand", () => {
-	it("validates the install flags it knows before anything runs, refuses positionals, and passes unknown flags to the new binary", () => {
+	it("validates the install flags it knows before anything runs, and refuses positionals", () => {
 		const badFlag = makeDeps();
 		expect(() => upgradeCommand(["--claude-config", "no-colon-path"], config, badFlag.d)).toThrow(/install flags: --claude-config takes/);
 		expect(badFlag.d.npmInstall).not.toHaveBeenCalled();
@@ -92,11 +98,41 @@ describe("upgradeCommand", () => {
 		const positional = makeDeps();
 		expect(() => upgradeCommand(["bob"], config, positional.d)).toThrow(/upgrade takes only flags/);
 		expect(positional.d.npmInstall).not.toHaveBeenCalled();
-		// a flag only the new release knows can't be validated here: it passes through, and the
-		// NEW binary's own parser (which runs before it does anything) accepts or rejects it
+	});
+
+	it("a bare unknown flag is refused before npm runs — especially a near-miss of upgrade's own flags (#223's package-new/service-old trap)", () => {
+		// scenario 1: a typo of upgrade's own flag must not npm-install first and die in the child
+		for (const typo of ["--no-reconect", "--forse", "--verison"]) {
+			const d = makeDeps();
+			expect(() => upgradeCommand([typo], config, d.d)).toThrow(new RegExp(`unknown flag: ${typo} — did you mean --`));
+			expect(d.d.npmInstall).not.toHaveBeenCalled();
+			expect(d.d.runNewBinary).not.toHaveBeenCalled();
+		}
+		// scenario 2: a bare unknown flag followed by a positional is refused outright
+		const d2 = makeDeps();
+		expect(() => upgradeCommand(["--new-flag", "bob"], config, d2.d)).toThrow(/unknown flag: --new-flag/);
+		expect(d2.d.npmInstall).not.toHaveBeenCalled();
+		// a bare unknown flag with nothing behind it is refused too, with the = form suggested
+		const d3 = makeDeps();
+		expect(() => upgradeCommand(["--future-thing"], config, d3.d)).toThrow(/pass flags the new release knows as --flag=value/);
+		expect(d3.d.npmInstall).not.toHaveBeenCalled();
+	});
+
+	it("an unknown flag in --flag=value form passes through to the new binary, which validates it before it does anything", () => {
 		const future = makeDeps();
-		expect(upgradeCommand(["--a-flag-only-vnext-knows", "--no-reconnect"], config, future.d)).toBe(0);
-		expect(future.d.runNewBinary).toHaveBeenCalledWith(["install", "--a-flag-only-vnext-knows"]);
+		expect(upgradeCommand(["--a-flag-only-vnext-knows=x", "--no-reconnect"], config, future.d)).toBe(0);
+		expect(future.d.runNewBinary).toHaveBeenCalledWith(["install", "--a-flag-only-vnext-knows=x"]);
+	});
+
+	it("editDistance / nearOwnFlag pin the typo detection", () => {
+		expect(editDistance("no-reconect", "no-reconnect")).toBe(1);
+		expect(editDistance("forse", "force")).toBe(1);
+		expect(editDistance("verison", "version")).toBe(2);
+		expect(editDistance("force", "force")).toBe(0);
+		expect(nearOwnFlag("--no-reconect")).toBe("--no-reconnect");
+		expect(nearOwnFlag("--forse")).toBe("--force");
+		expect(nearOwnFlag("--verison")).toBe("--version");
+		expect(nearOwnFlag("--future-thing")).toBeUndefined();
 	});
 
 	it("runs the three steps in order: npm install, the new binary's install with the flags, its reconnect", () => {
