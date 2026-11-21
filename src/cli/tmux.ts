@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:23:30-08:00 (1795292610)
+ *	@Last modified time: 2026-11-21T12:33:48-08:00 (1795293228)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -49,8 +49,14 @@ import type { UserInfo } from "./agents.ts";
 export interface TmuxServer {
 	/** The server's socket path. */
 	socket: string;
-	/** The tmux binary to run against this socket: the server's own /proc/<pid>/exe when its pid is known, else PATH's tmux. */
+	/** The tmux binary to run against this socket: the server's own /proc/<pid>/exe. */
 	binary: string;
+}
+
+/** The tmux servers an agent runs, and the sockets that were skipped (dead, or no owning tmux process could be found). */
+export interface TmuxServers {
+	servers: TmuxServer[];
+	skipped: { socket: string; why: string }[];
 }
 
 /** One Claude Code pane on a tmux server. */
@@ -69,6 +75,8 @@ export interface Pane {
 	synchronized: boolean;
 	/** The session's CLAUDE_CONFIG_DIR, when it runs with one. */
 	configDir?: string;
+	/** tmux did not answer in time while capturing this pane's screen: skip it, don't judge it. */
+	timedOut?: boolean;
 }
 
 /** The host effects the tmux functions use, injectable for tests (the defaults are the real host). */
@@ -88,18 +96,33 @@ const resolve = ({ proc = "/proc", tmp = "/tmp", readdir = readdirSync, lstat = 
 /** The environment a tmux command runs with as the agent: root's PATH, the agent's HOME, no $TMUX (the client must talk to the -S socket), and a UTF-8 locale (a bare one makes tmux write `_` for the tab in -F output). */
 const agentEnv = (info: UserInfo): NodeJS.ProcessEnv => ({ PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", HOME: info.home, LANG: "C.UTF-8" });
 
+/** Why a socket is not used: no owning tmux process was found for it (or its binary could not be resolved) — a live server always has a pid that holds its socket, so such a socket is dead or unexplained, and guessing a binary could pick the wrong version. */
+const NO_SERVER = "no server process for this socket";
+
+/** How long one tmux command may take before it is abandoned (a stuck or fake server must not hang the whole reconnect). */
+export const TMUX_TIMEOUT_MS = 5000;
+
 /** The list-panes field separator: printable ASCII, so no locale can rewrite it (the tab once arrived as `_`). */
 const SEP = "|@|";
 const FORMAT = ["#{pane_id}", "#{pane_pid}", "#{pane_in_mode}", "#{pane_synchronized}", "#{pane_current_command}"].join(SEP);
 
+/** One tmux command that would not answer in time. */
+export class TmuxTimeout extends Error {}
+
 /** Run one tmux command as the agent user against its server socket. */
 function tmux(server: TmuxServer, info: UserInfo, args: string[], exec: typeof run, hasCmd: typeof has): ReturnType<typeof run> {
-	// setpriv keeps the agent's supplementary groups (a uid/gid spawn drops them, which breaks a
-	// -S socket reachable only through a group); without it, fall back to the uid/gid spawn.
-	if (hasCmd("setpriv")) {
-		return exec("setpriv", [`--reuid=${info.uid}`, `--regid=${info.gid}`, "--init-groups", "--", server.binary, "-S", server.socket, ...args], { env: agentEnv(info), cwd: "/" });
-	}
-	return exec(server.binary, ["-S", server.socket, ...args], { uid: info.uid, gid: info.gid, env: agentEnv(info), cwd: "/" });
+	const opts = { env: agentEnv(info), cwd: "/", timeout: TMUX_TIMEOUT_MS, allowFail: true };
+	// setpriv (by absolute path) keeps the agent's supplementary groups (a uid/gid spawn drops
+	// them, which breaks a -S socket reachable only through a group); without it, fall back to
+	// the uid/gid spawn.
+	const r = hasCmd("/usr/bin/setpriv")
+		? exec("/usr/bin/setpriv", [`--reuid=${info.uid}`, `--regid=${info.gid}`, "--init-groups", "--", server.binary, "-S", server.socket, ...args], opts)
+		: exec(server.binary, ["-S", server.socket, ...args], { ...opts, uid: info.uid, gid: info.gid });
+	// A timed-out or killed command reports status null: it is not "exited null", it never
+	// answered — the caller skips this server or pane and carries on.
+	if (r.status === null && r.signal !== null) throw new TmuxTimeout(`tmux did not answer within ${TMUX_TIMEOUT_MS} ms: ${server.binary}`);
+	if (r.status !== 0) throw new Error(`${server.binary} ${args.join(" ")} exited ${r.status}: ${(r.stderr || r.stdout || "").trim()}`);
+	return r;
 }
 
 /**
@@ -109,10 +132,9 @@ function tmux(server: TmuxServer, info: UserInfo, args: string[], exec: typeof r
  * /proc/net/unix (every path lstat-ed and ownership-checked — a re-pointed path is refused); a
  * socket found through a server pid is paired with that server's /proc/<pid>/exe.
  */
-export function tmuxSockets(info: UserInfo, opts: TmuxOptions = {}): TmuxServer[] {
+export function tmuxSockets(info: UserInfo, opts: TmuxOptions = {}): TmuxServers {
 	const { proc, tmp, readdir, lstat, readlink, head } = resolve(opts);
 	const uid = info.uid;
-	const servers = new Map<string, TmuxServer>();
 	const ownedSocket = (path: string): boolean => {
 		try {
 			const st = lstat(path);
@@ -121,13 +143,14 @@ export function tmuxSockets(info: UserInfo, opts: TmuxOptions = {}): TmuxServer[
 			return false; // gone, or not reachable: not a candidate
 		}
 	};
+	// socket path -> the binary of the server process that owns it (undefined: none known)
+	const owners = new Map<string, string | undefined>();
 	try {
 		const dir = `${tmp}/tmux-${uid}`;
 		if (lstat(dir).isDirectory()) {
 			for (const entry of readdir(dir)) {
 				const path = `${dir}/${entry}`;
-				// no known server pid yet: PATH's tmux, until a server pid claims the socket below
-				if (ownedSocket(path)) servers.set(path, { socket: path, binary: "tmux" });
+				if (ownedSocket(path)) owners.set(path, undefined); // claimed below if a server pid holds it
 			}
 		}
 	} catch {
@@ -137,9 +160,10 @@ export function tmuxSockets(info: UserInfo, opts: TmuxOptions = {}): TmuxServer[
 	try {
 		pids = readdir(proc).filter((n) => /^\d+$/.test(n));
 	} catch {
-		return [...servers.values()].sort((a, b) => a.socket.localeCompare(b.socket));
+		return wrap(owners);
 	}
-	const owners = new Map<string, string>(); // socket inode -> the server binary that holds it
+	const byInode = new Map<string, string>(); // socket inode -> the owning server's binary
+	const unresolved = new Set<string>(); // socket inodes whose owning server's binary can't be resolved
 	for (const pid of pids) {
 		try {
 			if (lstat(`${proc}/${pid}`).uid !== uid) continue;
@@ -147,38 +171,56 @@ export function tmuxSockets(info: UserInfo, opts: TmuxOptions = {}): TmuxServer[
 			// socket; the fd walk below confirms it really holds a unix socket before anything
 			// is probed.
 			if (!basename(head(`${proc}/${pid}/cmdline`, MAX_CMDLINE_BYTES).split("\0")[0] ?? "").includes("tmux")) continue;
-			let binary = "tmux";
+			// The binary is whatever this server process exec'd — the agent chose it (a client of
+			// another version can't reach the server, "server exited unexpectedly"), and running
+			// it is safe because the command only runs after the drop to the agent. If it can't
+			// be resolved, the server's sockets are skipped below rather than guessing a
+			// possibly-wrong binary.
+			let binary: string | undefined;
 			try {
-				// the server's own binary (root-owned, not agent-writable); a client of another
-				// version can't reach this server ("server exited unexpectedly")
 				const exe = readlink(`${proc}/${pid}/exe`);
 				if (exe) binary = exe.replace(/ \(deleted\)$/, "");
 			} catch {
-				// exe not resolvable: PATH's tmux is the fallback
+				// exe not resolvable: its sockets are skipped, not guessed at
 			}
 			for (const fd of readdir(`${proc}/${pid}/fd`)) {
 				const m = /^socket:\[(\d+)\]$/.exec(readlink(`${proc}/${pid}/fd/${fd}`));
-				if (m) owners.set(m[1]!, binary);
+				if (!m) continue;
+				if (binary === undefined) unresolved.add(m[1]!);
+				else byInode.set(m[1]!, binary);
 			}
 		} catch {
 			// the process exited while being read
 		}
 	}
-	if (owners.size) {
-		try {
-			// "Num RefCount Protocol Flags Type St Inode Path": the inode names the socket, the
-			// rest of the line is its path (empty for an unbound socket).
-			for (const line of head(`${proc}/net/unix`, MAX_ENVIRON_BYTES).split("\n").slice(1)) {
-				const cols = line.trim().split(/\s+/);
-				const path = cols.slice(7).join(" ");
-				const binary = cols[6] && owners.get(cols[6]!);
-				if (path.startsWith("/") && binary && ownedSocket(path)) servers.set(path, { socket: path, binary });
-			}
-		} catch {
-			// /proc/net/unix can't be read: only the default directory was searched
+	try {
+		// "Num RefCount Protocol Flags Type St Inode Path": the inode names the socket, the
+		// rest of the line is its path (empty for an unbound socket).
+		for (const line of head(`${proc}/net/unix`, MAX_ENVIRON_BYTES).split("\n").slice(1)) {
+			const cols = line.trim().split(/\s+/);
+			const path = cols.slice(7).join(" ");
+			// A socket whose owning server's binary is unresolvable is skipped with the reason
+			// too, not silently dropped.
+			if (!path.startsWith("/") || !cols[6] || !ownedSocket(path)) continue;
+			const binary = byInode.get(cols[6]!);
+			if (binary !== undefined || unresolved.has(cols[6]!)) owners.set(path, binary);
 		}
+	} catch {
+		// /proc/net/unix can't be read: the default-directory sockets stay unclaimed (skipped)
 	}
-	return [...servers.values()].sort((a, b) => a.socket.localeCompare(b.socket));
+	return wrap(owners);
+}
+
+/** Split the candidate sockets into the servers to use and the ones skipped with a reason. */
+function wrap(owners: Map<string, string | undefined>): TmuxServers {
+	const servers: TmuxServer[] = [];
+	const skipped: { socket: string; why: string }[] = [];
+	for (const [socket, binary] of owners) {
+		if (binary !== undefined) servers.push({ socket, binary });
+		else skipped.push({ socket, why: NO_SERVER });
+	}
+	const bySocket = (a: { socket: string }, b: { socket: string }): number => a.socket.localeCompare(b.socket);
+	return { servers: servers.sort(bySocket), skipped: skipped.sort(bySocket) };
 }
 
 /** One process's argv, owner, parent, process group, tty foreground group and state, from one scan of /proc. */
@@ -244,7 +286,8 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 		// otherwise splits past the detectors); the format also carries the flags the skip
 		// decisions need.
 		listing = tmux(server, info, ["list-panes", "-a", "-F", FORMAT], exec, hasCmd).stdout;
-	} catch {
+	} catch (err) {
+		if (err instanceof TmuxTimeout) throw err; // the server didn't answer: the caller skips it and carries on
 		return []; // not a tmux socket the agent can reach (or no tmux): no panes
 	}
 	const table = processTable(proc, readdir, lstat, head);
@@ -269,10 +312,12 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 			continue; // it exited while being listed
 		}
 		let text = "";
+		let timedOut: boolean | undefined;
 		try {
 			text = tmux(server, info, ["capture-pane", "-p", "-J", "-t", id], exec, hasCmd).stdout;
-		} catch {
-			// the pane died or can't be captured: an empty screen reads as "no prompt", so it is skipped
+		} catch (err) {
+			if (err instanceof TmuxTimeout) timedOut = true; // tmux didn't answer: skip this pane, judge the rest
+			// else the pane died or can't be captured: an empty screen reads as "no prompt", so it is skipped
 		}
 		panes.push({
 			id,
@@ -281,7 +326,8 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 			foreground: fg !== undefined,
 			inMode: inMode !== undefined && inMode !== "0" && inMode !== "",
 			synchronized: synchronized === "1",
-			configDir: configDirOf(claude, { proc, readHead: head })
+			configDir: configDirOf(claude, { proc, readHead: head }),
+			timedOut
 		});
 	}
 	return panes;

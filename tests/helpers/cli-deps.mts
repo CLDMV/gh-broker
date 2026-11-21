@@ -39,7 +39,7 @@ export function makeDeps(over: Record<string, unknown> = {}, files: Record<strin
 		newSeed: () => "NEWSEED",
 		storeSeed: vi.fn(),
 		restart: vi.fn(),
-		tmuxSockets: vi.fn(() => []),
+		tmuxSockets: vi.fn(() => ({ servers: [], skipped: [] })),
 		tmuxPanes: vi.fn(() => []),
 		tmuxPaneText: vi.fn(() => "❯ \n"),
 		tmuxSend: vi.fn(),

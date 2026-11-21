@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:23:30-08:00 (1795292610)
+ *	@Last modified time: 2026-11-21T12:33:48-08:00 (1795293228)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -27,7 +27,7 @@
  */
 import { agentsDir, assertAgentName, registeredAgents, type Group, type UserInfo } from "./agents.ts";
 import { brokerKeyOf, extraFolders, inFolder, MCP_FILE, type FolderIo, type Place } from "./mcp-config.ts";
-import type { Pane, TmuxServer } from "./tmux.ts";
+import { TmuxTimeout, type Pane, type TmuxServer, type TmuxServers } from "./tmux.ts";
 import type { ConfigLayer } from "./config-merge.ts";
 
 export const RECONNECT_HELP = `agent reconnect [<user>] [--dry-run]
@@ -47,8 +47,8 @@ export interface ReconnectDeps {
 	groups: () => Group[];
 	userInfo: (user: string) => UserInfo | undefined;
 	mcpIO: FolderIo;
-	/** The agent's tmux servers: socket + the binary that owns it (a client of one version can't reach a server of another). */
-	tmuxSockets: (info: UserInfo) => TmuxServer[];
+	/** The agent's tmux servers: socket + the binary that owns it, and the sockets skipped (dead, or no owning server process found). */
+	tmuxSockets: (info: UserInfo) => TmuxServers;
 	/** The Claude Code panes on one tmux server, with their screen and foreground/mode state. */
 	tmuxPanes: (server: TmuxServer, info: UserInfo) => Pane[];
 	/** Re-capture one pane's screen right before sending; undefined when the pane is gone. */
@@ -92,8 +92,8 @@ export function busyPane(text: string): boolean {
 
 /** The composer box's rule line ("────"). */
 const RULE = /^\s*─+\s*$/;
-/** Footer lines under the box — only the known shapes ("⏵⏵ accept edits on …", "? for shortcuts", the "◯" task bullet, "new task?"), so a draft's own continuation starting with "?" or "●" doesn't end the scan. */
-const FOOTER = /^\s*(?:⏵|◯)|\b(?:for shortcuts|to cycle|to manage|new task\?)/;
+/** Footer lines under the box — anchored to their shapes ("⏵⏵ … (shift+tab to cycle) · ↓ to manage", "? for shortcuts", the "◯" task bullet, the right-aligned "new task?"), so a draft's own continuation starting with "?" or "●" — or merely mentioning "to cycle" — doesn't end the scan. */
+const FOOTER = /^\s*(?:⏵|◯|\? for shortcuts|new task\?)/;
 
 /**
  * The state of Claude Code's input line in the pane: "empty" (a "❯"/"> " line with nothing typed),
@@ -202,11 +202,27 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		const places: Place[] = [{ folder: info.home, saved: false }, ...extraFolders(info, d, config, user)];
 		const keys = keysOf(places, info, dir, d);
 		let panes = 0;
-		const servers = d.tmuxSockets(info);
+		const { servers, skipped: deadSockets } = d.tmuxSockets(info);
+		for (const dead of deadSockets) d.log(`${user} ${clean(dead.socket)} - skipped (${dead.why})`);
 		for (const server of servers) {
 			const socket = server.socket;
-			for (const pane of d.tmuxPanes(server, info)) {
+			let panesOnServer: Pane[];
+			try {
+				panesOnServer = d.tmuxPanes(server, info);
+			} catch (err) {
+				if (err instanceof TmuxTimeout) {
+					d.log(`${user} ${clean(socket)} - skipped (tmux timed out)`);
+					skipped++;
+					continue;
+				}
+				throw err;
+			}
+			for (const pane of panesOnServer) {
 				panes++;
+				if (pane.timedOut) {
+					skip(user, socket, pane.id, undefined, "tmux timed out");
+					continue;
+				}
 				if (pane.inMode) {
 					skip(user, socket, pane.id, undefined, "pane is in copy mode");
 					continue;
@@ -248,7 +264,14 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				} else {
 					// Re-capture between the check and the send: the operator may have started
 					// typing (or the pane died) while the checks ran.
-					const fresh = d.tmuxPaneText(server, pane.id, info);
+					let fresh: string | undefined;
+					try {
+						fresh = d.tmuxPaneText(server, pane.id, info);
+					} catch (err) {
+						if (!(err instanceof TmuxTimeout)) throw err;
+						skip(user, socket, pane.id, key, "tmux timed out");
+						continue;
+					}
 					if (fresh === undefined) {
 						skip(user, socket, pane.id, key, "gone since capture");
 						continue;
