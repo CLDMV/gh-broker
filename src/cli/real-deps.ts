@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-21T12:03:41-08:00 (1795291421)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { parseGroups, parsePasswd } from "./agents.ts";
 import { stateStore, writeFileAtomic, storeSeed } from "./otp.ts";
 import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./mcp-config.ts";
-import { configDirOf, tmuxPanes, tmuxSend, tmuxSockets } from "./tmux.ts";
+import { tmuxPaneText, tmuxPanes, tmuxSend, tmuxSockets } from "./tmux.ts";
 import { readSecretsFile, writeSecretsFile } from "./secret-store.ts";
 import { smokeTest } from "./smoke.ts";
 import type { CliDeps } from "./cli.ts";
@@ -106,10 +106,11 @@ export function realDeps(): CliDeps {
 			});
 		},
 		restart: restartService,
-		tmuxSockets: (uid) => tmuxSockets(uid),
-		tmuxPanes: (socket) => tmuxPanes(socket),
-		tmuxSend: (socket, pane, text) => tmuxSend(socket, pane, text),
-		paneConfigDir: (pid) => configDirOf(pid),
+		// Every tmux command runs AS THE AGENT (uid/gid, its HOME, no $TMUX) — see src/cli/tmux.ts.
+		tmuxSockets: (info) => tmuxSockets(info),
+		tmuxPanes: (socket, info) => tmuxPanes(socket, info),
+		tmuxPaneText: (socket, pane, info) => tmuxPaneText(socket, pane, info),
+		tmuxSend: (socket, pane, text, info) => tmuxSend(socket, pane, text, info),
 		installedVersion: () => {
 			try {
 				const v = JSON.parse(readFileSync("/usr/local/lib/node_modules/@cldmv/gh-broker/package.json", "utf8")).version;
@@ -118,18 +119,28 @@ export function realDeps(): CliDeps {
 				return undefined; // no global install
 			}
 		},
+		deployedVersion: deployedVersion,
 		latestVersion: () => {
-			const r = run("npm", ["view", "@cldmv/gh-broker", "version"], { allowFail: true });
+			// cwd "/" so a .npmrc planted in the working directory can't add npm config, and the
+			// registry pinned like the install below.
+			const r = run("npm", ["view", "@cldmv/gh-broker", "version", "--registry", "https://registry.npmjs.org"], { allowFail: true, cwd: "/" });
 			const v = r.stdout.trim();
 			return /^\d/.test(v) ? v : undefined;
 		},
-		npmInstall: (spec) => run("npm", ["install", "-g", "--prefix", "/usr/local", "--ignore-scripts", `@cldmv/gh-broker@${spec}`]),
-		runNewInstall: (flags) => {
-			// The NEW binary installs the NEW package: a child process, never this running CLI (which
-			// is still the old code until the process exits). stdio is inherited so its prompts work.
-			const r = spawnSync("/usr/local/bin/gh-broker", ["install", ...flags], { stdio: "inherit" });
-			if (r.error) throw new Error(`/usr/local/bin/gh-broker install: ${r.error.message}`);
-			if (r.status !== 0) throw new Error(`/usr/local/bin/gh-broker install exited ${r.status}`);
+		npmInstall: (spec) => {
+			// Streamed (a long install must not look hung), from cwd "/" for the same reason as
+			// above, with the registry pinned so nothing a planted config adds gets installed.
+			const r = spawnSync("npm", ["install", "-g", "--prefix", "/usr/local", "--ignore-scripts", "--registry", "https://registry.npmjs.org", `@cldmv/gh-broker@${spec}`], { stdio: "inherit", cwd: "/" });
+			if (r.error) throw new Error(`npm install: ${r.error.message}`);
+			if (r.status !== 0) throw new Error(`npm install exited ${r.status ?? `on signal ${r.signal}`}`);
+		},
+		runNewBinary: (args) => {
+			// The NEW binary does the installing and the reconnecting: a child process, never this
+			// running CLI (which is still the old code until the process exits). stdio is
+			// inherited so its prompts work and its progress streams.
+			const r = spawnSync("/usr/local/bin/gh-broker", args, { stdio: "inherit" });
+			if (r.error) throw new Error(`/usr/local/bin/gh-broker ${args[0]}: ${r.error.message}`);
+			if (r.status !== 0) throw new Error(`/usr/local/bin/gh-broker ${args.join(" ")} exited ${r.status ?? `on signal ${r.signal}`}`);
 		},
 		sudoUser: () => process.env.SUDO_USER,
 		// Same journal identifier as the daemon (SyslogIdentifier=gh-broker), so `journalctl -t gh-broker` shows both.

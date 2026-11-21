@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-21T12:03:40-08:00 (1795291420)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -21,8 +21,8 @@
  */
 import { otpCommand, type OtpDeps } from "./otp-cli.ts";
 import { agentCommand, type AgentDeps } from "./agent-cli.ts";
-import { reconnect, type ReconnectDeps } from "./reconnect.ts";
-import { upgradeCommand, type UpgradeDeps } from "./upgrade.ts";
+import { RECONNECT_HELP, reconnect, type ReconnectDeps } from "./reconnect.ts";
+import { UPGRADE_HELP, upgradeCommand, type UpgradeDeps } from "./upgrade.ts";
 import type { ConfigLayer } from "./config-merge.ts";
 
 /** Every effect the `gh-broker` CLI uses: every command set's effects, plus the root check and the config read. */
@@ -35,8 +35,8 @@ export const USAGE = `Usage: sudo gh-broker <command>
 
 Commands:
   install [flags]            install or upgrade the broker (see: gh-broker install --help)
-  upgrade [flags]            install the latest package, run the new install with these flags, then agent reconnect
-                             (--version <v>, --force, --no-reconnect; other flags pass through to install)
+  upgrade [flags]            npm install, then the new binary's install with these flags, then agent reconnect
+                             (--version <v> (semver), --force, --no-reconnect; other flags pass through to install)
   agent add <user>           register an agent user: group, MCP config, restart, smoke test (--no-mcp-config to skip the config)
                              --claude-config <dir>: another Claude config folder it uses outside its home (repeatable, also on sync)
   agent remove <user>        unregister an agent: empty its group, restart, MCP entry, lock state
@@ -66,6 +66,15 @@ export async function runCli(argv: string[], d: CliDeps): Promise<number> {
 	if (group !== "upgrade" && !COMMANDS[group]?.includes(command as string)) {
 		d.error(`gh-broker: unknown command "${argv.join(" ")}"\n${USAGE}`);
 		return 2;
+	}
+	// --help works without root and without a readable config: it only prints.
+	if (group === "upgrade" && (command === "-h" || command === "--help")) {
+		d.log(UPGRADE_HELP);
+		return 0;
+	}
+	if (group === "agent" && command === "reconnect" && rest.some((a) => a === "-h" || a === "--help")) {
+		d.log(RECONNECT_HELP);
+		return 0;
 	}
 	const name = command === undefined ? group : `${group} ${command}`;
 	if (!d.isRoot()) {

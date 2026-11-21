@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { runCli, USAGE } from "../src/cli/cli.ts";
+import { RECONNECT_HELP } from "../src/cli/reconnect.ts";
+import { UPGRADE_HELP } from "../src/cli/upgrade.ts";
 import { makeDeps } from "./helpers/cli-deps.mjs";
 
 describe("runCli dispatch", () => {
@@ -33,6 +35,16 @@ describe("runCli dispatch", () => {
 		expect(err[2]).toContain("must run as root: sudo gh-broker upgrade");
 	});
 
+	it("prints upgrade and reconnect help without root and without a readable config", async () => {
+		const { d, out } = makeDeps({ isRoot: () => false, readConfig: () => { throw new Error("ENOENT"); } });
+		expect(await runCli(["upgrade", "--help"], d)).toBe(0);
+		expect(out[0]).toBe(UPGRADE_HELP);
+		expect(await runCli(["upgrade", "-h"], d)).toBe(0);
+		expect(out[1]).toBe(UPGRADE_HELP);
+		expect(await runCli(["agent", "reconnect", "--help"], d)).toBe(0);
+		expect(out[2]).toBe(RECONNECT_HELP);
+	});
+
 	it("reports an unreadable config", async () => {
 		const { d, err } = makeDeps({ readConfig: () => { throw new Error("ENOENT"); } });
 		expect(await runCli(["agent", "list"], d)).toBe(1);
@@ -57,7 +69,7 @@ describe("runCli dispatch", () => {
 		expect(out).toContain("repo: no Claude Code sessions running (no tmux server)");
 		expect(await runCli(["upgrade", "--no-reconnect"], d)).toBe(0);
 		expect(d.npmInstall).toHaveBeenCalledWith("latest");
-		expect(d.runNewInstall).toHaveBeenCalledWith([]);
+		expect(d.runNewBinary).toHaveBeenCalledWith(["install"]);
 		expect(out.join("\n")).toContain("==> step 2/2: install");
 		// bare "upgrade": no subcommand, just flags after it
 		const bare = makeDeps();
