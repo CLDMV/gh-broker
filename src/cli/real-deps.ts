@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:03:41-08:00 (1795291421)
+ *	@Last modified time: 2026-11-21T12:23:30-08:00 (1795292610)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -24,6 +24,7 @@ import { hostname } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseGroups, parsePasswd } from "./agents.ts";
+import { SEMVER } from "./upgrade.ts";
 import { stateStore, writeFileAtomic, storeSeed } from "./otp.ts";
 import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./mcp-config.ts";
 import { tmuxPaneText, tmuxPanes, tmuxSend, tmuxSockets } from "./tmux.ts";
@@ -125,7 +126,9 @@ export function realDeps(): CliDeps {
 			// registry pinned like the install below.
 			const r = run("npm", ["view", "@cldmv/gh-broker", "version", "--registry", "https://registry.npmjs.org"], { allowFail: true, cwd: "/" });
 			const v = r.stdout.trim();
-			return /^\d/.test(v) ? v : undefined;
+			// the same bar --version is held to: anything that isn't semver isn't a version npm
+			// should be handed
+			return SEMVER.test(v) ? v : undefined;
 		},
 		npmInstall: (spec) => {
 			// Streamed (a long install must not look hung), from cwd "/" for the same reason as

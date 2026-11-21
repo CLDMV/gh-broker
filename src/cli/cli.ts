@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:03:40-08:00 (1795291420)
+ *	@Last modified time: 2026-11-21T12:23:30-08:00 (1795292610)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -67,8 +67,9 @@ export async function runCli(argv: string[], d: CliDeps): Promise<number> {
 		d.error(`gh-broker: unknown command "${argv.join(" ")}"\n${USAGE}`);
 		return 2;
 	}
-	// --help works without root and without a readable config: it only prints.
-	if (group === "upgrade" && (command === "-h" || command === "--help")) {
+	// --help works without root and without a readable config: it only prints (anywhere among
+	// the flags — "upgrade --force --help" is a help request too).
+	if (group === "upgrade" && [command, ...rest].some((a) => a === "-h" || a === "--help")) {
 		d.log(UPGRADE_HELP);
 		return 0;
 	}

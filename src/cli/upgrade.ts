@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:03:41-08:00 (1795291421)
+ *	@Last modified time: 2026-11-21T12:23:30-08:00 (1795292610)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -66,8 +66,8 @@ export interface UpgradeArgs {
 	installFlags: string[];
 }
 
-/** A semantic version, optionally with prerelease/build parts ("0.12.1", "1.0.0-rc.1"). */
-const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+/** A semantic version, optionally with prerelease/build parts ("0.12.1", "1.0.0-rc.1"). npm specs that aren't this (dist-tags, URLs, git and file paths) can run arbitrary code as root, so they are refused. */
+export const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 /** Parse `upgrade` arguments; upgrade's own flags are taken out, the rest pass to install. */
 export function parseUpgradeArgs(rest: string[]): UpgradeArgs {
@@ -142,14 +142,17 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 		return 0;
 	}
 	// The install flags are validated before anything runs: a misspelled flag must fail while
-	// nothing has been installed yet, not after the npm step.
-	let installArgs: ReturnType<typeof parseArgs>;
+	// nothing has been installed yet, not after the npm step. A flag this release's parser
+	// doesn't know yet passes through — the NEW binary's own parser validates everything before
+	// it does anything, so an unknown flag still fails before any effect (its error just comes
+	// from the child).
+	let installArgs: ReturnType<typeof parseArgs> | undefined;
 	try {
 		installArgs = parseArgs(args.installFlags);
 	} catch (err) {
-		throw new Error(`install flags: ${(err as Error).message}`);
+		if (!/unknown flag/.test((err as Error).message)) throw new Error(`install flags: ${(err as Error).message}`);
 	}
-	if (installArgs.positional.length) throw new Error(`upgrade takes only flags — "${installArgs.positional.join(" ")}" would be an install argument; pass --agent-user <name> instead`);
+	if (installArgs?.positional.length) throw new Error(`upgrade takes only flags — "${installArgs.positional.join(" ")}" would be an install argument; pass --agent-user <name> instead`);
 	const target = args.version ?? d.latestVersion() ?? "latest";
 	const installed = d.installedVersion();
 	const deployed = d.deployedVersion();

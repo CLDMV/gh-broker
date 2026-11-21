@@ -58,11 +58,18 @@ describe("latestVersion", () => {
 		expect(opts.cwd).toBe("/");
 	});
 
-	it("is undefined when npm fails or answers with something that isn't a version", () => {
+	it("is undefined when npm fails or answers with something that isn't a semver version", () => {
 		h.spawnSync.mockReturnValue({ status: 1, stdout: "", stderr: "network down" });
 		expect(realDeps().latestVersion()).toBeUndefined();
 		h.spawnSync.mockReturnValue(ok("npm ERR! nonsense"));
 		expect(realDeps().latestVersion()).toBeUndefined();
+		// the same bar --version is held to: a dist-tag or any other spec is not a version
+		for (const answer of ["next", "latest", "0.13", "https://registry.example/x"]) {
+			h.spawnSync.mockReturnValue(ok(answer + "\n"));
+			expect(realDeps().latestVersion()).toBeUndefined();
+		}
+		h.spawnSync.mockReturnValue(ok("0.13.0-rc.1\n"));
+		expect(realDeps().latestVersion()).toBe("0.13.0-rc.1");
 	});
 });
 

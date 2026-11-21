@@ -43,6 +43,9 @@ describe("runCli dispatch", () => {
 		expect(out[1]).toBe(UPGRADE_HELP);
 		expect(await runCli(["agent", "reconnect", "--help"], d)).toBe(0);
 		expect(out[2]).toBe(RECONNECT_HELP);
+		// --help anywhere among the flags: "upgrade --force --help" is a help request too
+		expect(await runCli(["upgrade", "--force", "--help"], d)).toBe(0);
+		expect(out[3]).toBe(UPGRADE_HELP);
 	});
 
 	it("reports an unreadable config", async () => {

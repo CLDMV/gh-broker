@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { finishLines, parseUpgradeArgs, semverHead, semverLess, shellQuote, upgradeCommand, upgradeSteps, UPGRADE_HELP, type UpgradeStep } from "../src/cli/upgrade.ts";
 import { makeDeps, config } from "./helpers/cli-deps.mjs";
 
@@ -84,7 +84,7 @@ describe("upgradeSteps / finishLines", () => {
 });
 
 describe("upgradeCommand", () => {
-	it("validates the install flags before anything runs, and refuses positionals", () => {
+	it("validates the install flags it knows before anything runs, refuses positionals, and passes unknown flags to the new binary", () => {
 		const badFlag = makeDeps();
 		expect(() => upgradeCommand(["--claude-config", "no-colon-path"], config, badFlag.d)).toThrow(/install flags: --claude-config takes/);
 		expect(badFlag.d.npmInstall).not.toHaveBeenCalled();
@@ -92,6 +92,11 @@ describe("upgradeCommand", () => {
 		const positional = makeDeps();
 		expect(() => upgradeCommand(["bob"], config, positional.d)).toThrow(/upgrade takes only flags/);
 		expect(positional.d.npmInstall).not.toHaveBeenCalled();
+		// a flag only the new release knows can't be validated here: it passes through, and the
+		// NEW binary's own parser (which runs before it does anything) accepts or rejects it
+		const future = makeDeps();
+		expect(upgradeCommand(["--a-flag-only-vnext-knows", "--no-reconnect"], config, future.d)).toBe(0);
+		expect(future.d.runNewBinary).toHaveBeenCalledWith(["install", "--a-flag-only-vnext-knows"]);
 	});
 
 	it("runs the three steps in order: npm install, the new binary's install with the flags, its reconnect", () => {
