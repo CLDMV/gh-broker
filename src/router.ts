@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T11:38:43-08:00 (1794685123)
+ *	@Last modified time: 2026-11-19T19:39:33-08:00 (1795145973)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -18,23 +18,25 @@ import type { Caller, Config, OtpAudit, OtpGate, OtpRefusal, SecretStore, TokenR
 import type { AppAuth } from "./appauth.ts";
 import { indexTools } from "./config.ts";
 import { audit } from "./audit.ts";
-import { unavailableReason } from "./availability.ts";
+import { unavailableReason, type Capability } from "./availability.ts";
 import { otpSetupProblem } from "./otp/policy.ts";
 import { permissivePolicy } from "./manifest.ts";
-import { GhcrService } from "./verbs/ghcr_push.ts";
-// The Router consumes the OtpGate SEAM (src/types.ts, design #175 §2e); the daemon's
-// concrete gate is imported only for the constructor default below — a host passes its
-// own implementation through the optional parameter.
-import { OtpGate as DaemonOtpGate } from "./otp/gate.ts";
 import { OTP_ARG, OTP_STATUS, isGated } from "./otp/policy.ts";
 // The dispatch layer (custom verbs, augmented forwards) is the library-facing router
 // core (src/router-core.ts, design #175 §1's split row); this wrapper owns the
 // allowlist, the gate, owner resolution and every audit row, and calls the core.
-import { dispatchAugmented, dispatchCustom, type GhcrVerbs, type RouteDeps, type Upstream } from "./router-core.ts";
+import { type GhcrVerbs, type RouteDeps, type Upstream } from "./router-core.ts";
+// The owner-extraction + input-validation helpers are library surface (invoke shares them,
+// and router.ts must not be on the library's import path) — they live in the router core
+// (src/router-core.ts) and are re-exported here so the old import path keeps working.
+import { creationOwner, dispatchCall, extractOwner, refuseLogDeletion, REPO_CREATING } from "./router-core.ts";
 
 // The interface moved to the library-facing seams module (src/router-core.ts); re-exported
 // so the old import path keeps working.
 export type { Upstream } from "./router-core.ts";
+// The owner-extraction + input-validation helpers moved with it; re-exported so the old
+// import path keeps working.
+export { creationOwner, extractOwner, refuseLogDeletion, REPO_CREATING } from "./router-core.ts";
 
 const GHCR_TOOLS = new Set(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
 
@@ -80,17 +82,19 @@ export class Router {
 	private ghcr?: GhcrVerbs;
 	/** The OTP gate (#143), the injected OtpGate seam. Inert without config.otp. */
 	private readonly otp: OtpGate;
+	/** The host's availability facts (design §2a), fixed for the Router's lifetime. */
+	private readonly capability: Capability;
 
 	/**
-	 * The constructor keeps its call shape (`new Router(config, secrets, upstream[, appAuth, gate[, ghcr]])`).
 	 * `gate` is the OtpGate SEAM (src/types.ts, design #175 §2e) and `ghcr` the GhcrVerbs
-	 * SEAM (src/router-core.ts, §2f) — the daemon composition (src/index.ts) constructs
-	 * both and passes them. The defaults still construct the daemon's own gate and ghcr
-	 * service: the suite's 58 test call sites rely on them, and a default of "must pass
-	 * one" would be a test-visible change. Any implementation of either seam is accepted
-	 * either way — the seam, not the class, is the contract.
+	 * SEAM (src/router-core.ts, §2f) — both are INJECTED, never default-constructed (the
+	 * parent's slice-5 directive): the daemon composition (src/index.ts) constructs the
+	 * daemon's own implementations and passes them, so this class imports no daemon host
+	 * module. Any implementation of either seam is accepted — the seam, not the class, is
+	 * the contract. A Router without a gate cannot route (the gate is consulted on every
+	 * call); one without ghcr verbs fails closed on the ghcr tools.
 	 */
-	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth?: AppAuth, otp?: OtpGate, ghcr?: GhcrVerbs, resolveToken?: TokenResolver) {
+	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth: AppAuth | undefined, otp: OtpGate, ghcr?: GhcrVerbs, resolveToken?: TokenResolver) {
 		this.config = config;
 		this.secrets = secrets;
 		this.upstream = upstream;
@@ -104,22 +108,18 @@ export class Router {
 		// omits it and gets hostTokenResolver. Additive; no existing call site changes.
 		this.resolveToken = resolveToken ?? hostTokenResolver(config, secrets);
 		this.routeDeps = { resolveToken: this.resolveToken, upstream, ...(config.npm ? { npm: config.npm } : {}) };
-		this.otp = otp ?? new DaemonOtpGate(config, secrets);
+		this.otp = otp;
 		this.ghcr = ghcr;
+		// The daemon's availability facts (design §2a's capability object): ref presence
+		// over the store, plus the OTP setup check (which decodes the stored seed, so it
+		// stays a host-side function over the store).
+		this.capability = {
+			has: (ref) => this.secrets.has(ref),
+			otpProblem: () => otpSetupProblem(config, this.secrets)
+		};
 	}
 
-	/**
-	 * The daemon's availability facts (design §2a's capability predicate): ref presence
-	 * over the store, plus the OTP setup check (which decodes the stored seed, so it
-	 * stays a host-side function over the store).
-	 */
-	private readonly unavailable = (rule: ToolRule): string | undefined =>
-		unavailableReason(
-			rule,
-			this.config,
-			(ref) => this.secrets.has(ref),
-			(config) => otpSetupProblem(config, this.secrets)
-		);
+	private readonly unavailable = (rule: ToolRule): string | undefined => unavailableReason(rule, this.config, this.capability);
 
 	/** Tools advertised to the agent (used to build tools/list). */
 	advertisedTools(): ToolRule[] {
@@ -161,6 +161,17 @@ export class Router {
 			audit({ tool, user, mode: rule.mode, decision: "custom", ok: true });
 			return { content: [{ type: "text", text: JSON.stringify(this.otp.status(user)) }] };
 		}
+		// The GHCR verbs authenticate with config.ghcr's own credential, never an owner's
+		// GitHub PAT, so they don't need (or touch) a config.owners entry. Only the
+		// MISSING-SERVICE refusal moves ahead of the gate: a Router built without
+		// GhcrVerbs refuses here, with an audit row, and no code is spent on a call that
+		// can't run. The dispatch itself stays AFTER the gate — config.json can gate a ghcr
+		// tool ("otp": true; validation only rejects that on otp_status), and a gated ghcr
+		// call must still be asked for a code.
+		if (GHCR_TOOLS.has(tool) && !this.ghcr) {
+			audit({ tool, user, decision: "error", detail: "no ghcr service" });
+			throw new Error(`tool "${tool}" runs on the daemon's GHCR service, but no GhcrVerbs implementation was injected into this Router`);
+		}
 		// Checked before the gate, so a call that can't run never asks for a code.
 		let createdIn: string | undefined;
 		if (REPO_CREATING.has(tool) || tool === "actions_run_trigger") {
@@ -182,9 +193,11 @@ export class Router {
 				throw err;
 			}
 		}
-		// The GHCR verbs authenticate with config.ghcr's own credential, never an owner's GitHub
-		// PAT, so they don't need (or touch) a config.owners entry.
+		// The GHCR dispatch stays after the gate (a gated ghcr tool must be asked for a
+		// code) but BEFORE owner resolution — ghcr calls authenticate with config.ghcr's
+		// own credential and never touch an owner's GitHub PAT, exactly as on next.
 		if (GHCR_TOOLS.has(tool)) return this.callGhcr(tool, args, rule, user, otp);
+
 		// Owner-less reads (global advisory DB, get_me, notifications) fall back to
 		// the configured defaultOwner's READ PAT. Writes never fall back — a write
 		// must always name the owner it targets. The config.owners read here is the
@@ -213,11 +226,7 @@ export class Router {
 
 		const decision = rule.custom ? "custom" : rule.augment ? "augment" : "forward";
 		try {
-			const out = rule.custom
-				? await dispatchCustom(this.routeDeps, tool, args, owner, token, user)
-				: rule.augment
-					? await dispatchAugmented(this.routeDeps, tool, args, owner, token)
-					: await this.upstream.forward(tool, args, token);
+			const out = await dispatchCall(this.routeDeps, rule, tool, args, owner, token, user);
 			audit({ tool, user, owner, mode: rule.mode, repo, ...forked, decision, ok: true, ...otp });
 			return out;
 		} catch (err) {
@@ -231,8 +240,10 @@ export class Router {
 		const owner = extractOwner(args) ?? "";
 		const repo = typeof args.image === "string" ? `${owner}/${args.image}` : owner;
 		try {
-			this.ghcr ??= new GhcrService(this.config.ghcr, this.secrets);
-			const out = tool === "ghcr_push" ? await this.ghcr.push(args) : tool === "ghcr_tags" ? await this.ghcr.tags(args) : this.ghcr.status(args);
+			// The wrapper's pre-gate check already refused a Router without GhcrVerbs, so the
+			// service is present here; the assertion keeps that single source of truth.
+			const ghcr = this.ghcr!;
+			const out = tool === "ghcr_push" ? await ghcr.push(args) : tool === "ghcr_tags" ? await ghcr.tags(args) : ghcr.status(args);
 			audit({ tool, user, owner, mode: rule.mode, repo, decision: "custom", ok: true, ...otp });
 			return { content: [{ type: "text", text: JSON.stringify(out) }] };
 		} catch (err) {
@@ -240,52 +251,4 @@ export class Router {
 			throw err;
 		}
 	}
-}
-
-/** Tools that create a repo, whose PAT is picked by the org the repo lands in. */
-const REPO_CREATING = new Set(["create_repository", "fork_repository"]);
-
-/**
- * The org a new repo lands in. Upstream creates it in the PAT user's own account when
- * `organization` is left out, so it's required here, and it must be a configured owner. Repos
- * are only created in orgs: upstream sends a configured user-owner's name to the org endpoint,
- * which 404s. For a fork, `owner` is the repo being forked and `organization` is where the
- * fork goes, so the write PAT is the destination's. create_repository also needs `private`
- * said explicitly, so a repo's visibility is never left to a default.
- */
-export function creationOwner(tool: string, args: Record<string, unknown>, owners: Config["owners"]): string {
-	if (typeof args.organization !== "string" || !args.organization) {
-		throw new Error(`tool "${tool}": "organization" is required (the org the repo is created in); gh-broker doesn't create repos in a personal account`);
-	}
-	const org = args.organization.toLowerCase();
-	if (!Object.hasOwn(owners, org)) throw new Error(`no credentials configured for owner "${org}" — add it to config.owners + creds`);
-	if (tool === "create_repository" && typeof args.private !== "boolean") {
-		throw new Error('tool "create_repository": "private" is required, true or false; a repo\'s visibility is never left to a default');
-	}
-	return org;
-}
-
-/**
- * actions_run_trigger's delete_workflow_run_logs method removes a run's logs, which are the
- * record of what a run did. The other methods (dispatch, re-run, cancel) stay, behind the gate.
- */
-export function refuseLogDeletion(args: Record<string, unknown>): void {
-	if (args.method === "delete_workflow_run_logs") throw new Error('tool "actions_run_trigger": method "delete_workflow_run_logs" is not allowed in gh-broker; a run\'s logs are kept');
-}
-
-/** Derive the repo owner from a tool call's arguments, so we pick the right PAT. */
-export function extractOwner(args: Record<string, unknown>): string | undefined {
-	if (typeof args.owner === "string" && args.owner) return args.owner.toLowerCase();
-	// Many org-scoped tools (list_org_repository_security_advisories, get_team_members, …)
-	// name the org as `org` rather than `owner`; for routing, org === owner.
-	if (typeof args.org === "string" && args.org) return args.org.toLowerCase();
-	if (typeof args.query === "string") {
-		const m = args.query.match(/\brepo:([^/\s]+)\/[^\s]+|\b(?:org|user):([^\s]+)/i);
-		const hit = m?.[1] ?? m?.[2];
-		if (hit) return hit.toLowerCase();
-	}
-	if (typeof args.repository === "string" && args.repository.includes("/")) {
-		return args.repository.split("/")[0]?.toLowerCase();
-	}
-	return undefined;
 }

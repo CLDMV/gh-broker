@@ -17,9 +17,9 @@
  * The library's public surface (design #175 §1's library rows): the shared vocabulary,
  * the config parser's library half, the gating policy, the manifest + the two policies,
  * the catalog and availability, the denylist, the agent-name rules, the router core's
- * seams and dispatch functions, and the pure verbs. Source-only for now — the exports
- * map that publishes it is slice 6 (§6). The daemon's host modules stay outside this
- * barrel; the one deliberate exception is documented on the import below.
+ * seams and dispatch functions, the invoke entry (createBroker / invoke / run /
+ * perCallUpstream), and the pure verbs. Published by the exports map's `.` and `./core`
+ * entries (slice 6, §6). The daemon's host modules stay outside this barrel.
  */
 
 // Vocabulary + policies.
@@ -32,6 +32,10 @@ export * from "./config.ts";
 export * from "./manifest.ts";
 export * from "./catalog.ts";
 export * from "./router-core.ts";
+
+// The public entry (design #175 §2b): createBroker's bound invoke/run, the typed
+// InvokeError, the per-call Upstream forwarder, and the ctx/result types.
+export * from "./invoke.ts";
 
 // The pure verbs, mirroring the verbs/ layout.
 export * from "./verbs/delete_branch.ts";

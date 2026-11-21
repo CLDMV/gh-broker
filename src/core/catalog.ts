@@ -7,35 +7,18 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-14T15:00:35-08:00 (1794697235)
+ *	@Last modified time: 2026-11-19T19:45:12-08:00 (1795146312)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { NO_PERSON, type Config, type SecretStore, type TokenResolver, type ToolRule } from "./types.ts";
+import { NO_PERSON, type Config, type TokenResolver, type ToolRule } from "./types.ts";
 import { MANIFEST } from "./manifest.ts";
 import { unavailableReason } from "./availability.ts";
-import { OTP_ARG, isGated, windowText } from "./otp-policy.ts";
-// The two settings/setup readers are the daemon's half of otp/policy.ts (design #175 §1's
-// split row), consumed here by the legacy SecretStore-compat shape (slice 3's pre-slice-3
-// catalog pins, re-cut in slice 6) and by withOtp's window prose. One documented edge out
-// of src/core/ until that shape dies — see tests/core-boundary.test.vitest.mts's allowlist.
-import { otpSetupProblem, otpSettings } from "../otp/policy.ts";
+import { OTP_ARG, isGated, otpSettings, windowText } from "./otp-policy.ts";
 
-/**
- * Where buildCatalog's credentials and availability facts come from. The library shape
- * is a {@link TokenResolver} (design #175 §2a) — the only credential path, per call,
- * never cached. A SecretStore is still accepted ONLY for the suite's pre-slice-3 catalog
- * pins (tests/catalog.test.vitest.mts calls buildCatalog with a store and pins that
- * exact behavior: the first owner's read PAT, the env-derived timeout with NaN, the
- * stderr sink, availability over the store); those tests must pass unedited, so the
- * store shape is duck-typed here and adapted by legacyCatalogAuth below. The daemon
- * itself stopped passing a store in slice 4 — src/index.ts wires the real resolver and
- * opts explicitly — and the shape dies with the first authorized test edit (slice 6's
- * packaging re-cut). The store never reaches the logic below the adapter.
- */
 /**
  * What the catalog needs from the daemon's upstream client pool (design #175 §2a): the
  * upstream tool-list fetch the schema build races against the timeout. Structural on
@@ -47,52 +30,25 @@ interface CatalogUpstream {
 	listToolsFor(token: string): Promise<Tool[]>;
 }
 
-export type CatalogAuth = TokenResolver | SecretStore;
-
 export interface CatalogOpts {
 	/**
-	 * The upstream schema-fetch timeout in ms. Absent: 10000 for a TokenResolver caller;
-	 * a SecretStore caller (the legacy-suite shape) gets the env-derived value
-	 * (GH_BROKER_CATALOG_TIMEOUT_MS, NaN included) instead.
+	 * The upstream schema-fetch timeout in ms. Absent: 10000 (the env read that used to
+	 * supply it died with the SecretStore-compat shape — a caller that wants the env's
+	 * value passes it explicitly, as the daemon does).
 	 */
 	upstreamTimeoutMs?: number;
 	/**
-	 * Operator-facing log sink for the catalog's startup messages. Absent: silent for a
-	 * TokenResolver caller (a library host composes its own logging); a SecretStore
-	 * caller gets today's stderr (journald) sink.
+	 * Operator-facing log sink for the catalog's startup messages. Absent: silent (a
+	 * library host composes its own logging; the daemon passes its stderr/journald sink).
 	 */
 	log?: (message: string) => void;
 	/**
 	 * The capability predicate (design §2's seam table): why a tool rule can't be served
-	 * on this host, or undefined when it can. Absent for a TokenResolver caller — the
-	 * host applies its own availability policy before building a catalog; a SecretStore
-	 * caller gets today's availability check over the store.
+	 * on this host, or undefined when it can. Absent: only the structural facts a
+	 * dispatch would crash on are checked — the host applies its own availability policy
+	 * before building a catalog.
 	 */
 	unavailable?: (rule: ToolRule) => string | undefined;
-}
-
-/** A SecretStore (the legacy-suite shape) is detectable by its two methods. */
-function asSecretStore(auth: CatalogAuth): SecretStore | undefined {
-	const a = auth as Partial<SecretStore> | undefined;
-	return typeof a?.resolve === "function" && typeof a?.has === "function" ? (auth as SecretStore) : undefined;
-}
-
-/**
- * The legacy defaults behind the store shape (moved here when src/catalog-compat.ts was
- * deleted — the daemon no longer uses them): the first configured owner's read PAT for
- * the schema fetch (tool schemas are owner-independent; the person is irrelevant), the
- * env-derived timeout (NaN included, pinned as-is), stderr for catalog messages, and
- * the availability check over the store. The env read and the console sink live ONLY
- * behind this legacy shape — the resolver shape stays env-free and silent.
- */
-function legacyCatalogAuth(config: Config, store: SecretStore): { resolveToken: TokenResolver; upstreamTimeoutMs: number; log: (message: string) => void; unavailable: (rule: ToolRule) => string | undefined } {
-	const firstOwner = Object.values(config.owners)[0];
-	return {
-		resolveToken: async () => (firstOwner ? store.resolve(firstOwner.read) : null),
-		upstreamTimeoutMs: Number(process.env.GH_BROKER_CATALOG_TIMEOUT_MS ?? 10000),
-		log: (message) => console.error(message),
-		unavailable: (rule) => unavailableReason(rule, config, (ref) => store.has(ref), (c) => otpSetupProblem(c, store))
-	};
 }
 
 /**
@@ -105,15 +61,12 @@ function legacyCatalogAuth(config: Config, store: SecretStore): { resolveToken: 
  * If the upstream fetch fails (network/token), we advertise minimal schemas rather
  * than fail startup — the daemon still serves and calls still route correctly.
  */
-export async function buildCatalog(config: Config, auth: CatalogAuth, upstream: CatalogUpstream, opts: CatalogOpts = {}): Promise<Tool[]> {
-	const store = asSecretStore(auth);
-	const legacy = store ? legacyCatalogAuth(config, store) : undefined;
-	const resolveToken: TokenResolver = legacy?.resolveToken ?? (auth as TokenResolver);
-	// Absent opts keep today's daemon behavior for the compat shape, and stay
-	// env-free + silent for a resolver caller (a library host is Quack-safe).
-	const timeoutMs = opts.upstreamTimeoutMs ?? legacy?.upstreamTimeoutMs ?? 10000;
-	const log = opts.log ?? legacy?.log;
-	const unavailable = opts.unavailable ?? legacy?.unavailable;
+export async function buildCatalog(config: Config, resolveToken: TokenResolver, upstream: CatalogUpstream, opts: CatalogOpts = {}): Promise<Tool[]> {
+	// Absent opts are env-free and silent (a library host is Quack-safe); the daemon
+	// passes its env-derived timeout, stderr sink and availability predicate explicitly.
+	const timeoutMs = opts.upstreamTimeoutMs ?? 10000;
+	const log = opts.log;
+	const unavailable = opts.unavailable;
 
 	const upstreamByName = new Map<string, Tool>();
 	// Whether the upstream tool list was actually fetched. If it wasn't (network/token), we must NOT drop

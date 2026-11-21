@@ -22,7 +22,7 @@
 
 export const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
-export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{
+export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{
 	status: number;
 	headers: { get(name: string): string | null };
 	text(): Promise<string>;
@@ -83,9 +83,12 @@ export class NpmRegistry {
 	private readonly token: string;
 	private readonly fetchImpl: FetchLike;
 
-	constructor(opts: { registry?: string; token: string; fetch?: FetchLike }) {
+	private readonly signal?: AbortSignal;
+
+	constructor(opts: { registry?: string; token: string; fetch?: FetchLike; signal?: AbortSignal }) {
 		this.base = (opts.registry ?? DEFAULT_REGISTRY).replace(/\/+$/, "");
 		this.token = opts.token;
+		this.signal = opts.signal;
 		this.fetchImpl = opts.fetch ?? (globalThis.fetch as unknown as FetchLike);
 	}
 
@@ -104,7 +107,8 @@ export class NpmRegistry {
 		const res = await this.fetchImpl(`${this.base}${path}`, {
 			method,
 			headers,
-			...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {})
+			...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
+			...(this.signal ? { signal: this.signal } : {})
 		});
 		const body = await res.text();
 		if (res.status === 401) {
@@ -175,10 +179,10 @@ export class NpmRegistry {
  * The latest published version of a package, from the public registry (`GET /<name>/latest`,
  * no credentials sent). Undefined when the package does not exist.
  */
-export async function latestVersion(name: string, opts: { registry?: string; fetch?: FetchLike } = {}): Promise<string | undefined> {
+export async function latestVersion(name: string, opts: { registry?: string; fetch?: FetchLike; signal?: AbortSignal } = {}): Promise<string | undefined> {
 	const base = (opts.registry ?? DEFAULT_REGISTRY).replace(/\/+$/, "");
 	const fetchImpl = opts.fetch ?? (globalThis.fetch as unknown as FetchLike);
-	const res = await fetchImpl(`${base}/${escapePackageName(name)}/latest`, { method: "GET", headers: { accept: "application/json", "user-agent": "gh-broker (report_dependents)" } });
+	const res = await fetchImpl(`${base}/${escapePackageName(name)}/latest`, { method: "GET", headers: { accept: "application/json", "user-agent": "gh-broker (report_dependents)" }, ...(opts.signal ? { signal: opts.signal } : {}) });
 	const body = await res.text();
 	if (res.status === 404) return undefined;
 	if (res.status !== 200) throw new NpmHttpError("latest lookup", res.status, errorDetail(body));

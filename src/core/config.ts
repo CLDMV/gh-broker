@@ -143,7 +143,6 @@ export function parseConfigLib(raw: unknown, host: { afterApp?: () => void; afte
 	};
 }
 
-/** Build a name→rule index for O(1) allowlist checks. */
-export function indexTools(tools: ToolRule[]): Map<string, ToolRule> {
-	return new Map(tools.map((t) => [t.name, t]));
-}
+/** Build a name→rule index for O(1) allowlist checks. Lives in the router core (the invoke
+ * surface needs it); re-exported so this module's consumers keep one import path. */
+export { indexTools } from "./router-core.ts";

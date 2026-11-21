@@ -327,6 +327,8 @@ export interface ReportDependentsDeps {
 	fetch?: FetchLike;
 	/** npm registry base URL for the `latest` lookup; defaults to registry.npmjs.org. */
 	registry?: string;
+	/** The call's cancellation signal (design #175 §2b) for the `latest` lookup. */
+	signal?: AbortSignal;
 }
 
 interface RepoRef {
@@ -461,7 +463,7 @@ export async function reportDependents(octokit: Octokit, input: ReportDependents
 	let latestError: string | undefined;
 	if (input.latest) {
 		try {
-			latest = await latestVersion(name, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.registry ? { registry: deps.registry } : {}) });
+			latest = await latestVersion(name, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.registry ? { registry: deps.registry } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
 		} catch (err) {
 			latestError = (err as Error).message;
 		}

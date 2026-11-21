@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
+ *	@Last modified time: 2026-11-19T21:50:49-08:00 (1795153849)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -244,10 +244,14 @@ export function deployDist(srcDir: string, destDir: string, svcUser: string, svc
 	mkdirp(destDir, 0o755, uid, gid);
 	const dist = join(destDir, "dist");
 	if (has("rsync")) {
-		run("rsync", ["-a", "--delete", `${srcDir}/`, `${dist}/`]);
+		run("rsync", ["-a", "--delete", "--exclude", "core/", `${srcDir}/`, `${dist}/`]);
 	} else {
 		rmSync(dist, { recursive: true, force: true });
 		cpSync(srcDir, dist, { recursive: true });
+		// The library bundle's imports are external (resolved from the consumer's
+		// node_modules), so it cannot run from the no-node_modules /opt tree — the
+		// deployed daemon is dist/index.mjs only; the library ships from npm.
+		rmSync(join(dist, "core"), { recursive: true, force: true });
 	}
 	run("chown", ["-R", `${uid}:${gid}`, destDir]);
 }
