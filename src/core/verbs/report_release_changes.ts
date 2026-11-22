@@ -103,7 +103,7 @@ export interface ReleaseChangePr {
 export interface ExcludedPr {
 	number: number;
 	title: string;
-	reason: "earlier-release" | "earlier-changelog" | "reverted" | "revert";
+	reason: "earlier-release" | "earlier-changelog" | "reverted" | "revert" | "not-a-pr";
 	/** For "reverted": the PR that reverted it. For "revert": the PR it reverted. */
 	pair?: number;
 }
@@ -550,9 +550,18 @@ export async function reportReleaseChanges(octokit: Octokit, input: ReportReleas
 			...(version ? { documented: documented.has(c.number) } : {})
 		}));
 
-		// 5. Each shipping PR at its detail level.
+		// 5. Each shipping PR at its detail level. A `(#N)` on a branch commit that a merge commit brought in
+		//    can name an issue rather than a PR; that number 404s here and is moved to excluded.
+		const notPrs = new Set<number>();
 		for (const entry of result.prs) {
-			const pr = await reqOne<RawPull>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}", { owner, repo, pull_number: entry.number });
+			let pr: RawPull;
+			try {
+				pr = await reqOne<RawPull>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}", { owner, repo, pull_number: entry.number });
+			} catch (err) {
+				if ((err as { status?: number }).status !== 404) throw err;
+				notPrs.add(entry.number);
+				continue;
+			}
 			const body = pr.body ?? "";
 			const labels = pr.labels.map((l) => l.name);
 			const conv = parseConventional(pr.title);
@@ -590,6 +599,12 @@ export async function reportReleaseChanges(octokit: Octokit, input: ReportReleas
 				});
 				if (pr.changed_files > files.length) entry.filesTruncated = true;
 			}
+		}
+
+		if (notPrs.size > 0) {
+			for (const entry of result.prs) if (notPrs.has(entry.number)) result.excluded.push({ number: entry.number, title: entry.title, reason: "not-a-pr" });
+			result.excluded.sort((a, b) => a.number - b.number);
+			result.prs = result.prs.filter((entry) => !notPrs.has(entry.number));
 		}
 
 		// 6. The release's net facts.

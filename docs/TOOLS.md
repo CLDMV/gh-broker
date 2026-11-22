@@ -479,6 +479,7 @@ A good pattern is one call at `titles` to see the whole release, then a second w
 | `earlier-release` | The PR is in the commits of an earlier release PR on the base branch. |
 | `earlier-changelog` | The previous version's changelog names it. |
 | `reverted` / `revert` | The PR was merged and then reverted inside the same range, so it nets to zero; `pair` names the other half. A revert of something outside the range stays in the list. |
+| `not-a-pr` | The number isn't a pull request. A PR merged with a merge commit brings its branch commits into the range, and one whose subject ends in an issue number, like `(#223)`, looks the same as a squash commit. |
 
 Earlier releases are found from the `release:` commits on the base branch (newest first, up to 5), walking back through any hotfix releases to the most recent full one. The newest is returned as `previousRelease` (`version`, `tag`, `pull`, `sha`, `kind: "full" | "hotfix"`). `tag` is the conventional `v<version>` name; it isn't looked up.
 
