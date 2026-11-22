@@ -39,7 +39,9 @@ registered agent (or all of them): the sessions the broker restart drops.
 its .claude.json files. A pane is skipped, with its id and the reason, when
 someone is typing in it, a dialog (a permission prompt, a question, a menu)
 is showing, it is in copy mode, or its key is not one that is safe to type
-blind. Claude working in it is fine: what is typed is queued. --dry-run lists what it would
+blind. Claude working in it is fine: what is typed is queued.
+Exits 0 when every pane was sent to, 3 when some were skipped (run it
+again once they're clear), 1 when a named user doesn't exist. --dry-run lists what it would
 send where.`;
 
 /** The effects `agent reconnect` (and `upgrade`'s last step) use. */
@@ -82,8 +84,17 @@ export function undimmed(line: string): string {
 		if (!dim) out += line.slice(last, m.index);
 		last = m.index! + m[0].length;
 		if (m[2] !== "m") continue;
-		const params = m[1] === "" ? ["0"] : m[1]!.split(/[;:]/);
-		for (const p of params) {
+		// Parameters are ";"-separated. A colour's arguments are skipped, not read as attributes:
+		// 38/48/58 take "5;<n>" (256 colours) or "2;<r>;<g>;<b>" (truecolour), so the 2 in
+		// "38;2;136;136;136" is not dim. The ":" form ("38:2::r:g:b") is one parameter.
+		const params = m[1] === "" ? ["0"] : m[1]!.split(";");
+		for (let k = 0; k < params.length; k++) {
+			const p = params[k]!;
+			if (p.includes(":")) continue;
+			if (p === "38" || p === "48" || p === "58") {
+				k += params[k + 1] === "5" ? 2 : params[k + 1] === "2" ? 4 : 0;
+				continue;
+			}
 			if (p === "2") dim = true;
 			else if (p === "0" || p === "" || p === "22") dim = false;
 		}
@@ -175,7 +186,7 @@ function keyFor(pane: Pane, info: UserInfo, keys: Map<string, string>): string |
 
 /**
  * Run one `agent reconnect`. Returns the exit code: 0 when every pane found was sent to (or
- * there were none), 1 when any pane was skipped or a user is missing.
+ * there were none), 3 when some were only skipped (they can be retried), 1 when a user is missing.
  */
 export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps): number {
 	const { users, dryRun, help } = parseReconnectArgs(rest);
@@ -191,6 +202,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 	}
 	let sent = 0;
 	let skipped = 0;
+	let missing = 0;
 	const skip = (user: string, socket: string, pane: string, key: string | undefined, why: string): void => {
 		d.log(`${user} ${clean(socket)} ${clean(pane)} ${key ?? "-"} skipped (${why})`);
 		skipped++;
@@ -200,13 +212,15 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		if (!info) {
 			d.error(`${user}: no such user`);
 			skipped++;
+			missing++;
 			continue;
 		}
 		const places: Place[] = [{ folder: info.home, saved: false }, ...extraFolders(info, d, config, user)];
 		const keys = keysOf(places, info, dir, d);
 		let panes = 0;
 		const { servers, skipped: deadSockets } = d.tmuxSockets(info);
-		for (const dead of deadSockets) d.log(`${user} ${clean(dead.socket)} - skipped (${dead.why})`);
+		// Socket files whose tmux server has exited are leftovers, not sessions: one count line, not one line each.
+		if (deadSockets.length) d.log(`${user}: ${deadSockets.length} stale tmux socket${deadSockets.length === 1 ? "" : "s"} ignored (no tmux server running on ${deadSockets.length === 1 ? "it" : "them"})`);
 		for (const server of servers) {
 			const socket = server.socket;
 			let panesOnServer: Pane[];
@@ -293,5 +307,6 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		if (panes === 0) d.log(`${user}: no Claude Code sessions running${servers.length ? "" : " (no tmux server)"}`);
 	}
 	d.log(dryRun ? `dry run: ${sent} pane(s) would get "/mcp reconnect"` : `sent ${sent}, skipped ${skipped}`);
-	return skipped === 0 ? 0 : 1;
+	if (skipped === 0) return 0;
+	return missing > 0 ? 1 : 3;
 }

@@ -143,7 +143,7 @@ export function realDeps(): CliDeps {
 			// inherited so its prompts work and its progress streams.
 			const r = spawnSync("/usr/local/bin/gh-broker", args, { stdio: "inherit" });
 			if (r.error) throw new Error(`/usr/local/bin/gh-broker ${args[0]}: ${r.error.message}`);
-			if (r.status !== 0) throw new Error(`/usr/local/bin/gh-broker ${args.join(" ")} exited ${r.status ?? `on signal ${r.signal}`}`);
+			if (r.status !== 0) throw Object.assign(new Error(`/usr/local/bin/gh-broker ${args.join(" ")} exited ${r.status ?? `on signal ${r.signal}`}`), { status: r.status });
 		},
 		sudoUser: () => process.env.SUDO_USER,
 		// Same journal identifier as the daemon (SyslogIdentifier=gh-broker), so `journalctl -t gh-broker` shows both.
