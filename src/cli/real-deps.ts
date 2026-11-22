@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
+ *	@Last modified time: 2026-11-21T12:23:30-08:00 (1795292610)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,12 +19,15 @@
  * cli.ts so the installer can import it without pulling in the dispatcher.
  */
 import { readFileSync, existsSync, readdirSync, rmSync, renameSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseGroups, parsePasswd } from "./agents.ts";
+import { SEMVER } from "./upgrade.ts";
 import { stateStore, writeFileAtomic, storeSeed } from "./otp.ts";
 import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./mcp-config.ts";
+import { tmuxPaneText, tmuxPanes, tmuxSend, tmuxSockets } from "./tmux.ts";
 import { readSecretsFile, writeSecretsFile } from "./secret-store.ts";
 import { smokeTest } from "./smoke.ts";
 import type { CliDeps } from "./cli.ts";
@@ -104,6 +107,44 @@ export function realDeps(): CliDeps {
 			});
 		},
 		restart: restartService,
+		// Every tmux command runs AS THE AGENT (uid/gid, its HOME, no $TMUX) — see src/cli/tmux.ts.
+		tmuxSockets: (info) => tmuxSockets(info),
+		tmuxPanes: (socket, info) => tmuxPanes(socket, info),
+		tmuxPaneText: (socket, pane, info) => tmuxPaneText(socket, pane, info),
+		tmuxSend: (socket, pane, text, info) => tmuxSend(socket, pane, text, info),
+		installedVersion: () => {
+			try {
+				const v = JSON.parse(readFileSync("/usr/local/lib/node_modules/@cldmv/gh-broker/package.json", "utf8")).version;
+				return typeof v === "string" ? v : undefined;
+			} catch {
+				return undefined; // no global install
+			}
+		},
+		deployedVersion: deployedVersion,
+		latestVersion: () => {
+			// cwd "/" so a .npmrc planted in the working directory can't add npm config, and the
+			// registry pinned like the install below.
+			const r = run("npm", ["view", "@cldmv/gh-broker", "version", "--registry", "https://registry.npmjs.org"], { allowFail: true, cwd: "/" });
+			const v = r.stdout.trim();
+			// the same bar --version is held to: anything that isn't semver isn't a version npm
+			// should be handed
+			return SEMVER.test(v) ? v : undefined;
+		},
+		npmInstall: (spec) => {
+			// Streamed (a long install must not look hung), from cwd "/" for the same reason as
+			// above, with the registry pinned so nothing a planted config adds gets installed.
+			const r = spawnSync("npm", ["install", "-g", "--prefix", "/usr/local", "--ignore-scripts", "--registry", "https://registry.npmjs.org", `@cldmv/gh-broker@${spec}`], { stdio: "inherit", cwd: "/" });
+			if (r.error) throw new Error(`npm install: ${r.error.message}`);
+			if (r.status !== 0) throw new Error(`npm install exited ${r.status ?? `on signal ${r.signal}`}`);
+		},
+		runNewBinary: (args) => {
+			// The NEW binary does the installing and the reconnecting: a child process, never this
+			// running CLI (which is still the old code until the process exits). stdio is
+			// inherited so its prompts work and its progress streams.
+			const r = spawnSync("/usr/local/bin/gh-broker", args, { stdio: "inherit" });
+			if (r.error) throw new Error(`/usr/local/bin/gh-broker ${args[0]}: ${r.error.message}`);
+			if (r.status !== 0) throw new Error(`/usr/local/bin/gh-broker ${args.join(" ")} exited ${r.status ?? `on signal ${r.signal}`}`);
+		},
 		sudoUser: () => process.env.SUDO_USER,
 		// Same journal identifier as the daemon (SyslogIdentifier=gh-broker), so `journalctl -t gh-broker` shows both.
 		audit: (entry) => run("systemd-cat", ["--identifier=gh-broker", "--priority=notice"], { input: `${JSON.stringify(entry)}\n` })

@@ -189,7 +189,7 @@ describe("agent list", () => {
 		const ghost = makeDeps({ groups: () => [{ name: "gh-broker-agent-ghost", gid: 1, members: ["gh-broker", "ghost"] }], versions: () => ({ pkg: "2", deployed: "1" }) });
 		await agentCommand("list", [], config, ghost.d);
 		expect(ghost.out[0]).toContain("mcp: no such user");
-		expect(ghost.err[0]).toContain("run \"sudo gh-broker install\"");
+		expect(ghost.err[0]).toContain("run \"sudo gh-broker upgrade\"");
 		const missing = makeDeps();
 		await agentCommand("list", [], config, missing.d);
 		expect(missing.out[0]).toContain("mcp: missing");

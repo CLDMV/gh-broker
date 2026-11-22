@@ -46,7 +46,7 @@ describe("otp status", () => {
 	it("warns on stderr when the package and the deployed version differ", async () => {
 		const { d, err } = makeDeps({ versions: () => ({ pkg: "2.0.0", deployed: "1.0.0" }) });
 		await otpCommand("status", [], config, d);
-		expect(err[0]).toContain("run \"sudo gh-broker install\"");
+		expect(err[0]).toContain("run \"sudo gh-broker upgrade\"");
 	});
 });
 

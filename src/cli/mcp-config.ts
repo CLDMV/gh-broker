@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
+ *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -25,7 +25,9 @@
  */
 import { closeSync, constants, fstatSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { basename } from "node:path";
-import { agentGroup, socketPath } from "./agents.ts";
+import { absoluteFolders } from "./config-merge.ts";
+import { agentGroup, socketPath, type UserInfo } from "./agents.ts";
+import type { ConfigLayer } from "./config-merge.ts";
 
 /** A file's owner. */
 export interface FileOwner {
@@ -97,7 +99,7 @@ export function readHead(path: string, max: number): string {
 }
 
 /** Whether a process's argv is a Claude Code session: the `claude` binary, or node running the claude-code package. */
-const isClaude = (argv: string[]): boolean => argv.slice(0, 2).some((a) => basename(a) === "claude" || a.includes("/@anthropic-ai/claude-code/"));
+export const isClaude = (argv: string[]): boolean => argv.slice(0, 2).some((a) => basename(a) === "claude" || a.includes("/@anthropic-ai/claude-code/"));
 
 /**
  * Read `path` as root on behalf of the user `uid`, without following a symlink: the file must be
@@ -156,6 +158,17 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 /** Keys of the entries that point at the broker (any /run/gh-broker/ socket, old or new, or one in `dir`). */
 export function brokerKeys(servers: Servers, dir?: string): string[] {
 	return Object.keys(servers).filter((k) => mentionsBroker(servers[k], dir));
+}
+
+/**
+ * The key the broker's entry has in a `.claude.json` text (the name `agent reconnect` sends
+ * `/mcp reconnect` for), or undefined: no file, not JSON, or no entry pointing at the broker.
+ */
+export function brokerKeyOf(text: string | undefined, dir: string): string | undefined {
+	const cfg = parse(text);
+	if (cfg === undefined) return undefined;
+	const servers: Servers = isObject(cfg["mcpServers"]) ? cfg["mcpServers"] : {};
+	return brokerKeys(servers, dir)[0];
 }
 
 /** The key to write: the existing broker entry's, else `github`, `gh-broker`, then `gh-broker-<user>` (first free). */
@@ -418,3 +431,54 @@ export interface PinnedFolder {
 
 /** The `pin` effect: open a folder (checked against the agent's home when `home` is given). Returns undefined when there is no such folder. */
 export type PinFolder = (folder: string, uid: number, home?: string) => PinnedFolder | undefined;
+
+/** A Claude config folder other than the home directory; `saved` means it was named with --claude-config. */
+export interface Place {
+	folder: string;
+	saved: boolean;
+}
+
+/** The file io plus the folder-finders the `agent` commands attach to it (see AgentDeps.mcpIO). */
+export type FolderIo = McpIo & {
+	scan?: (home: string) => string[];
+	sessions?: (uid: number) => string[];
+	pin?: PinFolder;
+};
+
+/**
+ * The agent's Claude config folders other than the home directory (#163): the ones saved for it
+ * with --claude-config, its `~/.claude*` folders, and the `CLAUDE_CONFIG_DIR` of its running
+ * `claude` sessions. Only these users' own folders are looked at, never anyone else's. Saved
+ * folders were named by root, so they may be outside the home directory; found ones may not.
+ */
+export function extraFolders(info: UserInfo, d: { mcpIO: FolderIo }, config: Pick<ConfigLayer, "claudeConfigDirs">, user: string): Place[] {
+	const home = info.home.replace(/\/+$/, "");
+	const saved = absoluteFolders(config.claudeConfigDirs?.[user]);
+	const found = [...(d.mcpIO.scan?.(info.home) ?? []), ...(d.mcpIO.sessions?.(info.uid) ?? [])];
+	const seen = new Set([home, info.home]);
+	const out: Place[] = [];
+	for (const [list, isSaved] of [[saved, true], [found, false]] as const) {
+		for (const folder of list) {
+			if (seen.has(folder)) continue;
+			seen.add(folder);
+			out.push({ folder, saved: isSaved });
+		}
+	}
+	return out;
+}
+
+/**
+ * Run `fn(io)` for the files in `folder`. The home directory uses the io as is; any other folder is
+ * pinned first (it must be a real directory the agent owns, and unless it was saved with
+ * --claude-config, inside the agent's home). Returns undefined when the folder is gone.
+ */
+export function inFolder<T>({ folder, saved }: Place, info: UserInfo, d: { mcpIO: FolderIo }, fn: (io: McpIo) => T): T | undefined {
+	if (folder === info.home || !d.mcpIO.pin) return fn(d.mcpIO);
+	const pinned = d.mcpIO.pin(folder, info.uid, saved ? undefined : info.home);
+	if (!pinned) return undefined;
+	try {
+		return fn(pinned.io);
+	} finally {
+		pinned.close();
+	}
+}

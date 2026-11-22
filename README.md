@@ -19,17 +19,18 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.12.0 (November 2026)
+### Latest: v0.13.0 (November 2026)
 
-- **The broker's core is a library.** `@cldmv/gh-broker` (and `@cldmv/gh-broker/core`) now exports `createBroker`, which gives a host `invoke(name, args, ctx)` and a `run` driver adapter running the same policy, OTP and dispatch code as the daemon. The host brings its own config, token resolver and OTP check (`ctx.approve`, required for gated tools), gets typed `InvokeError` codes, and can cap any call with `ctx.signal` or `ctx.timeoutMs`. Nothing changes for the daemon.
-- [View full v0.12.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.12.0.md)
+- **One-command upgrades.** `sudo gh-broker upgrade` runs the npm install, the new release's `gh-broker install` with the same flags, and a reconnect of every running Claude Code session, all under one sudo. It stops at the first failing step and prints what's left to run. The reconnect step also works on its own: `gh-broker agent reconnect` types `/mcp reconnect <key>` into each agent's Claude Code tmux panes, as the agent user, and only into panes that are idle with an empty input box.
+- **`npm_scaffold` spots an expired trusted publisher.** npm drops a trusted publisher that goes unused for 2 days. `npm_scaffold` now returns `status: "expired"` with instructions to delete the old entry, instead of sending you on to a publish that fails.
+- [View full v0.13.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.0.md)
 
 ### Recent Releases
 
+- **v0.12.0** (November 2026) — the broker's core is a library: `createBroker` gives a host `invoke` and `run` with the daemon's policy, OTP and dispatch code ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.12.0.md))
 - **v0.11.2** (November 2026) — `npm_scaffold` waits for npm's staged first publish and returns `status: "pending"` instead of failing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.2.md))
 - **v0.11.1** (November 2026) — the daemon loads again; `qrcode` is out of the daemon bundle and the build runs the built daemon before publishing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.1.md))
 - **v0.11.0** (November 2026) — `npm_scaffold` takes `path` and `ref`, and the core library takes shape; its daemon bundle didn't load, fixed in v0.11.1 ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.0.md))
-- **v0.10.7** (November 2026) — `npm_scaffold` resumes when a staged placeholder went live later ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.10.7.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
@@ -123,6 +124,12 @@ npm only accepts a trusted publisher on a package that already exists, so every 
 
 🐳 **Full parameter reference and threat model: [docs/TOOLS.md](docs/TOOLS.md#ghcr_push)**
 
+### 📚 **The Core as a Library**
+
+`@cldmv/gh-broker` (and `@cldmv/gh-broker/core`) exports the broker's core for other hosts: `createBroker` gives a host `invoke(name, args, ctx)` running the same policy, OTP checks and dispatch as the daemon, while the host keeps its own tokens, OTP flow and audit log. The daemon itself is not part of the export.
+
+📚 **Host guide: [docs/LIBRARY.md](docs/LIBRARY.md)**
+
 ### 🔧 **Extensible By Design**
 
 The broker presents its **own** MCP contract to the agent — a proxied tool's schema and response are not required to match the hosted MCP's exactly. Adding a custom verb or extending a proxied tool with new parameters follows a documented pattern, not a one-off hack.
@@ -131,7 +138,7 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ### 📦 **One-Command Install & Upgrade**
 
-`sudo gh-broker install` (or `sudo ./deploy/install.sh` from a checkout, which builds as the checkout's own owner first, no `chown` ever) handles first install and every upgrade: merges shipped config defaults over the deployed config, lets you choose how PATs are stored at rest, and runs a post-deploy smoke test.
+`sudo gh-broker install` (or `sudo ./deploy/install.sh` from a checkout, which builds as the checkout's own owner first, no `chown` ever) handles first install: it merges shipped config defaults over the deployed config, lets you choose how PATs are stored at rest, and runs a post-deploy smoke test. For every later upgrade run `sudo gh-broker upgrade` instead — the npm install, the reinstall and the agent reconnect under one sudo.
 
 📦 **Full prerequisites, PAT scopes, and flags: [deploy/README.md](deploy/README.md)**
 
@@ -148,9 +155,9 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 
 ### Install
 
-gh-broker is a system service, not a library. The installer handles both the first install and every upgrade, and you can run it from npm or from a checkout.
+gh-broker is a system service, not a library. The installer handles the first install, and you can run it from npm or from a checkout.
 
-From npm ([`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker)), with the prebuilt bundle, as a global install (upgrade with the same command, then `gh-broker install` again):
+From npm ([`@cldmv/gh-broker`](https://www.npmjs.com/package/@cldmv/gh-broker)), with the prebuilt bundle, as a global install:
 
 ```sh
 sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker
@@ -166,6 +173,16 @@ sudo ./deploy/install.sh <agent-user>
 ```
 
 Both take the same flags. From a checkout, `deploy/install.sh` first installs node if there is none, then builds `dist/` and `bin/` as the checkout's owner, then runs `bin/gh-broker.mjs install`. The installer creates the service user, registers each agent user (its own group, socket and MCP config; see `gh-broker agent`), merges the shipped defaults with the deployed config, stores the PATs in the backend you pick, installs the unit and runs a smoke test. Prerequisites, PAT scopes, unattended installs and every flag: [deploy/README.md](deploy/README.md).
+
+### Upgrade
+
+One sudo does the whole thing:
+
+```sh
+sudo gh-broker upgrade
+```
+
+It runs, in order and stopping at the first failure (which it reports, with the commands to finish by hand): the npm install (`npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker@latest`, or `@<version>` with `--version <v>` — a semantic version; the install flags are validated before anything runs), the **newly installed binary's** `gh-broker install` as a child process with the same flags (`--claude-config <user>:<dir>`, `--no-mcp-config`, …), and the **new binary's** `agent reconnect` — every running Claude Code session's connection was dropped by the restart, so `/mcp reconnect <key>` is typed into each of its tmux panes (skipping panes where someone is typing, Claude isn't the foreground job, or the key isn't safe to type blind, listed so they can be retried; every tmux command runs as the agent user, not as root; `--dry-run` on `agent reconnect` previews it). `--no-reconnect` skips that last step, and `--force` reinstalls even when the target version is already installed **and deployed**. First install and checkout installs are unchanged: run `gh-broker install` (or `deploy/install.sh`) as above.
 
 ---
 
@@ -204,8 +221,10 @@ src/
   bin/
     gh-broker.ts    the `gh-broker` command (package bin, built to bin/gh-broker.mjs)
   cli/
-    cli.ts          `gh-broker otp` / `gh-broker agent` dispatch (otp-cli.ts, agent-cli.ts)
-    install.ts      the installer — first install AND upgrade (`gh-broker install`)
+    cli.ts          `gh-broker otp` / `gh-broker agent` / `gh-broker upgrade` dispatch (otp-cli.ts, agent-cli.ts, reconnect.ts, upgrade.ts)
+    install.ts      the installer (`gh-broker install`)
+    upgrade.ts      `gh-broker upgrade` — npm install, the new binary's install, agent reconnect, one sudo
+    reconnect.ts    `agent reconnect` — /mcp reconnect into each running Claude Code tmux pane
     real-deps.ts    the real host effects the CLI modules take as deps
     *.ts            installer and CLI pieces (config merge, secret store, system ops, MCP config, OTP, smoke test, npm token setup)
   verbs/
