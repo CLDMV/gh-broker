@@ -385,6 +385,30 @@ describe("reportReleaseChanges", () => {
 		expect(out.prs[0]).toMatchObject({ fetched: true, title: "chore: pr 17" });
 	});
 
+	it("moves a (#N) that names an issue, from a merge commit's branch commits, to excluded as not-a-pr", async () => {
+		const commits = [commit("feat: wire it in (#404)"), commit("feat: x (#20)"), commit("feat: old other (#6)"), commit("fix: the review round (#404 round 2)")];
+		const out = await run({ skeleton: true }, { "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits": (p) => (p.pull_number === 100 ? commits : []) });
+		expect(out.prs.map((p) => p.number)).toEqual([20]);
+		expect(out.excluded).toEqual([
+			{ number: 6, title: "feat: old other", reason: "earlier-changelog" },
+			{ number: 404, title: "feat: wire it in", reason: "not-a-pr" }
+		]);
+		expect(Object.values(out.groups).flat()).toEqual([20]);
+		expect(out).not.toHaveProperty("truncated");
+		expect(out.skeleton).not.toContain("#404");
+	});
+
+	it("propagates a non-404 error from a shipping PR's read", async () => {
+		await expect(
+			run({}, {
+				"GET /repos/{owner}/{repo}/pulls/{pull_number}": (p) => {
+					if (p.pull_number === 10) throw status(500, "pr read failed");
+					return PRS[p.pull_number] ?? pullData(p.pull_number, `chore: pr ${p.pull_number}`);
+				}
+			})
+		).rejects.toThrow("pr read failed");
+	});
+
 	it("leaves out package.json facts when either side has no readable package.json", async () => {
 		const out = await run({}, { "GET /repos/{owner}/{repo}/contents/{path}": (p) => (p.path === "package.json" && p.ref === "master" ? "{not json" : p.path === "package.json" ? JSON.stringify(PKG_HEAD) : { type: "dir" }) });
 		expect(out.net).not.toHaveProperty("packageJson");
