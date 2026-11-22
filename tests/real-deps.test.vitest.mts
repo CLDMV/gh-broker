@@ -93,6 +93,15 @@ describe("npmInstall", () => {
 	});
 });
 
+describe("now / sleep (reconnect --wait)", () => {
+	it("sleep blocks for about the time asked, and now is the wall clock", () => {
+		const start = realDeps().now();
+		expect(Math.abs(start - Date.now())).toBeLessThan(1000);
+		realDeps().sleep(30);
+		expect(realDeps().now() - start).toBeGreaterThanOrEqual(25);
+	});
+});
+
 describe("runNewBinary", () => {
 	it("runs the newly installed binary as a child with inherited stdio", () => {
 		h.spawnSync.mockReturnValue(ok());

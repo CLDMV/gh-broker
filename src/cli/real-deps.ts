@@ -112,6 +112,10 @@ export function realDeps(): CliDeps {
 		tmuxPanes: (socket, info) => tmuxPanes(socket, info),
 		tmuxPaneText: (socket, pane, info) => tmuxPaneText(socket, pane, info),
 		tmuxSend: (socket, pane, text, info) => tmuxSend(socket, pane, text, info),
+		// A synchronous pause: the CLI is synchronous, and --wait only polls a few panes.
+		sleep: (ms) => {
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+		},
 		installedVersion: () => {
 			try {
 				const v = JSON.parse(readFileSync("/usr/local/lib/node_modules/@cldmv/gh-broker/package.json", "utf8")).version;
