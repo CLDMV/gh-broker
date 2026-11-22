@@ -231,6 +231,7 @@ src/
     report_security_alerts.ts  open Dependabot/CodeQL/secret alerts, one repo or org-wide
     report_release_prs.ts  open release PRs + whether each has its changelog file
     report_dependents.ts  repos that declare an npm package, with range, resolved version and flow tier
+    report_custom_properties.ts  custom property values for one repo or every repo in an org
     report_alert_status.ts  where each open Dependabot alert's fix stands (lockfiles + PRs)
     report_release_changes.ts  the PRs a release ships, grouped, with net package/dependency deltas
     lockfile.ts          npm / pnpm / yarn lockfile readers shared by the report verbs
@@ -264,7 +265,7 @@ config.sample.json   a full config with placeholder values, for reference only
 
 ## 📚 Documentation
 
-- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_release_changes`, `report_dependents`, `report_ci_status`, the `pull_request_read` and `list_pull_requests` `ciVerbosity` extensions, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `minimize_comment`, `delete_branch`, `dismiss_alert`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, `otp_status`, the OTP gate and the deny list, and how to add a new one
+- **[Tools Reference](docs/TOOLS.md)** — every custom and augmented tool: `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_release_changes`, `report_dependents`, `report_custom_properties`, `report_ci_status`, the `pull_request_read` and `list_pull_requests` `ciVerbosity` extensions, `issue_labels`, `npm_scaffold`, `resolve_review_thread`/`reply_review_thread`, `minimize_comment`, `delete_branch`, `dismiss_alert`, `ghcr_push`/`ghcr_push_status`/`ghcr_tags`, `otp_status`, the OTP gate and the deny list, and how to add a new one
 - **[Agent-as-Separate-User Model](docs/agent-user-model.md)** — the isolation model behind "use ≠ possession": users, groups, filesystem permissions, verified against a real host
 - **[Deploy Architecture](docs/deploy-architecture.md)** — config merge, secret store backends, node handling, the installer's full flow
 - **[Install Guide](deploy/README.md)** — prerequisites, PAT scopes, install/upgrade command, flags

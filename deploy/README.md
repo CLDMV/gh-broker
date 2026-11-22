@@ -13,10 +13,10 @@ The installer maintains `/usr/local/bin/node` as the single node indirection (CL
 
 For each GitHub owner (user or org) the broker serves, `<org>`: GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate new token, **twice**. Resource owner: `<org>`. Repository access: **All repositories**.
 
-**`<org>-read`** — Issues: Read, Pull requests: Read, Contents: Read, Metadata: Read (auto).
+**`<org>-read`** — Issues: Read, Pull requests: Read, Contents: Read, Metadata: Read (auto). For `report_custom_properties`, also the repository permission Custom properties: Read, plus the organization permission Custom properties: Read for the org-wide listing.
 **`<org>-write`** — Issues: R/W, Pull requests: R/W, Contents: R/W, Metadata: Read (auto). For the tools added in #146, also: Administration: R/W (`create_repository`, `fork_repository`), Actions: R/W (`actions_run_trigger`), Workflows: R/W (`merge_pull_request` and `update_pull_request_branch` on a PR that changes `.github/workflows/`), Code scanning alerts: R/W, Dependabot alerts: R/W and Secret scanning alerts: R/W (`dismiss_alert`). The Copilot coding-agent tools ship disabled and need nothing extra beyond Issues and Pull requests: R/W, plus Copilot coding agent on the account. The installer ships every tool on each run, so a scope left off doesn't hide its tools: the calls are advertised and GitHub refuses them. Administration: R/W is broad: on its own it also lets the token delete repos and change their settings. The broker never offers those, but the token itself can do them, so treat the write PAT accordingly.
 
-No organization permissions. If the org requires approval for fine-grained PATs, approve them in Org → Settings → Personal access tokens. The two-PAT split (read vs write) is a deliberate least-privilege control — see the design doc.
+The write PAT gets no organization permissions, and the read PAT only the read-only Custom properties one above. If the org requires approval for fine-grained PATs, approve them in Org → Settings → Personal access tokens. The two-PAT split (read vs write) is a deliberate least-privilege control — see the design doc.
 
 ### GHCR pushes: one classic PAT (`<org>-packages`)
 

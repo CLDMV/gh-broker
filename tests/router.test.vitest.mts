@@ -40,6 +40,7 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 			{ name: "report_release_changes", mode: "read", custom: true },
 			{ name: "report_alert_status", mode: "read", custom: true },
 			{ name: "report_dependents", mode: "read", custom: true },
+			{ name: "report_custom_properties", mode: "read", custom: true },
 			{ name: "report_ci_status", mode: "read", custom: true },
 			{ name: "pull_request_read", mode: "read", augment: true },
 			{ name: "list_pull_requests", mode: "read", augment: true },
@@ -373,6 +374,14 @@ describe("Router.call", () => {
 			const out = await r.call("report_dependents", { owner: "cldmv", name: "@cldmv/x" });
 			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
 			expect(JSON.parse((out as any).content[0].text)).toMatchObject({ package: "@cldmv/x", scanned: { candidates: 0 }, dependents: [] });
+		});
+
+		it("report_custom_properties runs on a read-PAT Octokit and returns the JSON report as text", async () => {
+			requestMock.mockImplementation(async () => ({ data: [{ property_name: "branch-model", value: "v4" }], headers: {} }));
+			const r = new Router(makeConfig(), secrets as any, upstream as any);
+			const out = await r.call("report_custom_properties", { owner: "cldmv", repo: "nexus" });
+			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
+			expect(JSON.parse((out as any).content[0].text)).toEqual({ owner: "cldmv", repo: "nexus", repos: [{ repo: "nexus", properties: { "branch-model": "v4" } }], count: 1 });
 		});
 
 		it("report_dependents looks up latest on the configured npm registry", async () => {

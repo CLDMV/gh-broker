@@ -45,6 +45,7 @@ import {
 } from "../verbs/review_thread.ts";
 import { reportUnlabeled, type ReportUnlabeledInput } from "../verbs/report_unlabeled.ts";
 import { reportDependents, type ReportDependentsInput } from "../verbs/report_dependents.ts";
+import { reportCustomProperties, type ReportCustomPropertiesInput } from "./verbs/report_custom_properties.ts";
 import { reportSecurityAlerts, type ReportSecurityAlertsInput } from "../verbs/report_security_alerts.ts";
 import { reportReleasePrs, type ReportReleasePrsInput } from "../verbs/report_release_prs.ts";
 import { reportReleaseChanges, type ReportReleaseChangesInput } from "../verbs/report_release_changes.ts";
@@ -242,6 +243,11 @@ export async function dispatchCustom(deps: RouteDeps, tool: string, args: Record
 		case "report_dependents": {
 			const octokit = client(deps, token);
 			const out = await reportDependents(octokit, args as unknown as ReportDependentsInput, { ...(deps.npm?.registry ? { registry: deps.npm.registry } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
+			return { content: [{ type: "text", text: JSON.stringify(out) }] };
+		}
+		case "report_custom_properties": {
+			const octokit = client(deps, token);
+			const out = await reportCustomProperties(octokit, args as unknown as ReportCustomPropertiesInput);
 			return { content: [{ type: "text", text: JSON.stringify(out) }] };
 		}
 		case "report_release_prs": {
