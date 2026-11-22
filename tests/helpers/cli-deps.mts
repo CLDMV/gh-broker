@@ -48,6 +48,7 @@ export function makeDeps(over: Record<string, unknown> = {}, files: Record<strin
 		sleep: vi.fn((ms: number) => {
 			d.clock.t += ms;
 		}),
+		startBackground: vi.fn(),
 		installedVersion: () => undefined,
 		deployedVersion: () => undefined,
 		latestVersion: () => undefined,

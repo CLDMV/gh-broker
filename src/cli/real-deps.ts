@@ -28,6 +28,7 @@ import { SEMVER } from "./upgrade.ts";
 import { stateStore, writeFileAtomic, storeSeed } from "./otp.ts";
 import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./mcp-config.ts";
 import { tmuxPaneText, tmuxPanes, tmuxSend, tmuxSockets } from "./tmux.ts";
+import { WAIT_UNIT } from "./reconnect.ts";
 import { readSecretsFile, writeSecretsFile } from "./secret-store.ts";
 import { smokeTest } from "./smoke.ts";
 import type { CliDeps } from "./cli.ts";
@@ -134,6 +135,24 @@ export function realDeps(): CliDeps {
 		// A synchronous pause: the CLI is synchronous, and --wait only polls a few panes.
 		sleep: (ms) => {
 			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+		},
+		startBackground: (args) => {
+			// One background wait at a time: a new --wait re-checked every pane itself, so the
+			// old run's panes are covered by the new one. --collect drops the unit when it ends,
+			// failed or not; its output stays in the journal under the unit's name.
+			run("systemctl", ["stop", `${WAIT_UNIT}.service`], { allowFail: true });
+			run("systemctl", ["reset-failed", `${WAIT_UNIT}.service`], { allowFail: true });
+			run("systemd-run", [
+				`--unit=${WAIT_UNIT}`,
+				"--collect",
+				"--quiet",
+				`--description=gh-broker agent reconnect --wait`,
+				process.execPath,
+				process.argv[1]!,
+				"agent",
+				"reconnect",
+				...args
+			]);
 		},
 		installedVersion: () => {
 			try {
