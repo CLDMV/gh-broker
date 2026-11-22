@@ -173,7 +173,7 @@ describe("loadConfig — tools", () => {
 	it("loads the shipped config.example.json tool list", () => {
 		const c = baseConfig();
 		c.tools = JSON.parse(readFileSync("config.example.json", "utf8")).tools;
-		expect(loadConfig(writeConfig(c)).tools).toHaveLength(87);
+		expect(loadConfig(writeConfig(c)).tools).toHaveLength(88);
 	});
 
 	it("rejects a tool marked both custom and augment", () => {

@@ -52,6 +52,7 @@ import { DEFAULT_GATED, OTP_STATUS } from "./otp-policy.ts";
 import { RESOLVE_REVIEW_THREAD_SCHEMA, REPLY_REVIEW_THREAD_SCHEMA } from "./verbs/review_thread.ts";
 import { REPORT_UNLABELED_SCHEMA } from "./verbs/report_unlabeled.ts";
 import { REPORT_DEPENDENTS_SCHEMA } from "./verbs/report_dependents.ts";
+import { REPORT_CUSTOM_PROPERTIES_SCHEMA } from "./verbs/report_custom_properties.ts";
 import { REPORT_SECURITY_ALERTS_SCHEMA } from "./verbs/report_security_alerts.ts";
 import { REPORT_RELEASE_PRS_SCHEMA } from "./verbs/report_release_prs.ts";
 import { REPORT_RELEASE_CHANGES_SCHEMA } from "./verbs/report_release_changes.ts";
@@ -219,6 +220,15 @@ export const MANIFEST: Readonly<Record<string, ToolDecl>> = {
 		description:
 			"Find every non-archived, non-fork repo an owner has that declares an npm package in dependencies, devDependencies or peerDependencies, with the declared range, the version the lockfile resolved (package-lock.json or pnpm-lock.yaml), the repo's flow tier (v4 / dev-trunk / non-v4), default branch and visibility. Workspace members are reported against their repo with the member path. Optional latest:true marks the resolved versions that are behind the latest published one. Candidates come from one org code search and are each verified against the default-branch package.json; the search lags recent commits and misses dev-trunk repos whose manifests live on dev (see discovery.note). Bounded by maxRepos/maxFileBytes/maxApiCalls; returns truncated:true (with a reason) instead of failing outright if a cap or GitHub's rate limit is hit. Runs on the read PAT.",
 		inputSchema: REPORT_DEPENDENTS_SCHEMA
+	},
+	report_custom_properties: {
+		kind: "verb",
+		mode: "read",
+		otp: gated("report_custom_properties"),
+		owner: "extractOwner",
+		description:
+			"Read repository custom property values: for one repo (repo set), or for every repo in an org (repo omitted, with repositoryQuery passed through as GitHub's repository_query). property keeps only repos where that property is set and reports just it; value also requires that value (for multi-select, one of its values). Bounded by maxRepos/maxApiCalls; the org listing returns truncated:true with a reason if a cap or GitHub's rate limit is hit. Needs \"Custom properties: read\" on the read PAT (repository permission per repo, organization permission for the org listing). Runs on the read PAT.",
+		inputSchema: REPORT_CUSTOM_PROPERTIES_SCHEMA
 	},
 	report_release_prs: {
 		kind: "verb",

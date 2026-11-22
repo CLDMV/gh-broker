@@ -52,6 +52,7 @@ export * from "./verbs/release-analysis.ts";
 export * from "./verbs/report_alert_status.ts";
 export * from "./verbs/report_ci_status.ts";
 export * from "./verbs/report_dependents.ts";
+export * from "./verbs/report_custom_properties.ts";
 export * from "./verbs/report_release_changes.ts";
 export * from "./verbs/report_release_prs.ts";
 export * from "./verbs/report_security_alerts.ts";
