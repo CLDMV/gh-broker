@@ -19,18 +19,17 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.13.0 (November 2026)
+### Latest: v0.13.1 (November 2026)
 
-- **One-command upgrades.** `sudo gh-broker upgrade` runs the npm install, the new release's `gh-broker install` with the same flags, and a reconnect of every running Claude Code session, all under one sudo. It stops at the first failing step and prints what's left to run. The reconnect step also works on its own: `gh-broker agent reconnect` types `/mcp reconnect <key>` into each agent's Claude Code tmux panes, as the agent user, and only into panes that are idle with an empty input box.
-- **`npm_scaffold` spots an expired trusted publisher.** npm drops a trusted publisher that goes unused for 2 days. `npm_scaffold` now returns `status: "expired"` with instructions to delete the old entry, instead of sending you on to a publish that fails.
-- [View full v0.13.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.0.md)
+- **`report_release_changes` works on releases with merge-commit PRs.** A branch commit ending in an issue number, such as `(#223)`, used to be looked up as a PR, and the resulting 404 failed the whole report. That number is now listed under `excluded` as `not-a-pr` and the report comes back as usual.
+- [View full v0.13.1 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.1.md)
 
 ### Recent Releases
 
+- **v0.13.0** (November 2026) — `sudo gh-broker upgrade` does the npm install, reinstall and agent reconnect in one go; `gh-broker agent reconnect` on its own; `npm_scaffold` reports an expired trusted publisher ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.0.md))
 - **v0.12.0** (November 2026) — the broker's core is a library: `createBroker` gives a host `invoke` and `run` with the daemon's policy, OTP and dispatch code ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.12.0.md))
 - **v0.11.2** (November 2026) — `npm_scaffold` waits for npm's staged first publish and returns `status: "pending"` instead of failing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.2.md))
 - **v0.11.1** (November 2026) — the daemon loads again; `qrcode` is out of the daemon bundle and the build runs the built daemon before publishing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.1.md))
-- **v0.11.0** (November 2026) — `npm_scaffold` takes `path` and `ref`, and the core library takes shape; its daemon bundle didn't load, fixed in v0.11.1 ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.0.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
