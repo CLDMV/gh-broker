@@ -16,7 +16,6 @@ export function makeDeps(over: Record<string, unknown> = {}, files: Record<strin
 	const d: any = {
 		log: (m: string) => out.push(m),
 		error: (m: string) => err.push(m),
-		now: () => NOW,
 		isRoot: () => true,
 		host: () => "box",
 		readConfig: () => config,
@@ -43,6 +42,12 @@ export function makeDeps(over: Record<string, unknown> = {}, files: Record<strin
 		tmuxPanes: vi.fn(() => []),
 		tmuxPaneText: vi.fn(() => "❯ \n"),
 		tmuxSend: vi.fn(),
+		// A fake clock that starts at NOW; sleep (reconnect --wait) advances it, nothing really waits.
+		clock: { t: NOW },
+		now: vi.fn(() => d.clock.t),
+		sleep: vi.fn((ms: number) => {
+			d.clock.t += ms;
+		}),
 		installedVersion: () => undefined,
 		deployedVersion: () => undefined,
 		latestVersion: () => undefined,

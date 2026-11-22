@@ -55,7 +55,8 @@ export interface CredentialPlanOptions {
 
 export function credentialPlan(o: CredentialPlanOptions) {
 	const unknown = Object.keys(o.cliSecrets).filter((n) => !o.needed.includes(n));
-	if (unknown.length) throw new Error(`--secret names no credential this config uses: ${unknown.join(", ")} (it uses: ${o.needed.join(", ")})`);
+	if (unknown.length)
+		throw new Error(`--secret names no credential this config uses: ${unknown.join(", ")} (it uses: ${o.needed.join(", ")})`);
 
 	const explicit = (name: string): string | undefined => {
 		for (const v of [o.cliSecrets[name], o.imported?.[name], o.env[envSecretKey(name)]]) {
@@ -72,7 +73,10 @@ export function credentialPlan(o: CredentialPlanOptions) {
 		const given = explicit(name);
 		if (given) return given;
 		if (minting(name)) {
-			if (o.nonInteractive) throw new Error(`creating the npm token needs a browser login and prompts — run interactively, or supply an existing token via --secret, --secrets-file or env ${envSecretKey(name)}`);
+			if (o.nonInteractive)
+				throw new Error(
+					`creating the npm token needs a browser login and prompts — run interactively, or supply an existing token via --secret, --secrets-file or env ${envSecretKey(name)}`
+				);
 			return o.mint(name);
 		}
 		const fromFile = o.existingFile[name];
@@ -86,25 +90,33 @@ export function credentialPlan(o: CredentialPlanOptions) {
 			if (o.nonInteractive) return undefined;
 			return (await o.promptHidden(`  ${name} (input hidden; Enter to skip — its tools stay hidden): `)) || undefined;
 		}
-		if (o.nonInteractive) throw new Error(`missing credential "${name}" — provide via --secret, --secrets-file or env ${envSecretKey(name)}`);
+		if (o.nonInteractive)
+			throw new Error(`missing credential "${name}" — provide via --secret, --secrets-file or env ${envSecretKey(name)}`);
 		if (name === o.appKeyName) {
-			throw new Error(`credential "${name}" is a GitHub App private key (multi-line PEM); the single-line prompt can't accept it — supply it via --secrets-file or env ${envSecretKey(name)}`);
+			throw new Error(
+				`credential "${name}" is a GitHub App private key (multi-line PEM); the single-line prompt can't accept it — supply it via --secrets-file or env ${envSecretKey(name)}`
+			);
 		}
 		const entered = await o.promptHidden(`  ${name} (input hidden): `);
 		if (!entered) throw new Error(`empty value for "${name}"`);
 		return entered;
 	};
 
-	const skipped = (name: string): void => o.log(`  ${name}: not stored — its tools stay hidden until it is (re-run the installer to add it)`);
+	const skipped = (name: string): void =>
+		o.log(`  ${name}: not stored — its tools stay hidden until it is (re-run the installer to add it)`);
 	const replacedNote = (name: string): void => {
-		if (minting(name)) o.log(`  note: the previous ${name} is still valid until it expires — revoke it in your npm account's Access Tokens settings`);
+		if (minting(name))
+			o.log(`  note: the previous ${name} is still valid until it expires — revoke it in your npm account's Access Tokens settings`);
 	};
 
 	/**
 	 * systemd-creds backend. Returns the names that end up stored: only those go into the
 	 * LoadCredentialEncrypted= drop-in, since a line for a missing file stops the unit.
 	 */
-	const storeSystemd = async (io: { exists: (name: string) => boolean; encrypt: (name: string, value: string) => void }): Promise<string[]> => {
+	const storeSystemd = async (io: {
+		exists: (name: string) => boolean;
+		encrypt: (name: string, value: string) => void;
+	}): Promise<string[]> => {
 		const stored: string[] = [];
 		for (const name of o.needed) {
 			const existed = io.exists(name);

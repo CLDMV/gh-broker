@@ -65,7 +65,14 @@ export function parseConfigLib(raw: unknown, host: { afterApp?: () => void; afte
 			if (o.enabled === false) throw new Error(`config.tools[${i}] ("${OTP_STATUS}"): can't be disabled (enabled: false)`);
 			if (!custom) throw new Error(`config.tools[${i}] ("${OTP_STATUS}"): must be custom: true`);
 		}
-		return { name: o.name, mode: o.mode as Mode, custom, augment, ...(typeof o.otp === "boolean" ? { otp: o.otp } : {}), ...(typeof o.enabled === "boolean" ? { enabled: o.enabled } : {}) };
+		return {
+			name: o.name,
+			mode: o.mode as Mode,
+			custom,
+			augment,
+			...(typeof o.otp === "boolean" ? { otp: o.otp } : {}),
+			...(typeof o.enabled === "boolean" ? { enabled: o.enabled } : {})
+		};
 	});
 
 	if (typeof c.owners !== "object" || c.owners === null) throw new Error("config.owners: must be an object");
@@ -112,15 +119,20 @@ export function parseConfigLib(raw: unknown, host: { afterApp?: () => void; afte
 		if (typeof c.npm !== "object" || c.npm === null || Array.isArray(c.npm)) throw new Error("config.npm: must be an object");
 		const n = c.npm as Record<string, unknown>;
 		if (typeof n.token !== "string" || !n.token.startsWith("cred:")) throw new Error('config.npm.token: must be a "cred:<name>" ref');
-		if (!Array.isArray(n.scopes) || n.scopes.length === 0) throw new Error('config.npm.scopes: must be a non-empty array of scopes, e.g. ["@cldmv"]');
+		if (!Array.isArray(n.scopes) || n.scopes.length === 0)
+			throw new Error('config.npm.scopes: must be a non-empty array of scopes, e.g. ["@cldmv"]');
 		const scopes = n.scopes.map((s, i) => {
-			if (typeof s !== "string" || !/^@[a-z0-9][a-z0-9._~-]*$/.test(s)) throw new Error(`config.npm.scopes[${i}]: must be a lowercase npm scope like "@cldmv"`);
+			if (typeof s !== "string" || !/^@[a-z0-9][a-z0-9._~-]*$/.test(s))
+				throw new Error(`config.npm.scopes[${i}]: must be a lowercase npm scope like "@cldmv"`);
 			return s;
 		});
 		if (n.registry !== undefined && (typeof n.registry !== "string" || !/^https:\/\//.test(n.registry))) {
 			throw new Error("config.npm.registry: must be an https URL");
 		}
-		if (n.tokenOrgs !== undefined && (!Array.isArray(n.tokenOrgs) || !n.tokenOrgs.every((o) => typeof o === "string" && /^[a-z0-9][a-z0-9._~-]*$/.test(o)))) {
+		if (
+			n.tokenOrgs !== undefined &&
+			(!Array.isArray(n.tokenOrgs) || !n.tokenOrgs.every((o) => typeof o === "string" && /^[a-z0-9][a-z0-9._~-]*$/.test(o)))
+		) {
 			throw new Error('config.npm.tokenOrgs: must be an array of lowercase npm org names, e.g. ["cldmv"]');
 		}
 		npm = {

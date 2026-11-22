@@ -24,6 +24,6 @@ import type { AuditEntry } from "./types.ts";
 export type { AuditEntry };
 
 export function audit(entry: AuditEntry): void {
-	// eslint-disable-next-line no-console -- journald is the sink
+	// journald is the sink: stdout lines become journal entries.
 	console.log(JSON.stringify({ ts: new Date().toISOString(), ...entry }));
 }

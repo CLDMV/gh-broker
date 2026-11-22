@@ -94,7 +94,15 @@ export class Router {
 	 * the contract. A Router without a gate cannot route (the gate is consulted on every
 	 * call); one without ghcr verbs fails closed on the ghcr tools.
 	 */
-	constructor(config: Config, secrets: SecretStore, upstream: Upstream, appAuth: AppAuth | undefined, otp: OtpGate, ghcr?: GhcrVerbs, resolveToken?: TokenResolver) {
+	constructor(
+		config: Config,
+		secrets: SecretStore,
+		upstream: Upstream,
+		appAuth: AppAuth | undefined,
+		otp: OtpGate,
+		ghcr?: GhcrVerbs,
+		resolveToken?: TokenResolver
+	) {
 		this.config = config;
 		this.secrets = secrets;
 		this.upstream = upstream;
@@ -180,7 +188,14 @@ export class Router {
 				else createdIn = creationOwner(tool, args, this.config.owners);
 			} catch (err) {
 				const requested = typeof args.organization === "string" ? args.organization : extractOwner(args);
-				audit({ tool, user, mode: rule.mode, ...(requested ? { owner: requested.toLowerCase() } : {}), decision: "error", detail: (err as Error).message });
+				audit({
+					tool,
+					user,
+					mode: rule.mode,
+					...(requested ? { owner: requested.toLowerCase() } : {}),
+					decision: "error",
+					detail: (err as Error).message
+				});
 				throw err;
 			}
 		}
@@ -236,7 +251,13 @@ export class Router {
 	}
 
 	/** GHCR verbs: config.ghcr checks the owner and image itself; no GitHub PAT is resolved. */
-	private async callGhcr(tool: string, args: Record<string, unknown>, rule: ToolRule, user: string, otp: OtpAudit | undefined): Promise<CallToolResult> {
+	private async callGhcr(
+		tool: string,
+		args: Record<string, unknown>,
+		rule: ToolRule,
+		user: string,
+		otp: OtpAudit | undefined
+	): Promise<CallToolResult> {
 		const owner = extractOwner(args) ?? "";
 		const repo = typeof args.image === "string" ? `${owner}/${args.image}` : owner;
 		try {

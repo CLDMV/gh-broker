@@ -81,7 +81,13 @@ describe("the router resolves tokens only through the TokenResolver (design #175
 		expect(upstream.forward).not.toHaveBeenCalled();
 		const row = logLines.find((l) => l.includes('"tool":"get_me"'));
 		expect(row).toBeDefined();
-		expect(JSON.parse(row!)).toMatchObject({ tool: "get_me", user: "tester", owner: "ghost", decision: "error", detail: "no creds for owner" });
+		expect(JSON.parse(row!)).toMatchObject({
+			tool: "get_me",
+			user: "tester",
+			owner: "ghost",
+			decision: "error",
+			detail: "no creds for owner"
+		});
 	});
 
 	it("the resolver is asked for exactly the effective rule's mode, one TokenRequest per call", async () => {
@@ -97,7 +103,13 @@ describe("the router resolves tokens only through the TokenResolver (design #175
 			return `token:${req.owner}:${req.mode}`;
 		});
 		const r = new Router(
-			makeConfig({ tools: [{ name: "get_me", mode: "read" }, { name: "create_pull_request", mode: "write" }, { name: "merge_pull_request", mode: "read", otp: false }] }),
+			makeConfig({
+				tools: [
+					{ name: "get_me", mode: "read" },
+					{ name: "create_pull_request", mode: "write" },
+					{ name: "merge_pull_request", mode: "read", otp: false }
+				]
+			}),
 			secrets as any,
 			upstream as any,
 			undefined,
@@ -128,7 +140,9 @@ describe("the router resolves tokens only through the TokenResolver (design #175
 			// The GitHub read resolves; the npm token request returns null.
 			vi.fn(async (req: any) => (req.kind === "npm" ? null : "token:github"))
 		);
-		await expect(r.call("npm_scaffold", { owner: "Alpha", name: "@cldmv/pkg" }, { user: "tester" })).rejects.toThrow(/no npm token configured/);
+		await expect(r.call("npm_scaffold", { owner: "Alpha", name: "@cldmv/pkg" }, { user: "tester" })).rejects.toThrow(
+			/no npm token configured/
+		);
 		expect(upstream.forward).not.toHaveBeenCalled();
 	});
 
@@ -142,17 +156,27 @@ describe("the router resolves tokens only through the TokenResolver (design #175
 			undefined,
 			vi.fn(async () => null)
 		);
-		await expect(r.call("npm_scaffold", { owner: "Alpha", name: "@cldmv/pkg" }, { user: "tester" })).rejects.toThrow(/no credentials configured for owner "alpha"/);
+		await expect(r.call("npm_scaffold", { owner: "Alpha", name: "@cldmv/pkg" }, { user: "tester" })).rejects.toThrow(
+			/no credentials configured for owner "alpha"/
+		);
 		expect(upstream.forward).not.toHaveBeenCalled();
 	});
 
-	it("owner \"constructor\" resolves nothing and fails closed like any unconfigured owner", async () => {
+	it('owner "constructor" resolves nothing and fails closed like any unconfigured owner', async () => {
 		const r = new Router(makeConfig(), secrets as any, upstream as any);
-		await expect(r.call("get_me", { owner: "constructor" }, { user: "tester" })).rejects.toThrow(/no credentials configured for owner "constructor"/);
+		await expect(r.call("get_me", { owner: "constructor" }, { user: "tester" })).rejects.toThrow(
+			/no credentials configured for owner "constructor"/
+		);
 		expect(secrets.resolve).not.toHaveBeenCalled();
 		expect(upstream.forward).not.toHaveBeenCalled();
 		const row = logLines.find((l) => l.includes('"tool":"get_me"'));
-		expect(JSON.parse(row!)).toMatchObject({ tool: "get_me", user: "tester", owner: "constructor", decision: "error", detail: "no creds for owner" });
+		expect(JSON.parse(row!)).toMatchObject({
+			tool: "get_me",
+			user: "tester",
+			owner: "constructor",
+			decision: "error",
+			detail: "no creds for owner"
+		});
 	});
 });
 
@@ -174,6 +198,8 @@ describe("hostTokenResolver (the daemon's TokenResolver over config.owners + the
 	it("kind ghcr has no router path yet and fails closed; kind npm resolves the npm token", async () => {
 		await expect(resolve({ person: "tester", owner: "alpha", mode: "write", kind: "ghcr" })).resolves.toBeNull();
 		await expect(resolve({ person: "tester", owner: "alpha", mode: "write", kind: "npm" })).resolves.toBe("token:cred:npm-token");
-		await expect(hostTokenResolver({ ...config, npm: undefined }, secrets)({ person: "tester", mode: "write", kind: "npm" })).resolves.toBeNull();
+		await expect(
+			hostTokenResolver({ ...config, npm: undefined }, secrets)({ person: "tester", mode: "write", kind: "npm" })
+		).resolves.toBeNull();
 	});
 });

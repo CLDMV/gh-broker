@@ -152,7 +152,11 @@ describe("account creation", () => {
 	it("ensureAgentGroup creates the agent's group with exactly the service user and the agent", () => {
 		route({ getent: fail(2) });
 		sys.ensureAgentGroup("repo");
-		expect(calls()).toEqual(["getent group gh-broker-agent-repo", "groupadd --system gh-broker-agent-repo", "gpasswd --members gh-broker,repo gh-broker-agent-repo"]);
+		expect(calls()).toEqual([
+			"getent group gh-broker-agent-repo",
+			"groupadd --system gh-broker-agent-repo",
+			"gpasswd --members gh-broker,repo gh-broker-agent-repo"
+		]);
 		h.spawnSync.mockReset();
 		route({ getent: ok("x:x:1:") });
 		sys.ensureAgentGroup("repo", "svc");

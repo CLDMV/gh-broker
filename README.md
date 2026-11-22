@@ -1,6 +1,6 @@
 # @cldmv/gh-broker
 
-**@cldmv/gh-broker** is a local **credential-routing MCP proxy** for GitHub. It lets an autonomous agent read and write issues, pull requests and more across several orgs **without ever holding a token**: the agent gets to *act*, never to *possess* the credential.
+**@cldmv/gh-broker** is a local **credential-routing MCP proxy** for GitHub. It lets an autonomous agent read and write issues, pull requests and more across several orgs **without ever holding a token**: the agent gets to _act_, never to _possess_ the credential.
 
 The hosted GitHub MCP authenticates with one token per server, so several orgs means several servers, and the token sits in a config file the agent can read. A classic PAT spans orgs but is coarse; a GitHub App acts as a bot and can't drive the MCP; `gh` and raw PATs are readable by the agent (`gh auth token`). gh-broker covers what none of them do together: the user's own identity, least privilege, several orgs, one server, and a secret the agent cannot exfiltrate.
 
@@ -19,17 +19,17 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.14.2 (November 2026)
+### Latest: v0.15.0 (November 2026)
 
-- **`agent reconnect` reads 24-bit colour sessions, and skipped panes don't fail `upgrade`.** A session drawn in 24-bit colour no longer reads as someone typing. `agent reconnect` exits 3 when it only skipped panes, and `upgrade` reports that as done with a note to rerun reconnect later, instead of a failed step.
-- [View full v0.14.2 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.2.md)
+- **`agent reconnect --wait`.** Sessions skipped because someone was typing or a dialog was open get re-checked every 5 seconds and reconnected as soon as they're clear, for up to the time given (`--wait 5m`). `upgrade --wait 5m` passes it to its reconnect step, so an upgrade no longer needs a rerun for those sessions.
+- [View full v0.15.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.15.0.md)
 
 ### Recent Releases
 
+- **v0.14.2** (November 2026) — `agent reconnect` reads 24-bit colour sessions, and skipped panes no longer fail `upgrade` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.2.md))
 - **v0.14.1** (November 2026) — `agent reconnect` sends to idle and working sessions; a dimmed prompt suggestion no longer reads as typing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.1.md))
 - **v0.14.0** (November 2026) — `report_custom_properties` reads repository custom property values, per repo or across an org ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.0.md))
 - **v0.13.1** (November 2026) — `report_release_changes` lists a commit's issue number as `not-a-pr` instead of failing on it ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.1.md))
-- **v0.13.0** (November 2026) — `sudo gh-broker upgrade` does the npm install, reinstall and agent reconnect in one go; `gh-broker agent reconnect` on its own; `npm_scaffold` reports an expired trusted publisher ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.0.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
@@ -181,7 +181,7 @@ One sudo does the whole thing:
 sudo gh-broker upgrade
 ```
 
-It runs, in order and stopping at the first failure (which it reports, with the commands to finish by hand): the npm install (`npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker@latest`, or `@<version>` with `--version <v>` — a semantic version; the install flags are validated before anything runs), the **newly installed binary's** `gh-broker install` as a child process with the same flags (`--claude-config <user>:<dir>`, `--no-mcp-config`, …), and the **new binary's** `agent reconnect` — every running Claude Code session's connection was dropped by the restart, so `/mcp reconnect <key>` is typed into each of its tmux panes (skipping panes where someone is typing, Claude isn't the foreground job, or the key isn't safe to type blind, listed so they can be retried; every tmux command runs as the agent user, not as root; `--dry-run` on `agent reconnect` previews it). `--no-reconnect` skips that last step, and `--force` reinstalls even when the target version is already installed **and deployed**. First install and checkout installs are unchanged: run `gh-broker install` (or `deploy/install.sh`) as above.
+It runs, in order and stopping at the first failure (which it reports, with the commands to finish by hand): the npm install (`npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker@latest`, or `@<version>` with `--version <v>` — a semantic version; the install flags are validated before anything runs), the **newly installed binary's** `gh-broker install` as a child process with the same flags (`--claude-config <user>:<dir>`, `--no-mcp-config`, …), and the **new binary's** `agent reconnect` — every running Claude Code session's connection was dropped by the restart, so `/mcp reconnect <key>` is typed into each of its tmux panes (skipping panes where someone is typing, Claude isn't the foreground job, or the key isn't safe to type blind, listed so they can be retried; every tmux command runs as the agent user, not as root; `--dry-run` on `agent reconnect` previews it). `--wait 5m` keeps retrying the sessions it had to skip until each is clear (or the time runs out), `--no-reconnect` skips that last step, and `--force` reinstalls even when the target version is already installed **and deployed**. First install and checkout installs are unchanged: run `gh-broker install` (or `deploy/install.sh`) as above.
 
 ---
 
@@ -196,7 +196,19 @@ The installer writes each agent's MCP config for its own socket ([deploy/README.
 
 ```json
 // result
-{ "pull": 35, "summary": { "passed": 6, "failed": 1, "pending": 0 }, "failures": [{ "workflow": "🧪 CI Tests & Build", "job": "Build & Test (22.12)", "runId": 34787050719, "runUrl": "https://github.com/CLDMV/droidsock/actions/runs/34787050719", "conclusion": "failure" }] }
+{
+	"pull": 35,
+	"summary": { "passed": 6, "failed": 1, "pending": 0 },
+	"failures": [
+		{
+			"workflow": "🧪 CI Tests & Build",
+			"job": "Build & Test (22.12)",
+			"runId": 34787050719,
+			"runUrl": "https://github.com/CLDMV/droidsock/actions/runs/34787050719",
+			"conclusion": "failure"
+		}
+	]
+}
 ```
 
 No token ever appears in the request, the response, or anywhere the agent can read. See [docs/TOOLS.md](docs/TOOLS.md) for every custom and augmented tool, with full parameter tables and real verified examples.
@@ -205,7 +217,7 @@ No token ever appears in the request, the response, or anywhere the agent can re
 
 ## 📁 Layout
 
-```
+```text
 src/
   index.ts          entry — resolve paths, load config + secrets, start server
   paths.ts          platform-neutral config/secrets path resolution

@@ -176,7 +176,8 @@ export function checkClaudeConfigDirs(v: unknown, where: string): ClaudeConfigDi
 	if (!isObject(v)) throw new Error(`${where} must be an object of agent user -> list of folders`);
 	for (const [user, dirs] of Object.entries(v)) {
 		assertAgentName(user);
-		if (!Array.isArray(dirs) || !dirs.every((d) => typeof d === "string" && d.startsWith("/"))) throw new Error(`${where}.${user} must be a list of absolute paths`);
+		if (!Array.isArray(dirs) || !dirs.every((d) => typeof d === "string" && d.startsWith("/")))
+			throw new Error(`${where}.${user} must be a list of absolute paths`);
 	}
 	return v as ClaudeConfigDirs;
 }
@@ -196,7 +197,9 @@ export function overlayFromFlags(opts: InstallArgs): ConfigLayer {
 	if (opts.ghcrMaxArchiveBytes !== undefined) g.maxArchiveBytes = opts.ghcrMaxArchiveBytes;
 	if (opts.protectReleaseTags !== undefined) g.protectReleaseTags = opts.protectReleaseTags;
 	if (opts.ghcrOwner !== undefined) {
-		g.owners = { [opts.ghcrOwner]: { username: opts.ghcrUsername!, credential: `cred:${opts.ghcrOwner}-packages`, images: [...opts.ghcrImages!] } };
+		g.owners = {
+			[opts.ghcrOwner]: { username: opts.ghcrUsername!, credential: `cred:${opts.ghcrOwner}-packages`, images: [...opts.ghcrImages!] }
+		};
 	}
 	if (Object.keys(g).length) o.ghcr = g;
 	for (const { user, dir } of opts.claudeConfigs ?? []) ((o.claudeConfigDirs ??= {})[user] ??= []).push(dir);
@@ -213,7 +216,7 @@ export function readOperatorConfig(path: string, read: (path: string) => string)
 	try {
 		raw = JSON.parse(read(path));
 	} catch (err) {
-		throw new Error(`--config: cannot read/parse ${path}: ${(err as Error).message}`);
+		throw new Error(`--config: cannot read/parse ${path}: ${(err as Error).message}`, { cause: err });
 	}
 	if (!isObject(raw)) throw new Error(`--config: ${path} must be a JSON object`);
 	if (raw["tools"] !== undefined) throw new Error("--config: `tools` is the shipped allowlist and cannot be set from a config file");
@@ -221,7 +224,10 @@ export function readOperatorConfig(path: string, read: (path: string) => string)
 	if (unknown.length) throw new Error(`--config: unknown key(s) ${unknown.join(", ")} (allowed: ${OPERATOR_KEYS.join(", ")})`);
 	if (raw["claudeConfigDirs"] !== undefined) checkClaudeConfigDirs(raw["claudeConfigDirs"], "--config: claudeConfigDirs");
 	const hit = findTokenShape(raw, "");
-	if (hit) throw new Error(`--config: ${hit} looks like a token. The config holds only "cred:<name>" references; pass the token with --secret, --secrets-file or env`);
+	if (hit)
+		throw new Error(
+			`--config: ${hit} looks like a token. The config holds only "cred:<name>" references; pass the token with --secret, --secrets-file or env`
+		);
 	return raw as ConfigLayer;
 }
 

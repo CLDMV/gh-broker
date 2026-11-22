@@ -87,17 +87,33 @@ export const REPORT_CUSTOM_PROPERTIES_SCHEMA = {
 		owner: { type: "string", description: "repository owner (org login) — selects the read credential" },
 		repo: { type: "string", description: "one repository; omit to list every repo in the org" },
 		property: { type: "string", description: "only repos where this property is set, reporting just this property" },
-		value: { type: "string", description: "with property: only repos where it has this value (for a multi-select property, one of its values)" },
-		repositoryQuery: { type: "string", description: "org listing only: a GitHub repository search query, passed through as repository_query (e.g. \"archived:false\")" },
-		maxRepos: { type: "number", description: `org listing: stop after this many repos (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})` },
-		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` }
+		value: {
+			type: "string",
+			description: "with property: only repos where it has this value (for a multi-select property, one of its values)"
+		},
+		repositoryQuery: {
+			type: "string",
+			description: 'org listing only: a GitHub repository search query, passed through as repository_query (e.g. "archived:false")'
+		},
+		maxRepos: {
+			type: "number",
+			description: `org listing: stop after this many repos (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})`
+		},
+		maxApiCalls: {
+			type: "number",
+			description: `hard ceiling on total REST calls (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})`
+		}
 	}
 };
 
 const toRecord = (values: RawValue[]): Record<string, PropertyValue> => Object.fromEntries(values.map((v) => [v.property_name, v.value]));
 
 /** Applies `property` / `value`: undefined means the repo is filtered out. */
-export function filterProperties(properties: Record<string, PropertyValue>, property?: string, value?: string): Record<string, PropertyValue> | undefined {
+export function filterProperties(
+	properties: Record<string, PropertyValue>,
+	property?: string,
+	value?: string
+): Record<string, PropertyValue> | undefined {
 	if (property === undefined) return properties;
 	const v = properties[property];
 	if (v === undefined || v === null) return undefined;
@@ -107,7 +123,10 @@ export function filterProperties(properties: Record<string, PropertyValue>, prop
 
 function permissionHint(err: unknown, scope: "repository" | "organization"): never {
 	const status = (err as { status?: number }).status;
-	if (status === 403) throw new Error(`GitHub refused the custom properties read (403). The read PAT needs the ${scope} permission "Custom properties: read".`);
+	if (status === 403)
+		throw new Error(
+			`GitHub refused the custom properties read (403). The read PAT needs the ${scope} permission "Custom properties: read".`
+		);
 	throw err;
 }
 
@@ -122,8 +141,18 @@ export async function reportCustomProperties(octokit: Octokit, input: ReportCust
 		try {
 			raw = await reqOne<RawValue[]>(octokit, budget, "GET /repos/{owner}/{repo}/properties/values", { owner, repo });
 		} catch (err) {
-			if (err instanceof RateLimited) return { owner, repo, repos: [], count: 0, truncated: true, truncatedReason: "rate-limited", ...(err.retryAfterSeconds !== undefined ? { retryAfterSeconds: err.retryAfterSeconds } : {}) };
-			if (err instanceof CallBudgetExhausted) return { owner, repo, repos: [], count: 0, truncated: true, truncatedReason: "max-api-calls" };
+			if (err instanceof RateLimited)
+				return {
+					owner,
+					repo,
+					repos: [],
+					count: 0,
+					truncated: true,
+					truncatedReason: "rate-limited",
+					...(err.retryAfterSeconds !== undefined ? { retryAfterSeconds: err.retryAfterSeconds } : {})
+				};
+			if (err instanceof CallBudgetExhausted)
+				return { owner, repo, repos: [], count: 0, truncated: true, truncatedReason: "max-api-calls" };
 			permissionHint(err, "repository");
 		}
 		const props = filterProperties(toRecord(raw), property, value);
@@ -136,7 +165,13 @@ export async function reportCustomProperties(octokit: Octokit, input: ReportCust
 	let raw: RawOrgEntry[] = [];
 	try {
 		// One more than the cap, so hitting it exactly isn't reported as truncation.
-		raw = await paginate<RawOrgEntry>(octokit, budget, "GET /orgs/{org}/properties/values", { org: owner, ...(input.repositoryQuery !== undefined ? { repository_query: input.repositoryQuery } : {}) }, maxRepos + 1);
+		raw = await paginate<RawOrgEntry>(
+			octokit,
+			budget,
+			"GET /orgs/{org}/properties/values",
+			{ org: owner, ...(input.repositoryQuery !== undefined ? { repository_query: input.repositoryQuery } : {}) },
+			maxRepos + 1
+		);
 		if (raw.length > maxRepos) {
 			raw = raw.slice(0, maxRepos);
 			result.truncated = true;
@@ -151,6 +186,7 @@ export async function reportCustomProperties(octokit: Octokit, input: ReportCust
 			result.truncated = true;
 			result.truncatedReason = "max-api-calls";
 		} else if ((err as { status?: number }).status === 404) {
+			// eslint-disable-next-line preserve-caught-error -- an Octokit error carries the whole request; the 404 is fully described here
 			throw new Error(`${owner} has no org custom properties to list (custom properties are org-only); pass repo to read one repository`);
 		} else {
 			permissionHint(err, "organization");

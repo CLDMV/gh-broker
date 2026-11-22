@@ -1,0 +1,16 @@
+# Dependencies + generated/build output (not hand-authored)
+node_modules/
+dist/
+build/
+coverage/
+tmp/
+trash/
+reference/
+package-lock.json
+# minified / compact generated files of any extension (*.min.js/.css/.json/.map…)
+*.min.*
+
+# YAML — CI workflows are deliberately 4-space indented; prettier (tabWidth 2,
+# and YAML disallows tabs) would reindent every file 4->2 for no real gain.
+*.yml
+*.yaml

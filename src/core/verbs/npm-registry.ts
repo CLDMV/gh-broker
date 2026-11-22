@@ -22,7 +22,10 @@
 
 export const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
-export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{
+export type FetchLike = (
+	url: string,
+	init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }
+) => Promise<{
 	status: number;
 	headers: { get(name: string): string | null };
 	text(): Promise<string>;
@@ -96,7 +99,12 @@ export class NpmRegistry {
 		return this.base;
 	}
 
-	private async send(what: string, method: string, path: string, opts: { otp?: string; body?: unknown } = {}): Promise<{ status: number; body: string }> {
+	private async send(
+		what: string,
+		method: string,
+		path: string,
+		opts: { otp?: string; body?: unknown } = {}
+	): Promise<{ status: number; body: string }> {
 		const headers: Record<string, string> = {
 			authorization: `Bearer ${this.token}`,
 			accept: "application/json",
@@ -146,8 +154,14 @@ export class NpmRegistry {
 	 * publisher, which may or may not be this one, so it is reported as `conflict` for the
 	 * caller to check against listGithubTrust rather than as success.
 	 */
-	async addGithubTrust(name: string, claims: { repository: string; file: string }, otp: string): Promise<{ config?: TrustConfig; conflict: boolean }> {
-		const body = [{ type: "github", claims: { repository: claims.repository, workflow_ref: { file: claims.file } }, permissions: ["createPackage"] }];
+	async addGithubTrust(
+		name: string,
+		claims: { repository: string; file: string },
+		otp: string
+	): Promise<{ config?: TrustConfig; conflict: boolean }> {
+		const body = [
+			{ type: "github", claims: { repository: claims.repository, workflow_ref: { file: claims.file } }, permissions: ["createPackage"] }
+		];
 		const res = await this.send("trusted publisher setup", "POST", `/-/package/${escapePackageName(name)}/trust`, { otp, body });
 		if (res.status === 409) return { conflict: true };
 		if (res.status < 200 || res.status >= 300) throw new NpmHttpError("trusted publisher setup", res.status, errorDetail(res.body));
@@ -179,10 +193,17 @@ export class NpmRegistry {
  * The latest published version of a package, from the public registry (`GET /<name>/latest`,
  * no credentials sent). Undefined when the package does not exist.
  */
-export async function latestVersion(name: string, opts: { registry?: string; fetch?: FetchLike; signal?: AbortSignal } = {}): Promise<string | undefined> {
+export async function latestVersion(
+	name: string,
+	opts: { registry?: string; fetch?: FetchLike; signal?: AbortSignal } = {}
+): Promise<string | undefined> {
 	const base = (opts.registry ?? DEFAULT_REGISTRY).replace(/\/+$/, "");
 	const fetchImpl = opts.fetch ?? (globalThis.fetch as unknown as FetchLike);
-	const res = await fetchImpl(`${base}/${escapePackageName(name)}/latest`, { method: "GET", headers: { accept: "application/json", "user-agent": "gh-broker (report_dependents)" }, ...(opts.signal ? { signal: opts.signal } : {}) });
+	const res = await fetchImpl(`${base}/${escapePackageName(name)}/latest`, {
+		method: "GET",
+		headers: { accept: "application/json", "user-agent": "gh-broker (report_dependents)" },
+		...(opts.signal ? { signal: opts.signal } : {})
+	});
 	const body = await res.text();
 	if (res.status === 404) return undefined;
 	if (res.status !== 200) throw new NpmHttpError("latest lookup", res.status, errorDetail(body));

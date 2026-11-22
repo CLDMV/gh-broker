@@ -1,5 +1,17 @@
-import { describe, it, expect, vi } from "vitest";
-import { editDistance, finishLines, nearOwnFlag, parseUpgradeArgs, semverHead, semverLess, shellQuote, upgradeCommand, upgradeSteps, UPGRADE_HELP, type UpgradeStep } from "../src/cli/upgrade.ts";
+import { describe, it, expect } from "vitest";
+import {
+	editDistance,
+	finishLines,
+	nearOwnFlag,
+	parseUpgradeArgs,
+	semverHead,
+	semverLess,
+	shellQuote,
+	upgradeCommand,
+	upgradeSteps,
+	UPGRADE_HELP,
+	type UpgradeStep
+} from "../src/cli/upgrade.ts";
 import { makeDeps, config } from "./helpers/cli-deps.mjs";
 
 describe("parseUpgradeArgs", () => {
@@ -126,7 +138,9 @@ describe("upgradeCommand", () => {
 		expect(positional.d.runNewBinary).not.toHaveBeenCalled();
 		// a typo of upgrade's own flags after a pass-through flag is named, before npm runs
 		const typo = makeDeps();
-		expect(() => upgradeCommand(["--new=1", "--no-reconect"], config, typo.d)).toThrow(/unknown flag: --no-reconect — did you mean --no-reconnect\?/);
+		expect(() => upgradeCommand(["--new=1", "--no-reconect"], config, typo.d)).toThrow(
+			/unknown flag: --no-reconect — did you mean --no-reconnect\?/
+		);
 		expect(typo.d.npmInstall).not.toHaveBeenCalled();
 		expect(typo.d.runNewBinary).not.toHaveBeenCalled();
 		// a value-taking flag left without its value after a pass-through flag is refused too
@@ -135,7 +149,9 @@ describe("upgradeCommand", () => {
 		expect(missing.d.npmInstall).not.toHaveBeenCalled();
 		// a near-miss of upgrade's own flags in --flag=value form is refused as well
 		const typoValue = makeDeps();
-		expect(() => upgradeCommand(["--no-reconect=1"], config, typoValue.d)).toThrow(/unknown flag: --no-reconect=1 — did you mean --no-reconnect\?/);
+		expect(() => upgradeCommand(["--no-reconect=1"], config, typoValue.d)).toThrow(
+			/unknown flag: --no-reconect=1 — did you mean --no-reconnect\?/
+		);
 		expect(typoValue.d.npmInstall).not.toHaveBeenCalled();
 	});
 
@@ -159,13 +175,40 @@ describe("upgradeCommand", () => {
 		expect(nearOwnFlag("--forse")).toBe("--force");
 		expect(nearOwnFlag("--verison")).toBe("--version");
 		expect(nearOwnFlag("--future-thing")).toBeUndefined();
+		expect(nearOwnFlag("--wiat")).toBe("--wait");
+	});
+
+	it("--wait goes to the reconnect step and its finish line; a bad time or --no-reconnect alongside is refused", () => {
+		const order: string[] = [];
+		const { d } = makeDeps({
+			runNewBinary: (args: string[]) => {
+				order.push(args.join(" "));
+			}
+		});
+		expect(upgradeCommand(["--wait", "5m"], config, d)).toBe(0);
+		expect(order).toEqual(["install", "agent reconnect --wait 5m"]);
+		expect(parseUpgradeArgs(["--wait=90s", "--claude-config", "repo:/srv/x"])).toMatchObject({
+			wait: "90s",
+			installFlags: ["--claude-config", "repo:/srv/x"]
+		});
+		expect(upgradeSteps("latest", [], true, "5m").at(-1)).toEqual({
+			name: "agent reconnect",
+			command: "sudo gh-broker agent reconnect --wait 5m"
+		});
+		expect(() => parseUpgradeArgs(["--wait"])).toThrow("--wait takes a time up to 30m");
+		expect(() => parseUpgradeArgs(["--wait", "2h"])).toThrow("--wait takes a time up to 30m");
+		expect(() => parseUpgradeArgs(["--wait", "5m", "--no-reconnect"])).toThrow("--no-reconnect skips it");
 	});
 
 	it("runs the three steps in order: npm install, the new binary's install with the flags, its reconnect", () => {
 		const order: string[] = [];
 		const { d, out } = makeDeps({
-			npmInstall: (spec: string) => { order.push(`npm ${spec}`); },
-			runNewBinary: (args: string[]) => { order.push(`new ${args.join(" ")}`); }
+			npmInstall: (spec: string) => {
+				order.push(`npm ${spec}`);
+			},
+			runNewBinary: (args: string[]) => {
+				order.push(`new ${args.join(" ")}`);
+			}
 		});
 		expect(upgradeCommand(["--claude-config", "repo:/srv/x"], config, d)).toBe(0);
 		// the reconnect runs the NEW binary; the in-process reconnect deps are never touched
@@ -218,7 +261,11 @@ describe("upgradeCommand", () => {
 	});
 
 	it("stops at a failed npm install and prints what to run to finish", () => {
-		const { d, err } = makeDeps({ npmInstall: () => { throw new Error("npm ERR! network"); } });
+		const { d, err } = makeDeps({
+			npmInstall: () => {
+				throw new Error("npm ERR! network");
+			}
+		});
 		expect(upgradeCommand([], config, d)).toBe(1);
 		expect(err).toEqual([
 			"step 1/3 (npm install) failed: npm ERR! network",
@@ -230,7 +277,11 @@ describe("upgradeCommand", () => {
 	});
 
 	it("stops at a failed new-binary install; the reconnect step is not run", () => {
-		const { d, err } = makeDeps({ runNewBinary: (args: string[]) => { if (args[0] === "install") throw new Error("/usr/local/bin/gh-broker install exited 1"); } });
+		const { d, err } = makeDeps({
+			runNewBinary: (args: string[]) => {
+				if (args[0] === "install") throw new Error("/usr/local/bin/gh-broker install exited 1");
+			}
+		});
 		expect(upgradeCommand([], config, d)).toBe(1);
 		expect(d.npmInstall).toHaveBeenCalled();
 		expect(err[0]).toBe("step 2/3 (install) failed: /usr/local/bin/gh-broker install exited 1");
@@ -239,7 +290,11 @@ describe("upgradeCommand", () => {
 	});
 
 	it("stops at a failed reconnect run by the new binary, with just that step to rerun", () => {
-		const { d, err } = makeDeps({ runNewBinary: (args: string[]) => { if (args[0] === "agent") throw new Error("/usr/local/bin/gh-broker agent reconnect exited 1"); } });
+		const { d, err } = makeDeps({
+			runNewBinary: (args: string[]) => {
+				if (args[0] === "agent") throw new Error("/usr/local/bin/gh-broker agent reconnect exited 1");
+			}
+		});
 		expect(upgradeCommand([], config, d)).toBe(1);
 		expect(err[0]).toBe("step 3/3 (agent reconnect) failed: /usr/local/bin/gh-broker agent reconnect exited 1");
 		expect(err[2]).toBe("  sudo gh-broker agent reconnect");
@@ -247,7 +302,11 @@ describe("upgradeCommand", () => {
 
 	it("a reconnect that only skipped panes (exit 3) doesn't fail the upgrade; it says to rerun it", () => {
 		const skipped = Object.assign(new Error("/usr/local/bin/gh-broker agent reconnect exited 3"), { status: 3 });
-		const { d, out, err } = makeDeps({ runNewBinary: (args: string[]) => { if (args[0] === "agent") throw skipped; } });
+		const { d, out, err } = makeDeps({
+			runNewBinary: (args: string[]) => {
+				if (args[0] === "agent") throw skipped;
+			}
+		});
 		expect(upgradeCommand([], config, d)).toBe(0);
 		expect(err).toEqual([]);
 		expect(out).toContain("some sessions were skipped (listed above); once they're clear, run: sudo gh-broker agent reconnect");

@@ -103,7 +103,12 @@ export interface InvokeCtx {
 	 */
 	/** The call's signal rides along (design #175 §2b) so an approve implementation can
 	 * abandon a long elicitation when the call is aborted or times out. */
-	approve: (tool: string, person: string, args: unknown, signal?: AbortSignal) => Promise<"ok" | { code: string; message: string; badCode?: boolean }>;
+	approve: (
+		tool: string,
+		person: string,
+		args: unknown,
+		signal?: AbortSignal
+	) => Promise<"ok" | { code: string; message: string; badCode?: boolean }>;
 }
 
 /**
@@ -132,9 +137,7 @@ export interface InvokeFn {
  * execution op for a local verb. `run` validates the shape and delegates to invoke;
  * everything else (policy, approve, tokens, dispatch) is the same code path.
  */
-export type DriverRequest =
-	| { op: "mcp"; target: string }
-	| { op: "graphql" | "rest"; tool: string };
+export type DriverRequest = { op: "mcp"; target: string } | { op: "graphql" | "rest"; tool: string };
 
 /** run returns exactly what invoke returns — the adapter adds no shape of its own. */
 export type DriverResult = JsonSafeResult;
@@ -148,14 +151,19 @@ export interface RunFn {
 function toolOfRequest(request: DriverRequest): string {
 	if (typeof request !== "object" || request === null) throw new InvokeError("bad-request", "the driver request must be an object");
 	if (request.op === "mcp") {
-		if (typeof request.target !== "string" || !request.target) throw new InvokeError("bad-request", 'a driver request with op "mcp" names its upstream tool in "target"');
+		if (typeof request.target !== "string" || !request.target)
+			throw new InvokeError("bad-request", 'a driver request with op "mcp" names its upstream tool in "target"');
 		return request.target;
 	}
 	if (request.op === "graphql" || request.op === "rest") {
-		if (typeof request.tool !== "string" || !request.tool) throw new InvokeError("bad-request", `a driver request with op "${request.op}" names its verb in "tool"`);
+		if (typeof request.tool !== "string" || !request.tool)
+			throw new InvokeError("bad-request", `a driver request with op "${request.op}" names its verb in "tool"`);
 		return request.tool;
 	}
-	throw new InvokeError("bad-request", `unsupported driver op "${String((request as { op?: unknown }).op)}" — expected "mcp", "graphql" or "rest"`);
+	throw new InvokeError(
+		"bad-request",
+		`unsupported driver op "${String((request as { op?: unknown }).op)}" — expected "mcp", "graphql" or "rest"`
+	);
 }
 
 /**
@@ -196,9 +204,10 @@ export function perCallUpstream(url: string, clientInfo = { name: "cldmv-gh-brok
 				// timeoutMs in the request options so the SDK's own 60 s default can't cap a
 				// longer caller timeout; the signal (which carries AbortSignal.timeout when
 				// timeoutMs was set) still aborts whichever fires first.
-				const requestOptions = signal || timeoutMs !== undefined
-					? { ...(signal ? { signal } : {}), ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}) }
-					: undefined;
+				const requestOptions =
+					signal || timeoutMs !== undefined
+						? { ...(signal ? { signal } : {}), ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}) }
+						: undefined;
 				// Without a signal or a timeout this is today's exact two-argument call.
 				return (await (requestOptions !== undefined
 					? client.callTool({ name: tool, arguments: args }, undefined, requestOptions)
@@ -267,13 +276,16 @@ export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { inv
 		// The policy gate: an unknown tool is refused, a disabled one too.
 		const rule = rules.get(name);
 		if (!rule) throw new InvokeError("unknown-tool", `tool "${name}" is not allowed`);
-		if (!isEnabled(rule)) throw new InvokeError("disabled", `tool "${name}" is disabled; a host serves it by enabling it on the tool's rule`);
+		if (!isEnabled(rule))
+			throw new InvokeError("disabled", `tool "${name}" is disabled; a host serves it by enabling it on the tool's rule`);
 		const unavailable = availabilityProblem(config, opts.capability, name, rule);
 		if (unavailable) throw new InvokeError("unavailable", `tool "${name}" is not available on this broker: ${unavailable}`);
 		// otp_status is the daemon gate's status read; ghcr verbs run on the daemon's
 		// GhcrService. Neither is dispatchable from the library — fail closed, named.
-		if (name === OTP_STATUS) throw new InvokeError("not-supported", `tool "${name}" is the daemon's OTP gate status; a library host serves its own`);
-		if (GHCR_TOOLS.has(name)) throw new InvokeError("not-supported", `tool "${name}" runs on the daemon host's GHCR service; a library host cannot dispatch it`);
+		if (name === OTP_STATUS)
+			throw new InvokeError("not-supported", `tool "${name}" is the daemon's OTP gate status; a library host serves its own`);
+		if (GHCR_TOOLS.has(name))
+			throw new InvokeError("not-supported", `tool "${name}" runs on the daemon host's GHCR service; a library host cannot dispatch it`);
 		let callArgs = (args ?? {}) as Record<string, unknown>;
 		// Input validation before the approval, so a call that can't run never spends a
 		// code (the daemon's order — the creationOwner check is input validation, not a
@@ -301,20 +313,32 @@ export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { inv
 		// a forwarded call fails closed without one. Checked before the approval for the
 		// same reason: nothing spends a code for a call that can't run.
 		const upstream = ctx.upstream ?? libraryUpstream;
-		if (!upstream && !rule.custom) throw new InvokeError("no-upstream", `tool "${name}" forwards to the hosted MCP, but this host provides no upstream client (ctx.upstream)`);
+		if (!upstream && !rule.custom)
+			throw new InvokeError(
+				"no-upstream",
+				`tool "${name}" forwards to the hosted MCP, but this host provides no upstream client (ctx.upstream)`
+			);
 		// The OTP approval seam (round-3 M5): every manifest-gated tool goes through it,
 		// with the raw args (the code rides in them until this point) and the call's signal.
 		if (isGated(rule)) {
 			if (typeof ctx.approve !== "function") {
 				// JS callers can omit the required seam; fail closed — no OTP, no gated call.
-				throw new InvokeError("otp-required", `tool "${name}" needs a one-time password, but this host provides no OTP approval (ctx.approve) — nothing was run`);
+				throw new InvokeError(
+					"otp-required",
+					`tool "${name}" needs a one-time password, but this host provides no OTP approval (ctx.approve) — nothing was run`
+				);
 			}
 			const verdict = await ctx.approve(name, ctx.person, callArgs, signal);
 			if (verdict !== "ok") {
 				// The verdict must be a { code, message } refusal — anything else is the
 				// approve implementation's bug, refused as otp-refused rather than passed
 				// to the agent verbatim.
-				if (typeof verdict !== "object" || verdict === null || typeof (verdict as { code?: unknown }).code !== "string" || typeof (verdict as { message?: unknown }).message !== "string") {
+				if (
+					typeof verdict !== "object" ||
+					verdict === null ||
+					typeof (verdict as { code?: unknown }).code !== "string" ||
+					typeof (verdict as { message?: unknown }).message !== "string"
+				) {
 					throw new InvokeError("otp-refused", `the OTP approval returned a malformed verdict for tool "${name}" — nothing was run`);
 				}
 				// The security sink (if wired) sees a counted bad code ONLY when the refusal
@@ -334,12 +358,17 @@ export function createBroker(config: ConfigLib, opts: BrokerOptions = {}): { inv
 			callArgs = rest;
 		}
 		const token = await ctx.resolveToken({ person: ctx.person, owner, mode: rule.mode, kind: "github", signal });
-		if (token === null) throw new InvokeError("no-access", `no credentials configured for owner "${owner}" — add it to config.owners + creds`);
+		if (token === null)
+			throw new InvokeError("no-access", `no credentials configured for owner "${owner}" — add it to config.owners + creds`);
 		const deps: RouteDeps = {
 			resolveToken: ctx.resolveToken,
 			// A custom verb without an upstream still dispatches — its one upstream sub-call
 			// (report_ci_status's log fetch) is best-effort and tolerates the failure.
-			upstream: upstream ?? { forward: async () => { throw new InvokeError("no-upstream", "this host provides no upstream client (ctx.upstream)"); } },
+			upstream: upstream ?? {
+				forward: async () => {
+					throw new InvokeError("no-upstream", "this host provides no upstream client (ctx.upstream)");
+				}
+			},
 			signal,
 			...(ctx.timeoutMs !== undefined ? { timeoutMs: ctx.timeoutMs } : {}),
 			...(config.npm ? { npm: config.npm } : {})

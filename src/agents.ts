@@ -68,7 +68,12 @@ export function parseAgentGroups(groupFile: string): { agents: Agent[]; skipped:
 			skipped.push(`${group}: bad gid`);
 			continue;
 		}
-		const members = new Set((memberText ?? "").split(",").map((m) => m.trim()).filter(Boolean));
+		const members = new Set(
+			(memberText ?? "")
+				.split(",")
+				.map((m) => m.trim())
+				.filter(Boolean)
+		);
 		if (members.size !== 2 || !members.has(SERVICE_USER) || !members.has(user)) {
 			skipped.push(`${group}: members must be exactly ${SERVICE_USER} and ${user}`);
 			continue;

@@ -70,10 +70,13 @@ function handshake(sock: Socket, deadline: number): Promise<SmokeResult> {
 		let buf = "";
 		let idc = 0;
 		const pending = new Map<number, { res: (v: unknown) => void; rej: (e: Error) => void }>();
-		const timer = setTimeout(() => {
-			cleanup();
-			reject(new Error(`smoke: no response before deadline`));
-		}, Math.max(1000, deadline - Date.now()));
+		const timer = setTimeout(
+			() => {
+				cleanup();
+				reject(new Error(`smoke: no response before deadline`));
+			},
+			Math.max(1000, deadline - Date.now())
+		);
 
 		const cleanup = (): void => {
 			clearTimeout(timer);

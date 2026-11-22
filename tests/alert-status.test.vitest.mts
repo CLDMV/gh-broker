@@ -8,11 +8,23 @@ function octokitWith(handler: Handler): any {
 	return { request: vi.fn(handler) };
 }
 
-const status = (code: number, message = "x", headers?: Record<string, string>) => Object.assign(new Error(message), { status: code, ...(headers ? { response: { headers } } : {}) });
+const status = (code: number, message = "x", headers?: Record<string, string>) =>
+	Object.assign(new Error(message), { status: code, ...(headers ? { response: { headers } } : {}) });
 
 const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
 
-function alert(n: number, over: { pkg?: string; ecosystem?: string; manifest?: string | null; range?: string; patched?: string | null; createdAt?: string; repo?: string } = {}) {
+function alert(
+	n: number,
+	over: {
+		pkg?: string;
+		ecosystem?: string;
+		manifest?: string | null;
+		range?: string;
+		patched?: string | null;
+		createdAt?: string;
+		repo?: string;
+	} = {}
+) {
 	return {
 		number: n,
 		html_url: `https://github.com/CLDMV/r/security/dependabot/${n}`,
@@ -33,7 +45,21 @@ function alert(n: number, over: { pkg?: string; ecosystem?: string; manifest?: s
 }
 
 let prSeq = 100;
-function pr(over: Partial<{ number: number; title: string; body: string | null; state: string; draft: boolean; created_at: string; closed_at: string | null; merged_at: string | null; login: string; head: string; base: string }> = {}) {
+function pr(
+	over: Partial<{
+		number: number;
+		title: string;
+		body: string | null;
+		state: string;
+		draft: boolean;
+		created_at: string;
+		closed_at: string | null;
+		merged_at: string | null;
+		login: string;
+		head: string;
+		base: string;
+	}> = {}
+) {
 	const number = over.number ?? prSeq++;
 	return {
 		number,
@@ -53,7 +79,8 @@ function pr(over: Partial<{ number: number; title: string; body: string | null; 
 
 const npmLock = (pkgs: Record<string, string[]>) => {
 	const packages: Record<string, { version: string }> = { "": { version: "1.0.0" } };
-	for (const [name, versions] of Object.entries(pkgs)) versions.forEach((v, i) => (packages[i === 0 ? `node_modules/${name}` : `node_modules/x${i}/node_modules/${name}`] = { version: v }));
+	for (const [name, versions] of Object.entries(pkgs))
+		versions.forEach((v, i) => (packages[i === 0 ? `node_modules/${name}` : `node_modules/x${i}/node_modules/${name}`] = { version: v }));
 	return JSON.stringify({ lockfileVersion: 3, packages });
 };
 
@@ -89,9 +116,28 @@ function world(w: World, override?: (route: string, params: any) => Res | undefi
 			case "GET /repos/{owner}/{repo}/contents/{path}": {
 				const f = w.files?.[params.ref]?.[params.path];
 				if (f === undefined) throw status(404, "Not Found");
-				if (typeof f === "string") return { data: { type: "file", size: f.length, sha: `blob-${params.path}`, encoding: "base64", content: Buffer.from(f).toString("base64") }, headers: {} };
+				if (typeof f === "string")
+					return {
+						data: {
+							type: "file",
+							size: f.length,
+							sha: `blob-${params.path}`,
+							encoding: "base64",
+							content: Buffer.from(f).toString("base64")
+						},
+						headers: {}
+					};
 				if (f.dir) return { data: [{ type: "file" }], headers: {} };
-				return { data: { type: f.type ?? "file", ...(f.size !== undefined ? { size: f.size } : {}), sha: `blob:${f.text ?? ""}`, encoding: f.noContent ? "none" : "base64", content: f.noContent ? "" : Buffer.from(f.text ?? "").toString("base64") }, headers: {} };
+				return {
+					data: {
+						type: f.type ?? "file",
+						...(f.size !== undefined ? { size: f.size } : {}),
+						sha: `blob:${f.text ?? ""}`,
+						encoding: f.noContent ? "none" : "base64",
+						content: f.noContent ? "" : Buffer.from(f.text ?? "").toString("base64")
+					},
+					headers: {}
+				};
 			}
 			case "GET /repos/{owner}/{repo}/git/blobs/{file_sha}":
 				return { data: { content: Buffer.from(String(params.file_sha).slice(5)).toString("base64") }, headers: {} };
@@ -113,7 +159,13 @@ describe("reportAlertStatus — buckets", () => {
 		expect(res.scanned).toEqual({ repos: 1, alerts: 1 });
 		expect(res.summary).toEqual({ "released-still-open": 1, "fixed-on-next": 0, "open-pr": 0, "closed-unmerged": 0, "no-pr": 0 });
 		const row = res.repos[0]!;
-		expect(row).toMatchObject({ repo: "cldmv/r", defaultBranch: "master", branches: { next: false, hotfixes: false }, prsScanned: 0, counts: { "released-still-open": 1 } });
+		expect(row).toMatchObject({
+			repo: "cldmv/r",
+			defaultBranch: "master",
+			branches: { next: false, hotfixes: false },
+			prsScanned: 0,
+			counts: { "released-still-open": 1 }
+		});
 		expect(row.alerts[0]).toMatchObject({
 			number: 1,
 			package: "hono",
@@ -140,7 +192,10 @@ describe("reportAlertStatus — buckets", () => {
 		const { out } = run({
 			branches: { master: "s-main", next: "s-next" },
 			alerts: [alert(1)],
-			files: { "s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) }, "s-next": { "package-lock.json": npmLock({ hono: ["4.14.0"] }) } }
+			files: {
+				"s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) },
+				"s-next": { "package-lock.json": npmLock({ hono: ["4.14.0"] }) }
+			}
 		});
 		const res = await out;
 		const a = res.repos[0]!.alerts[0]!;
@@ -180,7 +235,11 @@ describe("reportAlertStatus — buckets", () => {
 		const original = pr({ number: 7, base: "master" });
 		const twin = pr({ number: 8, base: "hotfixes", head: "hotfix-redirect/pr-7", login: "cldmv-bot[bot]" });
 		const nextPr = pr({ number: 9, base: "next", draft: true, title: "deps: update hono", body: "updates `hono`" });
-		const { out } = run({ alerts: [alert(1)], pulls: [original, twin, nextPr], files: { "s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } } });
+		const { out } = run({
+			alerts: [alert(1)],
+			pulls: [original, twin, nextPr],
+			files: { "s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } }
+		});
 		const a = (await out).repos[0]!.alerts[0]!;
 		expect(a.bucket).toBe("open-pr");
 		expect(a.openPrs).toEqual([
@@ -209,12 +268,22 @@ describe("reportAlertStatus — buckets", () => {
 			{ number: 4, url: closedNoDate.html_url, title: closedNoDate.title, closedAt: "2026-10-20T00:00:00Z" }
 		]);
 		expect(a.mergedPrs).toHaveLength(3);
-		expect(a.mergedPrs![2]).toEqual({ number: 6, url: mergedLate.html_url, title: mergedLate.title, base: "master", mergedAt: "2026-09-10T00:00:00Z" });
+		expect(a.mergedPrs![2]).toEqual({
+			number: 6,
+			url: mergedLate.html_url,
+			title: mergedLate.title,
+			base: "master",
+			mergedAt: "2026-09-10T00:00:00Z"
+		});
 		expect(a.reason).toBe("2 closed unmerged PR(s), 1 superseded by a later merge");
 	});
 
 	it("closed-unmerged without any superseding merge", async () => {
-		const { out } = run({ alerts: [alert(1)], pulls: [pr({ state: "closed", closed_at: daysAgo(3) })], files: { "s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } } });
+		const { out } = run({
+			alerts: [alert(1)],
+			pulls: [pr({ state: "closed", closed_at: daysAgo(3) })],
+			files: { "s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } }
+		});
 		expect((await out).repos[0]!.alerts[0]!.reason).toBe("1 closed unmerged PR(s)");
 	});
 
@@ -229,7 +298,10 @@ describe("reportAlertStatus — buckets", () => {
 	});
 
 	it("buckets a non-npm alert from its PRs alone, without reading a lockfile", async () => {
-		const { octokit, out } = run({ alerts: [alert(1, { ecosystem: "pip", pkg: "requests", manifest: "requirements.txt" })], pulls: [pr({ title: "Bump requests from 2.0 to 2.32", body: null })] });
+		const { octokit, out } = run({
+			alerts: [alert(1, { ecosystem: "pip", pkg: "requests", manifest: "requirements.txt" })],
+			pulls: [pr({ title: "Bump requests from 2.0 to 2.32", body: null })]
+		});
 		const a = (await out).repos[0]!.alerts[0]!;
 		expect(a.bucket).toBe("open-pr");
 		expect(a.lockfile).toBeUndefined();
@@ -260,7 +332,11 @@ describe("reportAlertStatus — buckets", () => {
 describe("reportAlertStatus — lockfile resolution", () => {
 	it("resolves a monorepo manifest to the nearest lockfile, walking up to the workspace root", async () => {
 		const { out } = run({
-			alerts: [alert(1, { manifest: "packages/app/package.json" }), alert(2, { manifest: "packages/lib/package-lock.json" }), alert(3, { manifest: "tools/pnpm-lock.yaml" })],
+			alerts: [
+				alert(1, { manifest: "packages/app/package.json" }),
+				alert(2, { manifest: "packages/lib/package-lock.json" }),
+				alert(3, { manifest: "tools/pnpm-lock.yaml" })
+			],
 			files: {
 				"s-main": {
 					"pnpm-lock.yaml": "packages:\n  hono@4.20.0:\n",
@@ -277,40 +353,68 @@ describe("reportAlertStatus — lockfile resolution", () => {
 	});
 
 	it("defaults to the root package-lock.json when the alert names no manifest", async () => {
-		const { out } = run({ alerts: [alert(1, { manifest: null })], files: { "s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } } });
+		const { out } = run({
+			alerts: [alert(1, { manifest: null })],
+			files: { "s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } }
+		});
 		const a = (await out).repos[0]!.alerts[0]!;
 		expect(a.manifest).toBeUndefined();
 		expect(a.lockfile!.default.state).toBe("vulnerable");
 	});
 
 	it("reads a lockfile over 1 MB through the blob API", async () => {
-		const { octokit, out } = run({ alerts: [alert(1)], files: { "s-main": { "package-lock.json": { noContent: true, text: npmLock({ hono: ["4.13.7"] }) } } } });
+		const { octokit, out } = run({
+			alerts: [alert(1)],
+			files: { "s-main": { "package-lock.json": { noContent: true, text: npmLock({ hono: ["4.13.7"] }) } } }
+		});
 		expect((await out).repos[0]!.alerts[0]!.lockfile!.default).toMatchObject({ state: "fixed" });
 		expect(octokit.request.mock.calls.some((c: any[]) => c[0] === "GET /repos/{owner}/{repo}/git/blobs/{file_sha}")).toBe(true);
 	});
 
 	it("reports the unknown states: too large, unparsed, no version info, no lockfile, missing branch", async () => {
-		const big = (await run({ alerts: [alert(1)], files: { "s-main": { "package-lock.json": { size: 99, text: "{}" } } } }, { maxLockfileBytes: 10 }).out).repos[0]!.alerts[0]!;
+		const big = (
+			await run({ alerts: [alert(1)], files: { "s-main": { "package-lock.json": { size: 99, text: "{}" } } } }, { maxLockfileBytes: 10 })
+				.out
+		).repos[0]!.alerts[0]!;
 		expect(big.lockfile!.default).toEqual({ state: "unknown", path: "package-lock.json", reason: "too-large" });
 		expect(big.bucket).toBe("no-pr");
 
-		const noSize = (await run({ alerts: [alert(1)], files: { "s-main": { "package-lock.json": { text: npmLock({ hono: ["4.1.0"] }) } } } }).out).repos[0]!.alerts[0]!;
+		const noSize = (
+			await run({ alerts: [alert(1)], files: { "s-main": { "package-lock.json": { text: npmLock({ hono: ["4.1.0"] }) } } } }).out
+		).repos[0]!.alerts[0]!;
 		expect(noSize.lockfile!.default.state).toBe("vulnerable");
 
 		const bad = (await run({ alerts: [alert(1)], files: { "s-main": { "package-lock.json": "{nope" } } }).out).repos[0]!.alerts[0]!;
 		expect(bad.lockfile!.default).toEqual({ state: "unknown", path: "package-lock.json", reason: "unparsed" });
 
-		const noInfo = (await run({ alerts: [alert(1, { range: "weird", patched: null })], files: { "s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } } }).out).repos[0]!.alerts[0]!;
-		expect(noInfo.lockfile!.default).toEqual({ state: "unknown", path: "package-lock.json", versions: ["4.1.0"], reason: "no-version-info" });
+		const noInfo = (
+			await run({
+				alerts: [alert(1, { range: "weird", patched: null })],
+				files: { "s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } }
+			}).out
+		).repos[0]!.alerts[0]!;
+		expect(noInfo.lockfile!.default).toEqual({
+			state: "unknown",
+			path: "package-lock.json",
+			versions: ["4.1.0"],
+			reason: "no-version-info"
+		});
 		expect(noInfo.patchedVersion).toBeUndefined();
 
 		const dir = (await run({ alerts: [alert(1)], files: { "s-main": { "package-lock.json": { dir: true } } } }).out).repos[0]!.alerts[0]!;
 		expect(dir.lockfile!.default).toEqual({ state: "unknown", reason: "no-lockfile" });
 
-		const link = (await run({ alerts: [alert(1)], files: { "s-main": { "package-lock.json": { type: "symlink" } } } }).out).repos[0]!.alerts[0]!;
+		const link = (await run({ alerts: [alert(1)], files: { "s-main": { "package-lock.json": { type: "symlink" } } } }).out).repos[0]!
+			.alerts[0]!;
 		expect(link.lockfile!.default).toEqual({ state: "unknown", reason: "no-lockfile" });
 
-		const noDefault = (await run({ branches: { next: "s-next" }, alerts: [alert(1)], files: { "s-next": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } } }).out).repos[0]!.alerts[0]!;
+		const noDefault = (
+			await run({
+				branches: { next: "s-next" },
+				alerts: [alert(1)],
+				files: { "s-next": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } }
+			}).out
+		).repos[0]!.alerts[0]!;
 		expect(noDefault.lockfile!.default).toEqual({ state: "unknown", reason: "no-branch" });
 		expect(noDefault.lockfile!.next!.state).toBe("vulnerable");
 	});
@@ -346,8 +450,21 @@ describe("reportAlertStatus — PR matching", () => {
 
 describe("reportAlertStatus — Dependabot paused hint", () => {
 	it("looks paused when an older fixable alert has seen no Dependabot PR since", async () => {
-		const pulls = [pr({ created_at: daysAgo(40), title: "Bump ws from 1 to 2", body: "" }), pr({ created_at: daysAgo(1), login: "Shinrai", title: "chore: x", head: "chore/x", body: "" })];
-		const res = await run({ alerts: [alert(1, { createdAt: daysAgo(20) }), alert(2, { createdAt: daysAgo(30), patched: null }), alert(3, { createdAt: daysAgo(50) })], pulls }, { alertLimit: 10 }).out;
+		const pulls = [
+			pr({ created_at: daysAgo(40), title: "Bump ws from 1 to 2", body: "" }),
+			pr({ created_at: daysAgo(1), login: "Shinrai", title: "chore: x", head: "chore/x", body: "" })
+		];
+		const res = await run(
+			{
+				alerts: [
+					alert(1, { createdAt: daysAgo(20) }),
+					alert(2, { createdAt: daysAgo(30), patched: null }),
+					alert(3, { createdAt: daysAgo(50) })
+				],
+				pulls
+			},
+			{ alertLimit: 10 }
+		).out;
 		const d = res.repos[0]!.dependabot;
 		expect(d.looksPaused).toBe(true);
 		expect(d.lastPrAt).toBe(pulls[0]!.created_at);
@@ -356,16 +473,23 @@ describe("reportAlertStatus — Dependabot paused hint", () => {
 
 	it("looks paused with no Dependabot PR at all, and not paused when PRs keep coming or alerts are fresh", async () => {
 		const none = (await run({ alerts: [alert(1, { createdAt: daysAgo(10) })] }).out).repos[0]!.dependabot;
-		expect(none).toEqual({ looksPaused: true, reason: "1 fixable alert(s) older than 7 days with no Dependabot PR opened since (none in the PRs read)" });
+		expect(none).toEqual({
+			looksPaused: true,
+			reason: "1 fixable alert(s) older than 7 days with no Dependabot PR opened since (none in the PRs read)"
+		});
 		const fresh = (await run({ alerts: [alert(1, { createdAt: daysAgo(2) })] }).out).repos[0]!.dependabot;
 		expect(fresh).toEqual({ looksPaused: false });
-		const answered = (await run({ alerts: [alert(1, { createdAt: daysAgo(10) })], pulls: [pr({ created_at: daysAgo(5) })] }).out).repos[0]!.dependabot;
+		const answered = (await run({ alerts: [alert(1, { createdAt: daysAgo(10) })], pulls: [pr({ created_at: daysAgo(5) })] }).out).repos[0]!
+			.dependabot;
 		expect(answered.looksPaused).toBe(false);
 	});
 
 	it("handles a PR with no user and flags a PR list cut at prLimit", async () => {
 		const ghost = { ...pr({ title: "chore: x", head: "chore/x", body: "" }), user: null };
-		const res = await run({ alerts: [alert(1, { ecosystem: "pip" })], pulls: [ghost, pr({ title: "chore: y", head: "chore/y", body: "", login: "Shinrai" })] }, { prLimit: 2 }).out;
+		const res = await run(
+			{ alerts: [alert(1, { ecosystem: "pip" })], pulls: [ghost, pr({ title: "chore: y", head: "chore/y", body: "", login: "Shinrai" })] },
+			{ prLimit: 2 }
+		).out;
 		expect(res.repos[0]!.prsScanned).toBe(2);
 		expect(res.repos[0]!.prListTruncated).toBe(true);
 		expect(res.repos[0]!.dependabot.lastPrAt).toBeUndefined();
@@ -396,7 +520,11 @@ describe("reportAlertStatus — scope", () => {
 		const noPkg = { ...alert(9, { repo: "CLDMV/z" }), dependency: {} };
 		const octokit = octokitWith(
 			world({}, (route) => {
-				if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [alert(1, { repo: "CLDMV/b", ecosystem: "pip" }), alert(2, { repo: "CLDMV/a", ecosystem: "pip" }), noPkg], headers: {} };
+				if (route === "GET /orgs/{owner}/dependabot/alerts")
+					return {
+						data: [alert(1, { repo: "CLDMV/b", ecosystem: "pip" }), alert(2, { repo: "CLDMV/a", ecosystem: "pip" }), noPkg],
+						headers: {}
+					};
 				return undefined;
 			})
 		);
@@ -411,7 +539,8 @@ describe("reportAlertStatus — scope", () => {
 			world({}, (route, params) => {
 				if (route === "GET /orgs/{owner}/dependabot/alerts") throw status(404, "Not Found");
 				if (route === "GET /orgs/{owner}/repos") return { data: [{ name: "a" }, { name: "b" }, { name: "c" }], headers: {} };
-				if (route === "GET /repos/{owner}/{repo}/dependabot/alerts") return { data: params.repo === "a" ? [alert(1, { ecosystem: "pip", repo: "CLDMV/a" })] : [], headers: {} };
+				if (route === "GET /repos/{owner}/{repo}/dependabot/alerts")
+					return { data: params.repo === "a" ? [alert(1, { ecosystem: "pip", repo: "CLDMV/a" })] : [], headers: {} };
 				return undefined;
 			})
 		);
@@ -428,7 +557,8 @@ describe("reportAlertStatus — scope", () => {
 	it("flags max-alerts in org mode and per repo", async () => {
 		const org = octokitWith(
 			world({}, (route) => {
-				if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [alert(1, { repo: "CLDMV/r", ecosystem: "pip" })], headers: {} };
+				if (route === "GET /orgs/{owner}/dependabot/alerts")
+					return { data: [alert(1, { repo: "CLDMV/r", ecosystem: "pip" })], headers: {} };
 				return undefined;
 			})
 		);
@@ -456,7 +586,8 @@ describe("reportAlertStatus — scope", () => {
 describe("reportAlertStatus — fan-out safety", () => {
 	const twoRepos = () =>
 		world({ branches: { master: "s-main" }, files: { "s-main": { "package-lock.json": npmLock({ hono: ["4.1.0"] }) } } }, (route) => {
-			if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [alert(1, { repo: "CLDMV/a" }), alert(2, { repo: "CLDMV/b" })], headers: {} };
+			if (route === "GET /orgs/{owner}/dependabot/alerts")
+				return { data: [alert(1, { repo: "CLDMV/a" }), alert(2, { repo: "CLDMV/b" })], headers: {} };
 			return undefined;
 		});
 
@@ -487,7 +618,8 @@ describe("reportAlertStatus — fan-out safety", () => {
 		expect(res).toMatchObject({ truncated: true, truncatedReason: "rate-limited", retryAfterSeconds: 30, pending: ["cldmv/r"], repos: [] });
 
 		const floor = world({}, (route) => {
-			if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [], headers: { "x-ratelimit-remaining": "1", "x-ratelimit-limit": "5000" } };
+			if (route === "GET /orgs/{owner}/dependabot/alerts")
+				return { data: [], headers: { "x-ratelimit-remaining": "1", "x-ratelimit-limit": "5000" } };
 			return undefined;
 		});
 		const res2 = await reportAlertStatus(octokitWith(floor), { owner: "cldmv" });
@@ -498,8 +630,21 @@ describe("reportAlertStatus — fan-out safety", () => {
 
 	it("clamps oversized caps to their hard limits", async () => {
 		const octokit = octokitWith(world({ alerts: [] }));
-		const res = await reportAlertStatus(octokit, { owner: "cldmv", repo: "r", maxApiCalls: 1e9, alertLimit: 1e9, prLimit: 1e9, maxLockfileBytes: 1e12, maxRepos: 1e9 });
-		expect(res).toEqual({ scanned: { repos: 0, alerts: 0 }, scope: "repo", summary: { "released-still-open": 0, "fixed-on-next": 0, "open-pr": 0, "closed-unmerged": 0, "no-pr": 0 }, repos: [] });
+		const res = await reportAlertStatus(octokit, {
+			owner: "cldmv",
+			repo: "r",
+			maxApiCalls: 1e9,
+			alertLimit: 1e9,
+			prLimit: 1e9,
+			maxLockfileBytes: 1e12,
+			maxRepos: 1e9
+		});
+		expect(res).toEqual({
+			scanned: { repos: 0, alerts: 0 },
+			scope: "repo",
+			summary: { "released-still-open": 0, "fixed-on-next": 0, "open-pr": 0, "closed-unmerged": 0, "no-pr": 0 },
+			repos: []
+		});
 	});
 });
 
@@ -507,6 +652,12 @@ describe("REPORT_ALERT_STATUS_SCHEMA", () => {
 	it("requires owner, rejects unknown keys and lists the buckets", () => {
 		expect(REPORT_ALERT_STATUS_SCHEMA.required).toEqual(["owner"]);
 		expect(REPORT_ALERT_STATUS_SCHEMA.additionalProperties).toBe(false);
-		expect(REPORT_ALERT_STATUS_SCHEMA.properties.buckets.items.enum).toEqual(["released-still-open", "fixed-on-next", "open-pr", "closed-unmerged", "no-pr"]);
+		expect(REPORT_ALERT_STATUS_SCHEMA.properties.buckets.items.enum).toEqual([
+			"released-still-open",
+			"fixed-on-next",
+			"open-pr",
+			"closed-unmerged",
+			"no-pr"
+		]);
 	});
 });

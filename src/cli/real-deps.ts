@@ -33,7 +33,17 @@ import { smokeTest } from "./smoke.ts";
 import type { CliDeps } from "./cli.ts";
 import type { ConfigLayer } from "./config-merge.ts";
 import type { FileOwner } from "./mcp-config.ts";
-import { run, isRoot, requireUid, requireGid, systemdCredsEncrypt, writeCredsDropin, restartService, ensureAgentGroup, removeAgentGroup } from "./system.ts";
+import {
+	run,
+	isRoot,
+	requireUid,
+	requireGid,
+	systemdCredsEncrypt,
+	writeCredsDropin,
+	restartService,
+	ensureAgentGroup,
+	removeAgentGroup
+} from "./system.ts";
 
 const SVC = "gh-broker";
 // The package root: this module is bundled into bin/gh-broker.mjs.
@@ -70,7 +80,8 @@ export function realDeps(): CliDeps {
 		host: () => hostname(),
 		readConfig: (): ConfigLayer => JSON.parse(readFileSync(configPath(), "utf8")),
 		// Atomic: agent commands now write the live config, and a torn file would stop the daemon.
-		writeConfig: (cfg) => writeFileAtomic(configPath(), JSON.stringify(cfg, null, "\t") + "\n", { uid: 0, gid: requireGid(SVC), mode: 0o640 }),
+		writeConfig: (cfg) =>
+			writeFileAtomic(configPath(), JSON.stringify(cfg, null, "\t") + "\n", { uid: 0, gid: requireGid(SVC), mode: 0o640 }),
 		groups: () => parseGroups(readText("/etc/group") ?? ""),
 		userInfo: (user) => {
 			const r = run("getent", ["passwd", user], { allowFail: true });
@@ -79,7 +90,10 @@ export function realDeps(): CliDeps {
 		ensureGroup: (user) => ensureAgentGroup(user, SVC),
 		removeGroup: removeAgentGroup,
 		mcpIO: (() => {
-			const io = { read: readOwnedFile, write: (p: string, text: string, owner: FileOwner & { mode: number }) => writeFileAtomic(p, text, owner) };
+			const io = {
+				read: readOwnedFile,
+				write: (p: string, text: string, owner: FileOwner & { mode: number }) => writeFileAtomic(p, text, owner)
+			};
 			return { ...io, scan: (home) => scanConfigFolders(home), sessions: (uid) => sessionConfigFolders(uid), pin: pinner(io) };
 		})(),
 		socketExists: existsSync,
@@ -101,7 +115,12 @@ export function realDeps(): CliDeps {
 					removeFile: (f) => rmSync(f, { force: true }),
 					encrypt: systemdCredsEncrypt,
 					rename: renameSync,
-					listCreds: (dir) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".cred")).map((f) => f.slice(0, -".cred".length)) : []),
+					listCreds: (dir) =>
+						existsSync(dir)
+							? readdirSync(dir)
+									.filter((f) => f.endsWith(".cred"))
+									.map((f) => f.slice(0, -".cred".length))
+							: [],
 					writeDropin: writeCredsDropin
 				}
 			});
@@ -112,6 +131,10 @@ export function realDeps(): CliDeps {
 		tmuxPanes: (socket, info) => tmuxPanes(socket, info),
 		tmuxPaneText: (socket, pane, info) => tmuxPaneText(socket, pane, info),
 		tmuxSend: (socket, pane, text, info) => tmuxSend(socket, pane, text, info),
+		// A synchronous pause: the CLI is synchronous, and --wait only polls a few panes.
+		sleep: (ms) => {
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+		},
 		installedVersion: () => {
 			try {
 				const v = JSON.parse(readFileSync("/usr/local/lib/node_modules/@cldmv/gh-broker/package.json", "utf8")).version;
@@ -124,7 +147,10 @@ export function realDeps(): CliDeps {
 		latestVersion: () => {
 			// cwd "/" so a .npmrc planted in the working directory can't add npm config, and the
 			// registry pinned like the install below.
-			const r = run("npm", ["view", "@cldmv/gh-broker", "version", "--registry", "https://registry.npmjs.org"], { allowFail: true, cwd: "/" });
+			const r = run("npm", ["view", "@cldmv/gh-broker", "version", "--registry", "https://registry.npmjs.org"], {
+				allowFail: true,
+				cwd: "/"
+			});
 			const v = r.stdout.trim();
 			// the same bar --version is held to: anything that isn't semver isn't a version npm
 			// should be handed
@@ -133,7 +159,20 @@ export function realDeps(): CliDeps {
 		npmInstall: (spec) => {
 			// Streamed (a long install must not look hung), from cwd "/" for the same reason as
 			// above, with the registry pinned so nothing a planted config adds gets installed.
-			const r = spawnSync("npm", ["install", "-g", "--prefix", "/usr/local", "--ignore-scripts", "--registry", "https://registry.npmjs.org", `@cldmv/gh-broker@${spec}`], { stdio: "inherit", cwd: "/" });
+			const r = spawnSync(
+				"npm",
+				[
+					"install",
+					"-g",
+					"--prefix",
+					"/usr/local",
+					"--ignore-scripts",
+					"--registry",
+					"https://registry.npmjs.org",
+					`@cldmv/gh-broker@${spec}`
+				],
+				{ stdio: "inherit", cwd: "/" }
+			);
 			if (r.error) throw new Error(`npm install: ${r.error.message}`);
 			if (r.status !== 0) throw new Error(`npm install exited ${r.status ?? `on signal ${r.signal}`}`);
 		},
@@ -143,7 +182,10 @@ export function realDeps(): CliDeps {
 			// inherited so its prompts work and its progress streams.
 			const r = spawnSync("/usr/local/bin/gh-broker", args, { stdio: "inherit" });
 			if (r.error) throw new Error(`/usr/local/bin/gh-broker ${args[0]}: ${r.error.message}`);
-			if (r.status !== 0) throw Object.assign(new Error(`/usr/local/bin/gh-broker ${args.join(" ")} exited ${r.status ?? `on signal ${r.signal}`}`), { status: r.status });
+			if (r.status !== 0)
+				throw Object.assign(new Error(`/usr/local/bin/gh-broker ${args.join(" ")} exited ${r.status ?? `on signal ${r.signal}`}`), {
+					status: r.status
+				});
 		},
 		sudoUser: () => process.env.SUDO_USER,
 		// Same journal identifier as the daemon (SyslogIdentifier=gh-broker), so `journalctl -t gh-broker` shows both.

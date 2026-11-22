@@ -81,10 +81,14 @@ export function ensureServiceUser(svcUser: string, svcGroup: string): void {
 	if (!userExists(svcUser)) {
 		run("useradd", [
 			"--system",
-			"--gid", svcGroup,
-			"--home-dir", "/nonexistent",
-			"--shell", "/usr/sbin/nologin",
-			"--comment", "CLDMV gh-broker service",
+			"--gid",
+			svcGroup,
+			"--home-dir",
+			"/nonexistent",
+			"--shell",
+			"/usr/sbin/nologin",
+			"--comment",
+			"CLDMV gh-broker service",
 			svcUser
 		]);
 	}

@@ -1,7 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
-import { npmScaffold, trustExpired, placeholderDocument, NPM_SCAFFOLD_SCHEMA, PLACEHOLDER_VERSION, SCAFFOLD_MARKER, NPM_STAGE_PLACEHOLDER } from "../src/verbs/npm_scaffold.ts";
+import {
+	npmScaffold,
+	trustExpired,
+	placeholderDocument,
+	NPM_SCAFFOLD_SCHEMA,
+	PLACEHOLDER_VERSION,
+	SCAFFOLD_MARKER,
+	NPM_STAGE_PLACEHOLDER
+} from "../src/verbs/npm_scaffold.ts";
 import { NpmRegistry, NpmOtpRequired, NpmHttpError, escapePackageName, type FetchLike } from "../src/verbs/npm-registry.ts";
 import { buildTarball, tarballDigests } from "../src/verbs/npm-tarball.ts";
 
@@ -14,12 +22,18 @@ const PKG = "@cldmv/new-thing";
 function untar(tgz: Buffer): Record<string, string> {
 	const tar = gunzipSync(tgz);
 	const out: Record<string, string> = {};
-	for (let off = 0; off + 512 <= tar.length; ) {
+	for (let off = 0; off + 512 <= tar.length;) {
 		const head = tar.subarray(off, off + 512);
 		if (head.every((b) => b === 0)) break;
 		const name = head.subarray(0, 100).toString("ascii").replace(/\0.*$/, "");
 		const size = parseInt(head.subarray(124, 136).toString("ascii").replace(/\0.*$/, ""), 8);
-		const stored = parseInt(head.subarray(148, 156).toString("ascii").replace(/[\0 ].*$/, ""), 8);
+		const stored = parseInt(
+			head
+				.subarray(148, 156)
+				.toString("ascii")
+				.replace(/[\0 ].*$/, ""),
+			8
+		);
 		const copy = Buffer.from(head);
 		copy.fill(0x20, 148, 156);
 		expect(copy.reduce((s, b) => s + b, 0)).toBe(stored);
@@ -57,8 +71,16 @@ function fakeRegistry(opts: RegistryOpts = {}) {
 	let notFound = 0;
 	let stageOnly = 0;
 	const calls: Array<{ method: string; url: string; headers: Record<string, string>; body?: any }> = [];
-	const otpRefused = () => ({ status: 401, headers: { get: (n: string) => (n === "www-authenticate" ? "OTP" : null) }, text: async () => '{"error":"You must provide a one-time pass."}' });
-	const reply = (status: number, body: unknown) => ({ status, headers: { get: () => null }, text: async () => (typeof body === "string" ? body : JSON.stringify(body)) });
+	const otpRefused = () => ({
+		status: 401,
+		headers: { get: (n: string) => (n === "www-authenticate" ? "OTP" : null) },
+		text: async () => '{"error":"You must provide a one-time pass."}'
+	});
+	const reply = (status: number, body: unknown) => ({
+		status,
+		headers: { get: () => null },
+		text: async () => (typeof body === "string" ? body : JSON.stringify(body))
+	});
 	const fetch = vi.fn<FetchLike>(async (url, init) => {
 		calls.push({ method: init.method, url, headers: init.headers, ...(init.body ? { body: JSON.parse(init.body) } : {}) });
 		expect(init.headers.authorization).toBe(`Bearer ${TOKEN}`);
@@ -90,7 +112,11 @@ function fakeRegistry(opts: RegistryOpts = {}) {
 			if (opts.publishStatus) return reply(opts.publishStatus, { error: "You do not have permission to publish" });
 			if (opts.publishNotLive !== undefined) return reply(200, opts.publishNotLive);
 			const doc = JSON.parse(init.body!);
-			packages.set(PKG, { name: doc.name, versions: { ...(opts.staged ? { [NPM_STAGE_PLACEHOLDER]: { name: PKG } } : {}), ...doc.versions }, "dist-tags": doc["dist-tags"] });
+			packages.set(PKG, {
+				name: doc.name,
+				versions: { ...(opts.staged ? { [NPM_STAGE_PLACEHOLDER]: { name: PKG } } : {}), ...doc.versions },
+				"dist-tags": doc["dist-tags"]
+			});
 			if (opts.staged) {
 				notFound = opts.staged.notFound ?? 0;
 				stageOnly = opts.staged.stageOnly ?? 0;
@@ -105,7 +131,10 @@ function fakeRegistry(opts: RegistryOpts = {}) {
 			const body = JSON.parse(init.body!);
 			trust.push(...body);
 			if (opts.trustCreatedBody !== undefined) return reply(201, opts.trustCreatedBody);
-			return reply(201, body.map((b: any, i: number) => ({ ...b, id: `trust-${i + 1}` })));
+			return reply(
+				201,
+				body.map((b: any, i: number) => ({ ...b, id: `trust-${i + 1}` }))
+			);
 		}
 		if (init.method === "GET" && path === `/-/package/${escapePackageName(PKG)}/trust`) {
 			if (opts.trustListNeedsOtp && !useOtp()) return otpRefused();
@@ -117,16 +146,34 @@ function fakeRegistry(opts: RegistryOpts = {}) {
 	return { registry: new NpmRegistry({ token: TOKEN, fetch }), fetch, calls, packages, trust };
 }
 
-type RepoOpts = { private?: boolean; archived?: boolean; pkg?: unknown; pkgRaw?: string; workflow?: boolean; missing?: boolean; pkgIsDir?: boolean; plainEncoding?: boolean; bareRepo?: boolean; pkgPath?: string; branches?: string[]; readRef?: string };
+type RepoOpts = {
+	private?: boolean;
+	archived?: boolean;
+	pkg?: unknown;
+	pkgRaw?: string;
+	workflow?: boolean;
+	missing?: boolean;
+	pkgIsDir?: boolean;
+	plainEncoding?: boolean;
+	bareRepo?: boolean;
+	pkgPath?: string;
+	branches?: string[];
+	readRef?: string;
+};
 
 function fakeGitHub(o: RepoOpts = {}) {
 	const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
-	const file = (s: string) => (o.plainEncoding ? { data: { type: "file", encoding: "utf-8", content: s } } : { data: { type: "file", encoding: "base64", content: Buffer.from(s).toString("base64") } });
+	const file = (s: string) =>
+		o.plainEncoding
+			? { data: { type: "file", encoding: "utf-8", content: s } }
+			: { data: { type: "file", encoding: "base64", content: Buffer.from(s).toString("base64") } };
 	const request = vi.fn(async (route: string, p: any) => {
 		if (route === "GET /repos/{owner}/{repo}") {
 			if (o.missing) throw notFound();
 			if (o.bareRepo) return { data: { private: false } };
-			return { data: { full_name: "CLDMV/new-thing", private: o.private ?? false, archived: o.archived ?? false, default_branch: "master" } };
+			return {
+				data: { full_name: "CLDMV/new-thing", private: o.private ?? false, archived: o.archived ?? false, default_branch: "master" }
+			};
 		}
 		if (route === "GET /repos/{owner}/{repo}/branches/{branch}") {
 			if ((o.branches ?? ["master", "next"]).includes(p.branch)) return { data: { name: p.branch } };
@@ -136,7 +183,8 @@ function fakeGitHub(o: RepoOpts = {}) {
 			expect(p.ref).toBe(o.readRef ?? (o.bareRepo ? "HEAD" : "master"));
 			if (p.path === (o.pkgPath ?? "package.json")) {
 				if (o.pkgIsDir) return { data: [{ type: "file", name: "x" }] };
-				if (o.pkg === undefined && o.pkgRaw === undefined) return file(JSON.stringify({ name: PKG, license: "Apache-2.0", description: "A new thing." }));
+				if (o.pkg === undefined && o.pkgRaw === undefined)
+					return file(JSON.stringify({ name: PKG, license: "Apache-2.0", description: "A new thing." }));
 				if (o.pkg === null) throw notFound();
 				return file(o.pkgRaw ?? JSON.stringify(o.pkg));
 			}
@@ -153,11 +201,21 @@ function fakeGitHub(o: RepoOpts = {}) {
 
 const args = (extra: Record<string, unknown> = {}) => ({ owner: "cldmv", repo: "new-thing", package: PKG, npm_otp: OTP, ...extra });
 const sleeps: number[] = [];
-const deps = (gh: ReturnType<typeof fakeGitHub>, reg: ReturnType<typeof fakeRegistry>, scopes = ["@cldmv"]) => ({ octokit: gh.octokit, registry: reg.registry, scopes, sleep: async (ms: number) => void sleeps.push(ms) });
+const deps = (gh: ReturnType<typeof fakeGitHub>, reg: ReturnType<typeof fakeRegistry>, scopes = ["@cldmv"]) => ({
+	octokit: gh.octokit,
+	registry: reg.registry,
+	scopes,
+	sleep: async (ms: number) => void sleeps.push(ms)
+});
 
 describe("buildTarball", () => {
 	it("writes package/-prefixed ustar entries with valid checksums, gzipped", () => {
-		const files = untar(buildTarball([{ path: "package.json", content: '{"name":"x"}' }, { path: "README.md", content: "# x\n".repeat(200) }]));
+		const files = untar(
+			buildTarball([
+				{ path: "package.json", content: '{"name":"x"}' },
+				{ path: "README.md", content: "# x\n".repeat(200) }
+			])
+		);
 		expect(Object.keys(files)).toEqual(["package/package.json", "package/README.md"]);
 		expect(files["package/package.json"]).toBe('{"name":"x"}');
 		expect(files["package/README.md"]).toBe("# x\n".repeat(200));
@@ -183,7 +241,12 @@ describe("buildTarball", () => {
 
 describe("placeholderDocument", () => {
 	it("builds the first-publish document with a marked placeholder manifest and matching tarball", () => {
-		const doc = placeholderDocument(PKG, { repository: "CLDMV/new-thing", isPrivate: false, license: "Apache-2.0" }, "public", "https://registry.npmjs.org");
+		const doc = placeholderDocument(
+			PKG,
+			{ repository: "CLDMV/new-thing", isPrivate: false, license: "Apache-2.0" },
+			"public",
+			"https://registry.npmjs.org"
+		);
 		expect(doc["dist-tags"]).toEqual({ latest: PLACEHOLDER_VERSION });
 		expect(doc.access).toBe("public");
 		const v = doc.versions[PLACEHOLDER_VERSION]!;
@@ -196,7 +259,11 @@ describe("placeholderDocument", () => {
 		expect(att.length).toBe(tgz.length);
 		expect(v.dist.integrity).toBe(tarballDigests(tgz).integrity);
 		const files = untar(tgz);
-		expect(JSON.parse(files["package/package.json"]!)).toMatchObject({ name: PKG, version: PLACEHOLDER_VERSION, scaffoldedBy: SCAFFOLD_MARKER });
+		expect(JSON.parse(files["package/package.json"]!)).toMatchObject({
+			name: PKG,
+			version: PLACEHOLDER_VERSION,
+			scaffoldedBy: SCAFFOLD_MARKER
+		});
 		expect(files["package/README.md"]).toContain("https://github.com/CLDMV/new-thing");
 		// Only the two broker-built files: nothing else ships.
 		expect(Object.keys(files)).toEqual(["package/package.json", "package/README.md"]);
@@ -218,7 +285,14 @@ describe("npm_scaffold", () => {
 	it("publishes the placeholder, then adds the trusted publisher on a second call with the next code", async () => {
 		const reg = fakeRegistry({ otps: [OTP, OTP2] });
 		const first = await npmScaffold(args(), deps(fakeGitHub(), reg));
-		expect(first).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"], access: "public", repository: "CLDMV/new-thing", version: PLACEHOLDER_VERSION });
+		expect(first).toMatchObject({
+			status: "needs_otp",
+			done: ["publish"],
+			remaining: ["trust"],
+			access: "public",
+			repository: "CLDMV/new-thing",
+			version: PLACEHOLDER_VERSION
+		});
 		expect(first.message).toMatch(/needs its own one-time password/);
 		// The spent code is never sent again: no trust request on the first call.
 		expect(reg.calls.filter((c) => c.url.endsWith("/trust"))).toHaveLength(0);
@@ -229,7 +303,9 @@ describe("npm_scaffold", () => {
 		const second = await npmScaffold(args({ npm_otp: OTP2 }), deps(fakeGitHub(), reg));
 		expect(second).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"], workflow: "publish.yml", trustId: "trust-1" });
 		expect(second.url).toBe(`https://www.npmjs.com/package/${PKG}`);
-		expect(reg.trust).toEqual([{ type: "github", claims: { repository: "CLDMV/new-thing", workflow_ref: { file: "publish.yml" } }, permissions: ["createPackage"] }]);
+		expect(reg.trust).toEqual([
+			{ type: "github", claims: { repository: "CLDMV/new-thing", workflow_ref: { file: "publish.yml" } }, permissions: ["createPackage"] }
+		]);
 		expect(reg.calls.find((c) => c.url.endsWith("/trust"))!.headers["npm-otp"]).toBe(OTP2);
 		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(1);
 	});
@@ -258,8 +334,16 @@ describe("npm_scaffold", () => {
 		expect(reg.packages.size).toBe(0);
 	});
 
-	const placeholderFor = (repository: string) => ({ name: PKG, versions: placeholderDocument(PKG, { repository, isPrivate: false }, "public", "https://registry.npmjs.org").versions });
-	const trustFor = (repository: string, file = "publish.yml") => ({ id: "t-old", type: "github", claims: { repository, workflow_ref: { file } }, permissions: ["createPackage"] });
+	const placeholderFor = (repository: string) => ({
+		name: PKG,
+		versions: placeholderDocument(PKG, { repository, isPrivate: false }, "public", "https://registry.npmjs.org").versions
+	});
+	const trustFor = (repository: string, file = "publish.yml") => ({
+		id: "t-old",
+		type: "github",
+		claims: { repository, workflow_ref: { file } },
+		permissions: ["createPackage"]
+	});
 
 	it("treats the same trusted publisher already being configured as done", async () => {
 		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") }, existingTrust: [trustFor("cldmv/NEW-thing")] });
@@ -292,10 +376,15 @@ describe("npm_scaffold", () => {
 		["an expiry time in the past", { expires_at: "2026-11-20T00:00:00Z" }],
 		["a creation time over 2 days ago", { createdAt: "2026-11-19T11:59:59Z" }]
 	])("reports an expired trusted publisher for this repo as expired (%s), writing nothing", async (_, extra) => {
-		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") }, existingTrust: [{ ...trustFor("CLDMV/new-thing"), ...extra }] });
+		const reg = fakeRegistry({
+			existing: { [PKG]: placeholderFor("CLDMV/new-thing") },
+			existingTrust: [{ ...trustFor("CLDMV/new-thing"), ...extra }]
+		});
 		const out = await npmScaffold(args(), { ...deps(fakeGitHub(), reg), now: () => NOW });
 		expect(out).toMatchObject({ status: "expired", done: [], remaining: ["trust"], skipped: ["publish"], trustId: "t-old" });
-		expect(out.message).toMatch(/expired: npm drops one that hasn't published within 2 days.*Delete it at https:\/\/www\.npmjs\.com\/package\/@cldmv\/new-thing\/access/);
+		expect(out.message).toMatch(
+			/expired: npm drops one that hasn't published within 2 days.*Delete it at https:\/\/www\.npmjs\.com\/package\/@cldmv\/new-thing\/access/
+		);
 		expect(reg.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
 	});
 
@@ -329,12 +418,16 @@ describe("npm_scaffold", () => {
 		["another provider", { ...trustFor("CLDMV/new-thing"), type: "gitlab" }]
 	])("refuses when a different trusted publisher exists (%s)", async (_, existing) => {
 		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") }, existingTrust: [existing] });
-		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/already has a different trusted publisher: .*Change it at https:\/\/www\.npmjs\.com\/package\/@cldmv\/new-thing\/access/);
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(
+			/already has a different trusted publisher: .*Change it at https:\/\/www\.npmjs\.com\/package\/@cldmv\/new-thing\/access/
+		);
 	});
 
 	it("describes an existing trust entry that has no claims", async () => {
 		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") }, existingTrust: [{ id: "t", type: "github" }] });
-		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/different trusted publisher: github undefined \(undefined\)/);
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(
+			/different trusted publisher: github undefined \(undefined\)/
+		);
 	});
 
 	it("finishes without a trust id when npm's reply carries none", async () => {
@@ -345,44 +438,70 @@ describe("npm_scaffold", () => {
 	});
 
 	it("refuses when npm wants another code to show the existing trusted publisher", async () => {
-		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") }, existingTrust: [trustFor("CLDMV/new-thing")], trustListNeedsOtp: true });
-		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/already has a trusted publisher, and npm needs another one-time password to show which/);
+		const reg = fakeRegistry({
+			existing: { [PKG]: placeholderFor("CLDMV/new-thing") },
+			existingTrust: [trustFor("CLDMV/new-thing")],
+			trustListNeedsOtp: true
+		});
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(
+			/already has a trusted publisher, and npm needs another one-time password to show which/
+		);
 	});
 
 	it("passes a trust-list failure other than an OTP request through", async () => {
-		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") }, existingTrust: [trustFor("CLDMV/new-thing")], trustListReply: { status: 500, body: "" } });
+		const reg = fakeRegistry({
+			existing: { [PKG]: placeholderFor("CLDMV/new-thing") },
+			existingTrust: [trustFor("CLDMV/new-thing")],
+			trustListReply: { status: 500, body: "" }
+		});
 		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/trusted publisher lookup failed \(HTTP 500\)/);
 	});
 
 	it("names an unreadable existing configuration rather than failing obscurely", async () => {
-		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/new-thing") }, existingTrust: [trustFor("x")], trustListReply: { status: 200, body: "[]" } });
+		const reg = fakeRegistry({
+			existing: { [PKG]: placeholderFor("CLDMV/new-thing") },
+			existingTrust: [trustFor("x")],
+			trustListReply: { status: 200, body: "[]" }
+		});
 		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/already has a different trusted publisher: unreadable/);
 	});
 
 	it("refuses to add a trusted publisher for a different repo than the placeholder was made for", async () => {
 		const reg = fakeRegistry({ existing: { [PKG]: placeholderFor("CLDMV/other-repo") } });
-		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/placeholder was published for git\+https:\/\/github\.com\/CLDMV\/other-repo\.git, not CLDMV\/new-thing/);
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(
+			/placeholder was published for git\+https:\/\/github\.com\/CLDMV\/other-repo\.git, not CLDMV\/new-thing/
+		);
 		expect(reg.calls.some((c) => c.url.endsWith("/trust"))).toBe(false);
 	});
 
 	it("refuses a placeholder with no recorded repository", async () => {
 		const doc = placeholderFor("CLDMV/new-thing");
 		delete (doc.versions[PLACEHOLDER_VERSION] as any).repository;
-		await expect(npmScaffold(args(), deps(fakeGitHub(), fakeRegistry({ existing: { [PKG]: doc } })))).rejects.toThrow(/published for an unrecorded repository/);
+		await expect(npmScaffold(args(), deps(fakeGitHub(), fakeRegistry({ existing: { [PKG]: doc } })))).rejects.toThrow(
+			/published for an unrecorded repository/
+		);
 	});
 
 	it("refuses a repo that GitHub redirects to another owner or name", async () => {
 		const gh = fakeGitHub();
 		const real = gh.request.getMockImplementation()!;
-		gh.request.mockImplementation(async (r: string, p: any) => (r === "GET /repos/{owner}/{repo}" ? { data: { full_name: "someone/new-thing", private: false, default_branch: "master" } } : real(r, p)));
+		gh.request.mockImplementation(async (r: string, p: any) =>
+			r === "GET /repos/{owner}/{repo}"
+				? { data: { full_name: "someone/new-thing", private: false, default_branch: "master" } }
+				: real(r, p)
+		);
 		const reg = fakeRegistry();
-		await expect(npmScaffold(args(), deps(gh, reg))).rejects.toThrow(/cldmv\/new-thing redirects to someone\/new-thing \(renamed or transferred\)/);
+		await expect(npmScaffold(args(), deps(gh, reg))).rejects.toThrow(
+			/cldmv\/new-thing redirects to someone\/new-thing \(renamed or transferred\)/
+		);
 		expect(reg.fetch).not.toHaveBeenCalled();
 	});
 
 	it("refuses a package that already exists and was not created by npm_scaffold", async () => {
 		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { "1.0.0": {}, "1.1.0": {} } } } });
-		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/already exists on the registry \(2 version\(s\)\) and was not created by npm_scaffold/);
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(
+			/already exists on the registry \(2 version\(s\)\) and was not created by npm_scaffold/
+		);
 		expect(reg.calls.every((c) => c.method === "GET")).toBe(true);
 	});
 
@@ -429,7 +548,9 @@ describe("npm_scaffold", () => {
 		const second = await npmScaffold(args({ npm_otp: OTP2 }), deps(fakeGitHub(), reg));
 		expect(second).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"] });
 		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(1);
-		expect(reg.trust).toEqual([expect.objectContaining({ type: "github", claims: { repository: "CLDMV/new-thing", workflow_ref: { file: "publish.yml" } } })]);
+		expect(reg.trust).toEqual([
+			expect.objectContaining({ type: "github", claims: { repository: "CLDMV/new-thing", workflow_ref: { file: "publish.yml" } } })
+		]);
 	});
 
 	it("returns pending when nothing shows up within the wait, and a later call goes on to the trust step", async () => {
@@ -459,11 +580,22 @@ describe("npm_scaffold", () => {
 	it("resumes when an earlier staged placeholder went live next to npm's 0.0.0-stage", async () => {
 		const doc = placeholderFor("CLDMV/new-thing");
 		const ours = { ...doc.versions[PLACEHOLDER_VERSION], version: "0.0.1-stage" };
-		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { [NPM_STAGE_PLACEHOLDER]: { name: PKG, description: "Temporary package placeholder for staged publishing" }, "0.0.1-stage": ours } } } });
+		const reg = fakeRegistry({
+			existing: {
+				[PKG]: {
+					name: PKG,
+					versions: {
+						[NPM_STAGE_PLACEHOLDER]: { name: PKG, description: "Temporary package placeholder for staged publishing" },
+						"0.0.1-stage": ours
+					}
+				}
+			}
+		});
 		const out = await npmScaffold(args(), deps(fakeGitHub(), reg));
 		expect(out.status).toBe("done");
 		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
 		expect(reg.calls.some((c) => c.url.endsWith("/trust"))).toBe(true);
+		expect(out.version).toBe("0.0.0-stage, 0.0.1-stage"); // what's on the registry, not the PLACEHOLDER_VERSION constant (#198)
 	});
 
 	it.each([
@@ -478,7 +610,7 @@ describe("npm_scaffold", () => {
 	it("goes to the trust step, never a second publish, when the package holds only npm's 0.0.0-stage", async () => {
 		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { [NPM_STAGE_PLACEHOLDER]: { name: PKG } } } } });
 		const out = await npmScaffold(args(), deps(fakeGitHub(), reg));
-		expect(out).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"] });
+		expect(out).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"], version: NPM_STAGE_PLACEHOLDER });
 		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
 	});
 
@@ -491,13 +623,17 @@ describe("npm_scaffold", () => {
 		const mine = placeholderFor("CLDMV/new-thing").versions[PLACEHOLDER_VERSION];
 		const other = { ...placeholderFor("CLDMV/other-repo").versions[PLACEHOLDER_VERSION], version: "0.0.1-stage" };
 		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { [PLACEHOLDER_VERSION]: mine, "0.0.1-stage": other } } } });
-		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(/published for git\+https:\/\/github\.com\/CLDMV\/other-repo\.git/);
+		await expect(npmScaffold(args(), deps(fakeGitHub(), reg))).rejects.toThrow(
+			/published for git\+https:\/\/github\.com\/CLDMV\/other-repo\.git/
+		);
 	});
 
 	it("refuses a scope that is not configured, before any request", async () => {
 		const gh = fakeGitHub();
 		const reg = fakeRegistry();
-		await expect(npmScaffold(args({ package: "@other/new-thing" }), deps(gh, reg))).rejects.toThrow(/scope @other is not in config\.npm\.scopes/);
+		await expect(npmScaffold(args({ package: "@other/new-thing" }), deps(gh, reg))).rejects.toThrow(
+			/scope @other is not in config\.npm\.scopes/
+		);
 		expect(gh.request).not.toHaveBeenCalled();
 		expect(reg.fetch).not.toHaveBeenCalled();
 	});
@@ -550,30 +686,46 @@ describe("npm_scaffold", () => {
 			["packaging/new-thing/package.json", "next"],
 			[".github/workflows/publish.yml", "next"]
 		]);
-		expect(gh.request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/branches/{branch}", { owner: "cldmv", repo: "new-thing", branch: "next" });
+		expect(gh.request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/branches/{branch}", {
+			owner: "cldmv",
+			repo: "new-thing",
+			branch: "next"
+		});
 	});
 
 	it("reads a subfolder package.json on the default branch when no ref is given", async () => {
 		const gh = fakeGitHub({ pkgPath: "packaging/new-thing/package.json" });
-		await expect(npmScaffold(args({ path: "packaging/new-thing/package.json" }), deps(gh, fakeRegistry()))).resolves.toMatchObject({ done: ["publish"] });
+		await expect(npmScaffold(args({ path: "packaging/new-thing/package.json" }), deps(gh, fakeRegistry()))).resolves.toMatchObject({
+			done: ["publish"]
+		});
 		expect(gh.request.mock.calls.some(([r]) => r === "GET /repos/{owner}/{repo}/branches/{branch}")).toBe(false);
 	});
 
 	it("refuses a ref that is not a branch of the repo, before any npm call", async () => {
 		const reg = fakeRegistry();
-		await expect(npmScaffold(args({ ref: "v1.0.0" }), deps(fakeGitHub(), reg))).rejects.toThrow(/CLDMV\/new-thing has no branch "v1\.0\.0"/);
+		await expect(npmScaffold(args({ ref: "v1.0.0" }), deps(fakeGitHub(), reg))).rejects.toThrow(
+			/CLDMV\/new-thing has no branch "v1\.0\.0"/
+		);
 		expect(reg.calls).toHaveLength(0);
 	});
 
 	it("names the path and branch when the package.json there is missing, names another package, or is private", async () => {
 		const at = { path: "packaging/x/package.json", ref: "next" };
-		await expect(npmScaffold(args(at), deps(fakeGitHub({ readRef: "next" }), fakeRegistry()))).rejects.toThrow(/has no packaging\/x\/package\.json on next/);
-		await expect(npmScaffold(args(at), deps(fakeGitHub({ readRef: "next", pkgPath: at.path, pkg: { name: "@cldmv/other" } }), fakeRegistry()))).rejects.toThrow(/packaging\/x\/package\.json on next names "@cldmv\/other"/);
-		await expect(npmScaffold(args(at), deps(fakeGitHub({ readRef: "next", pkgPath: at.path, pkg: { name: PKG, private: true } }), fakeRegistry()))).rejects.toThrow(/packaging\/x\/package\.json on next is marked "private": true/);
+		await expect(npmScaffold(args(at), deps(fakeGitHub({ readRef: "next" }), fakeRegistry()))).rejects.toThrow(
+			/has no packaging\/x\/package\.json on next/
+		);
+		await expect(
+			npmScaffold(args(at), deps(fakeGitHub({ readRef: "next", pkgPath: at.path, pkg: { name: "@cldmv/other" } }), fakeRegistry()))
+		).rejects.toThrow(/packaging\/x\/package\.json on next names "@cldmv\/other"/);
+		await expect(
+			npmScaffold(args(at), deps(fakeGitHub({ readRef: "next", pkgPath: at.path, pkg: { name: PKG, private: true } }), fakeRegistry()))
+		).rejects.toThrow(/packaging\/x\/package\.json on next is marked "private": true/);
 	});
 
 	it("refuses when the workflow file is missing on the given branch", async () => {
-		await expect(npmScaffold(args({ ref: "next" }), deps(fakeGitHub({ readRef: "next", workflow: false }), fakeRegistry()))).rejects.toThrow(/has no \.github\/workflows\/publish\.yml on next/);
+		await expect(
+			npmScaffold(args({ ref: "next" }), deps(fakeGitHub({ readRef: "next", workflow: false }), fakeRegistry()))
+		).rejects.toThrow(/has no \.github\/workflows\/publish\.yml on next/);
 	});
 
 	it("passes a GitHub error other than 404 from the branch lookup through unchanged", async () => {
@@ -659,17 +811,25 @@ describe("npm_scaffold", () => {
 	it("passes a trust failure that is not an OTP refusal through, after the publish", async () => {
 		const reg = fakeRegistry({ otps: [OTP, OTP2], trustStatus: 400 });
 		await npmScaffold(args(), deps(fakeGitHub(), reg));
-		await expect(npmScaffold(args({ npm_otp: OTP2 }), deps(fakeGitHub(), reg))).rejects.toThrow(/trusted publisher setup failed \(HTTP 400\)/);
+		await expect(npmScaffold(args({ npm_otp: OTP2 }), deps(fakeGitHub(), reg))).rejects.toThrow(
+			/trusted publisher setup failed \(HTTP 400\)/
+		);
 		expect(reg.packages.has(PKG)).toBe(true);
 	});
 
 	it("surfaces a registry refusal as an HTTP error with npm's message", async () => {
-		await expect(npmScaffold(args(), deps(fakeGitHub(), fakeRegistry({ publishStatus: 403 })))).rejects.toThrow(/npm: publish failed \(HTTP 403\): You do not have permission to publish/);
+		await expect(npmScaffold(args(), deps(fakeGitHub(), fakeRegistry({ publishStatus: 403 })))).rejects.toThrow(
+			/npm: publish failed \(HTTP 403\): You do not have permission to publish/
+		);
 	});
 });
 
 describe("NpmRegistry", () => {
-	const res = (status: number, body: string, headers: Record<string, string> = {}) => ({ status, headers: { get: (n: string) => headers[n] ?? null }, text: async () => body });
+	const res = (status: number, body: string, headers: Record<string, string> = {}) => ({
+		status,
+		headers: { get: (n: string) => headers[n] ?? null },
+		text: async () => body
+	});
 
 	it("detects an OTP refusal from the body when the header does not say so", async () => {
 		const reg = new NpmRegistry({ token: TOKEN, fetch: async () => res(401, "This operation requires a one-time password") });
@@ -683,7 +843,11 @@ describe("NpmRegistry", () => {
 
 	it("trims a trailing slash from the registry and reports a non-JSON error body", async () => {
 		const seen: string[] = [];
-		const reg = new NpmRegistry({ token: TOKEN, registry: "https://npm.example.test/", fetch: async (url) => (seen.push(url), res(502, "Bad Gateway")) });
+		const reg = new NpmRegistry({
+			token: TOKEN,
+			registry: "https://npm.example.test/",
+			fetch: async (url) => (seen.push(url), res(502, "Bad Gateway"))
+		});
 		await expect(reg.packument(PKG)).rejects.toThrow(/package lookup failed \(HTTP 502\): Bad Gateway/);
 		expect(seen).toEqual([`https://npm.example.test/${escapePackageName(PKG)}?write=true`]);
 		expect(reg.registry).toBe("https://npm.example.test");
@@ -718,6 +882,8 @@ describe("NpmRegistry", () => {
 
 	it("fails a trust setup the registry rejects", async () => {
 		const reg = new NpmRegistry({ token: TOKEN, fetch: async () => res(400, '{"message":"workflow not found"}') });
-		await expect(reg.addGithubTrust(PKG, { repository: "CLDMV/x", file: "publish.yml" }, OTP)).rejects.toThrow(/trusted publisher setup failed \(HTTP 400\): workflow not found/);
+		await expect(reg.addGithubTrust(PKG, { repository: "CLDMV/x", file: "publish.yml" }, OTP)).rejects.toThrow(
+			/trusted publisher setup failed \(HTTP 400\): workflow not found/
+		);
 	});
 });

@@ -53,10 +53,25 @@ function fakeGitHub(repoLabels: string[], issueLabels: string[], opts: FakeOpts 
 				throw new Error(`unexpected route ${route}`);
 		}
 	});
-	return { octokit: { request } as any, request, repo, get issue() { return issue; } };
+	return {
+		octokit: { request } as any,
+		request,
+		repo,
+		get issue() {
+			return issue;
+		}
+	};
 }
 
-const REPO = ["type: bug", "priority: high", "area: auth", "status: not started", "status: in progress", "status: implemented", "status: verified"];
+const REPO = [
+	"type: bug",
+	"priority: high",
+	"area: auth",
+	"status: not started",
+	"status: in progress",
+	"status: implemented",
+	"status: verified"
+];
 const base = { owner: "cldmv", repo: "gh-broker", issue_number: 117 };
 const writes = (request: ReturnType<typeof vi.fn>) => request.mock.calls.map((c) => c[0] as string).filter((r) => !r.startsWith("GET "));
 
@@ -127,7 +142,12 @@ describe("issueLabels", () => {
 	});
 
 	it("swap combines with add and remove", async () => {
-		const out = await issueLabels(gh.octokit, { ...base, swap: { prefix: "status: ", to: "status: implemented" }, add: "area: auth", remove: "type: bug" });
+		const out = await issueLabels(gh.octokit, {
+			...base,
+			swap: { prefix: "status: ", to: "status: implemented" },
+			add: "area: auth",
+			remove: "type: bug"
+		});
 		expect(out.labels).toEqual(["priority: high", "area: auth", "status: implemented"]);
 	});
 
@@ -191,7 +211,8 @@ describe("issueLabels", () => {
 	describe("partial failures (finding 1)", () => {
 		it("a failing add leaves the swap's removals unapplied, so the issue keeps its status label", async () => {
 			gh = fakeGitHub(REPO, ["priority: high", "status: in progress"], {
-				fail: (route) => (route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels" ? httpError(403, "API rate limit exceeded") : undefined)
+				fail: (route) =>
+					route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels" ? httpError(403, "API rate limit exceeded") : undefined
 			});
 			const err = await issueLabels(gh.octokit, { ...base, swap: { prefix: "status: ", to: "status: verified" } }).catch((e) => e);
 			expect(gh.issue).toEqual(["priority: high", "status: in progress"]);
@@ -215,7 +236,11 @@ describe("issueLabels", () => {
 			gh = fakeGitHub(REPO, ["type: bug", "priority: high", "area: auth"], {
 				fail: (route, p) => (route.startsWith("DELETE") && p.name === "priority: high" ? httpError(502, "Bad Gateway") : undefined)
 			});
-			const err = await issueLabels(gh.octokit, { ...base, add: "status: verified", remove: ["type: bug", "priority: high", "area: auth"] }).catch((e) => e);
+			const err = await issueLabels(gh.octokit, {
+				...base,
+				add: "status: verified",
+				remove: ["type: bug", "priority: high", "area: auth"]
+			}).catch((e) => e);
 			expect(err.message).toBe(
 				"issue_labels: failed part-way on cldmv/gh-broker#117: Bad Gateway. Applied: added [status: verified]; removed [type: bug]. Not applied: removed [priority: high, area: auth]."
 			);
@@ -224,9 +249,15 @@ describe("issueLabels", () => {
 
 		it("a create failing part-way reports the label already created and everything still pending", async () => {
 			gh = fakeGitHub(REPO, ["status: in progress"], {
-				fail: (route, p) => (route === "POST /repos/{owner}/{repo}/labels" && p.name === "area: two" ? httpError(422, "Validation Failed") : undefined)
+				fail: (route, p) =>
+					route === "POST /repos/{owner}/{repo}/labels" && p.name === "area: two" ? httpError(422, "Validation Failed") : undefined
 			});
-			const err = await issueLabels(gh.octokit, { ...base, add: ["area: one", "area: two"], remove: "status: in progress", create_missing: true }).catch((e) => e);
+			const err = await issueLabels(gh.octokit, {
+				...base,
+				add: ["area: one", "area: two"],
+				remove: "status: in progress",
+				create_missing: true
+			}).catch((e) => e);
 			expect(err.message).toBe(
 				"issue_labels: failed part-way on cldmv/gh-broker#117: Validation Failed. Applied: created [area: one]. Not applied: created [area: two]; added [area: one, area: two]; removed [status: in progress]."
 			);
@@ -255,13 +286,21 @@ describe("issueLabels", () => {
 		});
 
 		it("treats label lists that are not arrays as empty", async () => {
-			const request = vi.fn(async (route: string) => (route.startsWith("POST /repos/{owner}/{repo}/issues") ? { data: null } : route.startsWith("GET /repos/{owner}/{repo}/issues") ? { data: {} } : { data: { name: "x" } }));
+			const request = vi.fn(async (route: string) =>
+				route.startsWith("POST /repos/{owner}/{repo}/issues")
+					? { data: null }
+					: route.startsWith("GET /repos/{owner}/{repo}/issues")
+						? { data: {} }
+						: { data: { name: "x" } }
+			);
 			const out = await issueLabels({ request } as any, { ...base, add: "x" });
 			expect(out.labels).toEqual([]);
 		});
 
 		it("a failing first read or label lookup writes nothing and is passed through unchanged", async () => {
-			gh = fakeGitHub(REPO, ["type: bug"], { fail: (route) => (route === "GET /repos/{owner}/{repo}/labels/{name}" ? httpError(500, "Server Error") : undefined) });
+			gh = fakeGitHub(REPO, ["type: bug"], {
+				fail: (route) => (route === "GET /repos/{owner}/{repo}/labels/{name}" ? httpError(500, "Server Error") : undefined)
+			});
 			await expect(issueLabels(gh.octokit, { ...base, add: "area: auth" })).rejects.toThrow(/^Server Error$/);
 			expect(writes(gh.request)).toEqual([]);
 		});
@@ -282,7 +321,11 @@ describe("issueLabels", () => {
 
 	it("does not delete and re-add an add-side label that matches the swap prefix (finding 5)", async () => {
 		gh = fakeGitHub(REPO, ["status: in progress", "status: not started"]);
-		const out = await issueLabels(gh.octokit, { ...base, add: "status: in progress", swap: { prefix: "status: ", to: "status: verified" } });
+		const out = await issueLabels(gh.octokit, {
+			...base,
+			add: "status: in progress",
+			swap: { prefix: "status: ", to: "status: verified" }
+		});
 		expect(gh.request.mock.calls.filter((c) => String(c[0]).startsWith("DELETE")).map((c) => c[1].name)).toEqual(["status: not started"]);
 		expect(out.labels).toEqual(["status: in progress", "status: verified"]);
 		expect(out.removed).toEqual(["status: not started"]);
@@ -297,7 +340,9 @@ describe("issueLabels", () => {
 	});
 
 	it("treats a label removed by someone else since the read as already removed", async () => {
-		gh = fakeGitHub(REPO, ["type: bug"], { fail: (route) => (route.startsWith("DELETE") ? httpError(404, "Label does not exist") : undefined) });
+		gh = fakeGitHub(REPO, ["type: bug"], {
+			fail: (route) => (route.startsWith("DELETE") ? httpError(404, "Label does not exist") : undefined)
+		});
 		const out = await issueLabels(gh.octokit, { ...base, remove: "type: bug" });
 		expect(out.removed).toEqual([]);
 	});
@@ -341,7 +386,14 @@ describe("issueLabels", () => {
 			// Finding 2: list sizes are capped.
 			[{ ...base, remove: Array.from({ length: 101 }, (_, i) => `l${i}`) }, /"remove" has 101 labels — at most 100/],
 			[{ ...base, add: Array.from({ length: 101 }, (_, i) => `l${i}`) }, /"add" has 101 labels — at most 100/],
-			[{ ...base, add: Array.from({ length: 60 }, (_, i) => `a${i}`), swap: { prefix: "s: ", to: Array.from({ length: 41 }, (_, i) => `s: ${i}`) } }, /101 labels to add — at most 100/]
+			[
+				{
+					...base,
+					add: Array.from({ length: 60 }, (_, i) => `a${i}`),
+					swap: { prefix: "s: ", to: Array.from({ length: 41 }, (_, i) => `s: ${i}`) }
+				},
+				/101 labels to add — at most 100/
+			]
 		])("rejects %j", async (input, msg) => {
 			await expect(issueLabels(gh.octokit, input as any)).rejects.toThrow(msg);
 			expect(gh.request).not.toHaveBeenCalled();
@@ -357,6 +409,16 @@ describe("issueLabels", () => {
 	it("advertises a strict schema", () => {
 		expect(ISSUE_LABELS_SCHEMA.required).toEqual(["owner", "repo", "issue_number"]);
 		expect(ISSUE_LABELS_SCHEMA.additionalProperties).toBe(false);
-		expect(Object.keys(ISSUE_LABELS_SCHEMA.properties)).toEqual(["owner", "repo", "issue_number", "add", "remove", "swap", "set", "create_missing", "color"]);
+		expect(Object.keys(ISSUE_LABELS_SCHEMA.properties)).toEqual([
+			"owner",
+			"repo",
+			"issue_number",
+			"add",
+			"remove",
+			"swap",
+			"set",
+			"create_missing",
+			"color"
+		]);
 	});
 });

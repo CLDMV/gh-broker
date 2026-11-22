@@ -5,10 +5,21 @@ import { emptyState, emptyUser } from "../src/cli/otp.ts";
 import { makeDeps, config, NOW } from "./helpers/cli-deps.mjs";
 
 const DIR = "/run/gh-broker/agents";
-const OLD = { type: "stdio", command: "sg", args: ["gh-broker-clients", "-c", "exec socat STDIO UNIX-CONNECT:/run/gh-broker/gh-broker.sock"] };
+const OLD = {
+	type: "stdio",
+	command: "sg",
+	args: ["gh-broker-clients", "-c", "exec socat STDIO UNIX-CONNECT:/run/gh-broker/gh-broker.sock"]
+};
 const claude = (u: string) => `/home/${u}/.claude.json`;
 /** An MCP config reader that finds every agent's file planted as a symlink. */
-const unsafeIO = { read: (p: string) => { throw new UnsafeFile(`${p} is a symlink`); }, write: () => { throw new Error("must not write"); } };
+const unsafeIO = {
+	read: (p: string) => {
+		throw new UnsafeFile(`${p} is a symlink`);
+	},
+	write: () => {
+		throw new Error("must not write");
+	}
+};
 
 describe("agent add", () => {
 	it("registers the group, writes the MCP config, restarts and smoke-tests the agent's socket", async () => {
@@ -24,7 +35,11 @@ describe("agent add", () => {
 	});
 
 	it("exits 1 when the smoke test fails, after configuring", async () => {
-		const { d, err } = makeDeps({ smoke: async () => { throw new Error("ECONNREFUSED"); } });
+		const { d, err } = makeDeps({
+			smoke: async () => {
+				throw new Error("ECONNREFUSED");
+			}
+		});
 		expect(await agentCommand("add", ["newbie"], config, d)).toBe(1);
 		expect(err[0]).toContain("smoke test failed on /run/gh-broker/agents/newbie.sock: ECONNREFUSED");
 	});
@@ -51,7 +66,9 @@ describe("configureMcp", () => {
 		const { d, out, files } = makeDeps({}, { [claude("repo")]: JSON.stringify({ mcpServers: { github: OLD } }) });
 		expect(configureMcp("repo", config, d)).toBe("written");
 		expect(JSON.parse(files[claude("repo")]).mcpServers.github).toEqual(mcpEntry("repo", DIR));
-		expect(out[0]).toContain('MCP config written in /home/repo/.claude.json (entry "github"); previous file saved as .claude.json.gh-broker.bak');
+		expect(out[0]).toContain(
+			'MCP config written in /home/repo/.claude.json (entry "github"); previous file saved as .claude.json.gh-broker.bak'
+		);
 	});
 
 	it("reports an already-correct config without writing", () => {
@@ -74,14 +91,25 @@ describe("configureMcp", () => {
 		const { d, err, out, writes } = makeDeps({ mcpIO: unsafeIO });
 		expect(configureMcp("repo", config, d)).toBe("unsafe");
 		expect(writes).toEqual([]);
-		expect(err[0]).toBe('repo: /home/repo/.claude.json is a symlink, so it was left alone (root won\'t read or replace it). Make it a plain file the user owns and run "sudo gh-broker agent sync repo", or add this under "mcpServers" by hand:');
+		expect(err[0]).toBe(
+			'repo: /home/repo/.claude.json is a symlink, so it was left alone (root won\'t read or replace it). Make it a plain file the user owns and run "sudo gh-broker agent sync repo", or add this under "mcpServers" by hand:'
+		);
 		expect(out[0]).toContain('"command": "sg"');
 	});
 
 	it("reports a write that fails in the agent's home and carries on", () => {
-		const { d, err, out } = makeDeps({ mcpIO: { read: () => undefined, write: () => { throw new Error("EISDIR: illegal operation on a directory"); } } });
+		const { d, err, out } = makeDeps({
+			mcpIO: {
+				read: () => undefined,
+				write: () => {
+					throw new Error("EISDIR: illegal operation on a directory");
+				}
+			}
+		});
 		expect(configureMcp("repo", config, d)).toBe("failed");
-		expect(err[0]).toBe('repo: could not write the MCP config: EISDIR: illegal operation on a directory. Add this under "mcpServers" in the user\'s ~/.claude.json by hand:');
+		expect(err[0]).toBe(
+			'repo: could not write the MCP config: EISDIR: illegal operation on a directory. Add this under "mcpServers" in the user\'s ~/.claude.json by hand:'
+		);
 		expect(out[0]).toContain('"command": "sg"');
 	});
 
@@ -96,13 +124,19 @@ describe("smokeAgent", () => {
 	it("returns whether the socket answered", async () => {
 		const ok = makeDeps();
 		expect(await smokeAgent("repo", config, ok.d)).toBe(true);
-		const bad = makeDeps({ smoke: async () => { throw new Error("nope"); } });
+		const bad = makeDeps({
+			smoke: async () => {
+				throw new Error("nope");
+			}
+		});
 		expect(await smokeAgent("repo", config, bad.d)).toBe(false);
 	});
 });
 
 describe("agent remove", () => {
-	const registered = { files: { [claude("repo")]: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR), x: { command: "npx" } } }) } };
+	const registered = {
+		files: { [claude("repo")]: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR), x: { command: "npx" } } }) }
+	};
 
 	it("removes the MCP entry (backup first), the group and the user's lock state, then restarts", async () => {
 		const state = { status: "ok", state: { ...emptyState(), users: { repo: emptyUser(), glmtest: emptyUser() } } };
@@ -111,7 +145,11 @@ describe("agent remove", () => {
 		expect(JSON.parse(files[claude("repo")])).toEqual({ mcpServers: { x: { command: "npx" } } });
 		expect(files["/home/repo/.claude.json.gh-broker.bak"]).toBeDefined();
 		expect(d.removeGroup).toHaveBeenCalledWith("repo");
-		expect(d.writeState).toHaveBeenCalledWith("/var/lib/gh-broker/otp-state.json", { version: 1, lastAcceptedStep: Math.floor(NOW / 30000) + 1, users: { glmtest: emptyUser() } });
+		expect(d.writeState).toHaveBeenCalledWith("/var/lib/gh-broker/otp-state.json", {
+			version: 1,
+			lastAcceptedStep: Math.floor(NOW / 30000) + 1,
+			users: { glmtest: emptyUser() }
+		});
 		expect(d.restart).toHaveBeenCalled();
 		expect(out.join("\n")).toContain("removed the broker entry from /home/repo/.claude.json");
 	});
@@ -134,11 +172,24 @@ describe("agent remove", () => {
 		const blocked = makeDeps({
 			removeGroup: () => order.push("group"),
 			restart: () => order.push("restart"),
-			mcpIO: { read: () => { order.push("mcp"); return { text: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } }), stat: { uid: 1000, gid: 1000, mode: 0o100600 } }; }, write: () => { throw new Error("EISDIR"); } }
+			mcpIO: {
+				read: () => {
+					order.push("mcp");
+					return {
+						text: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } }),
+						stat: { uid: 1000, gid: 1000, mode: 0o100600 }
+					};
+				},
+				write: () => {
+					throw new Error("EISDIR");
+				}
+			}
 		});
 		expect(await agentCommand("remove", ["repo"], config, blocked.d)).toBe(0);
 		expect(order).toEqual(["group", "restart", "mcp"]);
-		expect(blocked.err[0]).toBe("repo: could not remove the broker entry from /home/repo/.claude.json: EISDIR. The agent is unregistered anyway; remove the entry by hand.");
+		expect(blocked.err[0]).toBe(
+			"repo: could not remove the broker entry from /home/repo/.claude.json: EISDIR. The agent is unregistered anyway; remove the entry by hand."
+		);
 		const gone = makeDeps({ userInfo: () => undefined });
 		await agentCommand("remove", ["repo"], config, gone.d);
 		expect(gone.d.removeGroup).toHaveBeenCalledWith("repo");
@@ -146,7 +197,12 @@ describe("agent remove", () => {
 
 	it("still restarts when clearing the lock state fails (the broker wrote the file meanwhile)", async () => {
 		const state = { status: "ok", state: { ...emptyState(), users: { repo: emptyUser() } } };
-		const { d, err } = makeDeps({ readState: () => state, writeState: () => { throw new Error("changed while this command ran"); } });
+		const { d, err } = makeDeps({
+			readState: () => state,
+			writeState: () => {
+				throw new Error("changed while this command ran");
+			}
+		});
 		expect(await agentCommand("remove", ["repo"], config, d)).toBe(0);
 		expect(err[0]).toBe('repo: lock state not cleared: changed while this command ran. "sudo gh-broker otp unlock repo" clears it later.');
 		expect(d.restart).toHaveBeenCalled();
@@ -169,16 +225,34 @@ describe("agent remove", () => {
 
 describe("agent list", () => {
 	it("shows each agent's socket, whether it exists, and the MCP status", async () => {
-		const { d, out } = makeDeps({ socketExists: (p: string) => p.includes("repo") }, { [claude("repo")]: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } }), [claude("glmtest")]: JSON.stringify({ mcpServers: { github: OLD } }) });
+		const { d, out } = makeDeps(
+			{ socketExists: (p: string) => p.includes("repo") },
+			{
+				[claude("repo")]: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } }),
+				[claude("glmtest")]: JSON.stringify({ mcpServers: { github: OLD } })
+			}
+		);
 		expect(await agentCommand("list", [], config, d)).toBe(0);
 		expect(out).toContain("repo  /run/gh-broker/agents/repo.sock  socket: yes  mcp: ok");
-		expect(out).toContain("glmtest  /run/gh-broker/agents/glmtest.sock  socket: no  mcp: points elsewhere  (group members incomplete; run agent add)");
+		expect(out).toContain(
+			"glmtest  /run/gh-broker/agents/glmtest.sock  socket: no  mcp: points elsewhere  (group members incomplete; run agent add)"
+		);
 		const unsafe = makeDeps({ mcpIO: unsafeIO });
 		await agentCommand("list", [], config, unsafe.d);
 		expect(unsafe.out).toContain("repo  /run/gh-broker/agents/repo.sock  socket: yes  mcp: unsafe (/home/repo/.claude.json is a symlink)");
-		const broken = makeDeps({ mcpIO: { read: (p: string) => { if (p.includes("glmtest")) throw new Error("ERR_STRING_TOO_LONG"); return undefined; }, write: () => {} } });
+		const broken = makeDeps({
+			mcpIO: {
+				read: (p: string) => {
+					if (p.includes("glmtest")) throw new Error("ERR_STRING_TOO_LONG");
+					return undefined;
+				},
+				write: () => {}
+			}
+		});
 		expect(await agentCommand("list", [], config, broken.d)).toBe(0);
-		expect(broken.out).toContain("glmtest  /run/gh-broker/agents/glmtest.sock  socket: yes  mcp: can't read (ERR_STRING_TOO_LONG)  (group members incomplete; run agent add)");
+		expect(broken.out).toContain(
+			"glmtest  /run/gh-broker/agents/glmtest.sock  socket: yes  mcp: can't read (ERR_STRING_TOO_LONG)  (group members incomplete; run agent add)"
+		);
 		expect(broken.out).toContain("repo  /run/gh-broker/agents/repo.sock  socket: yes  mcp: missing");
 	});
 
@@ -186,10 +260,13 @@ describe("agent list", () => {
 		const none = makeDeps({ groups: () => [] });
 		await agentCommand("list", [], config, none.d);
 		expect(none.out[0]).toContain("no agents registered");
-		const ghost = makeDeps({ groups: () => [{ name: "gh-broker-agent-ghost", gid: 1, members: ["gh-broker", "ghost"] }], versions: () => ({ pkg: "2", deployed: "1" }) });
+		const ghost = makeDeps({
+			groups: () => [{ name: "gh-broker-agent-ghost", gid: 1, members: ["gh-broker", "ghost"] }],
+			versions: () => ({ pkg: "2", deployed: "1" })
+		});
 		await agentCommand("list", [], config, ghost.d);
 		expect(ghost.out[0]).toContain("mcp: no such user");
-		expect(ghost.err[0]).toContain("run \"sudo gh-broker upgrade\"");
+		expect(ghost.err[0]).toContain('run "sudo gh-broker upgrade"');
 		const missing = makeDeps();
 		await agentCommand("list", [], config, missing.d);
 		expect(missing.out[0]).toContain("mcp: missing");
@@ -244,20 +321,37 @@ describe("other Claude config folders (#163)", () => {
 	};
 
 	it("sync updates every folder that has a .claude.json, skips the rest, and confines found folders to the home", async () => {
-		const { d, out, files, pins } = withFolders({ [`${SEC}/.claude.json`]: JSON.stringify({ mcpServers: { github: OLD } }), [`${VLLM}/.claude.json`]: "{}" });
+		const { d, out, files, pins } = withFolders({
+			[`${SEC}/.claude.json`]: JSON.stringify({ mcpServers: { github: OLD } }),
+			[`${VLLM}/.claude.json`]: "{}"
+		});
 		expect(await agentCommand("sync", ["repo"], config, d)).toBe(0);
 		expect(JSON.parse(files[`${SEC}/.claude.json`]).mcpServers.github).toEqual(mcpEntry("repo", DIR));
 		expect(JSON.parse(files[`${VLLM}/.claude.json`]).mcpServers.github).toEqual(mcpEntry("repo", DIR));
 		expect(files["/home/repo/.claude/.claude.json"]).toBeUndefined(); // no file there: not created
-		expect(pins).toEqual(["/home/repo/.claude|/home/repo", "closed /home/repo/.claude", `${SEC}|/home/repo`, `closed ${SEC}`, `${VLLM}|/home/repo`, `closed ${VLLM}`]);
-		expect(out).toContain(`repo: MCP config written in ${SEC}/.claude.json (entry "github"); previous file saved as .claude.json.gh-broker.bak`);
+		expect(pins).toEqual([
+			"/home/repo/.claude|/home/repo",
+			"closed /home/repo/.claude",
+			`${SEC}|/home/repo`,
+			`closed ${SEC}`,
+			`${VLLM}|/home/repo`,
+			`closed ${VLLM}`
+		]);
+		expect(out).toContain(
+			`repo: MCP config written in ${SEC}/.claude.json (entry "github"); previous file saved as .claude.json.gh-broker.bak`
+		);
 		expect(out.filter((l: string) => l.includes("restart the user's running Claude sessions"))).toHaveLength(1);
 	});
 
 	it("saved folders come first, aren't confined to the home, and aren't repeated", async () => {
 		const { d, pins } = withFolders({}, {});
 		await agentCommand("sync", ["repo"], { ...config, claudeConfigDirs: { repo: [SAVED, SEC], other: ["/x"] } }, d);
-		expect(pins.filter((p) => !p.startsWith("closed"))).toEqual([`${SAVED}|-`, `${SEC}|-`, "/home/repo/.claude|/home/repo", `${VLLM}|/home/repo`]);
+		expect(pins.filter((p) => !p.startsWith("closed"))).toEqual([
+			`${SAVED}|-`,
+			`${SEC}|-`,
+			"/home/repo/.claude|/home/repo",
+			`${VLLM}|/home/repo`
+		]);
 	});
 
 	it("a hand-edited saved list that isn't a list of absolute paths gives no folders", async () => {
@@ -268,34 +362,62 @@ describe("other Claude config folders (#163)", () => {
 	});
 
 	it("a folder root won't use is skipped with a warning and doesn't fail the sync", async () => {
-		const { d, err, out } = withFolders({ [`${VLLM}/.claude.json`]: "{}" }, {
-			pin: (folder: string) => {
-				if (folder === SEC) throw new SkippedFolder(`${SEC} is owned by uid 0, not the agent user (uid 1000)`);
-				return folder === VLLM ? { io: ok({ [`${VLLM}/.claude.json`]: "{}" }), close: () => {} } : undefined;
+		const { d, err, out } = withFolders(
+			{ [`${VLLM}/.claude.json`]: "{}" },
+			{
+				pin: (folder: string) => {
+					if (folder === SEC) throw new SkippedFolder(`${SEC} is owned by uid 0, not the agent user (uid 1000)`);
+					return folder === VLLM ? { io: ok({ [`${VLLM}/.claude.json`]: "{}" }), close: () => {} } : undefined;
+				}
 			}
-		});
+		);
 		expect(await agentCommand("sync", ["repo"], config, d)).toBe(0);
 		expect(err).toEqual([`repo: skipped ${SEC} is owned by uid 0, not the agent user (uid 1000)`]);
 		expect(out.join("\n")).toContain(`MCP config written in ${VLLM}/.claude.json`);
 	});
 
 	it("a failed write in another folder is reported with its path and fails the sync", async () => {
-		const { d, err } = withFolders({}, {
-			pin: (folder: string) => (folder === SEC ? { io: { read: () => ({ text: "{}", stat: { uid: 1000, gid: 1000, mode: 0o100600 } }), write: () => { throw new Error("ENOSPC"); } }, close: () => {} } : undefined)
-		});
+		const { d, err } = withFolders(
+			{},
+			{
+				pin: (folder: string) =>
+					folder === SEC
+						? {
+								io: {
+									read: () => ({ text: "{}", stat: { uid: 1000, gid: 1000, mode: 0o100600 } }),
+									write: () => {
+										throw new Error("ENOSPC");
+									}
+								},
+								close: () => {}
+							}
+						: undefined
+			}
+		);
 		expect(configureMcp("repo", config, d)).toBe("failed");
-		expect(err[0]).toBe(`repo: could not write the MCP config in ${SEC}/.claude.json: ENOSPC. Add this under "mcpServers" in ${SEC}/.claude.json by hand:`);
+		expect(err[0]).toBe(
+			`repo: could not write the MCP config in ${SEC}/.claude.json: ENOSPC. Add this under "mcpServers" in ${SEC}/.claude.json by hand:`
+		);
 		expect(await agentCommand("sync", ["repo"], config, d)).toBe(1);
 	});
 
 	it("an unsafe or unreadable file in another folder counts, and the first bad result wins", () => {
-		const unchanged = withFolders({ [claude("repo")]: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } }) }, { pin: () => undefined });
+		const unchanged = withFolders(
+			{ [claude("repo")]: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } }) },
+			{ pin: () => undefined }
+		);
 		expect(configureMcp("repo", config, unchanged.d)).toBe("unchanged");
 		const unsafe = withFolders({}, { pin: (folder: string) => (folder === SEC ? { io: unsafeIO, close: () => {} } : undefined) });
 		expect(configureMcp("repo", config, unsafe.d)).toBe("unsafe");
-		const both = withFolders({ [claude("repo")]: "{nope" }, { pin: (folder: string) => (folder === SEC ? { io: unsafeIO, close: () => {} } : undefined) });
+		const both = withFolders(
+			{ [claude("repo")]: "{nope" },
+			{ pin: (folder: string) => (folder === SEC ? { io: unsafeIO, close: () => {} } : undefined) }
+		);
 		expect(configureMcp("repo", config, both.d)).toBe("unreadable");
-		const late = withFolders({}, { pin: (folder: string) => (folder === SEC ? { io: ok({ [`${SEC}/.claude.json`]: "{nope" }), close: () => {} } : undefined) });
+		const late = withFolders(
+			{},
+			{ pin: (folder: string) => (folder === SEC ? { io: ok({ [`${SEC}/.claude.json`]: "{nope" }), close: () => {} } : undefined) }
+		);
 		expect(configureMcp("repo", config, late.d)).toBe("unreadable");
 	});
 
@@ -315,11 +437,15 @@ describe("other Claude config folders (#163)", () => {
 		await expect(agentCommand("sync", ["--claude-config", SAVED], config, d)).rejects.toThrow(/needs the agent named/);
 		await expect(agentCommand("sync", ["repo", "--claude-config", "rel/dir"], config, d)).rejects.toThrow(/takes an absolute folder/);
 		await expect(agentCommand("sync", ["repo", "--claude-config"], config, d)).rejects.toThrow(/takes an absolute folder/);
-		await expect(agentCommand("remove", ["repo", "--claude-config", SAVED], config, d)).rejects.toThrow(/only goes with agent add or agent sync/);
+		await expect(agentCommand("remove", ["repo", "--claude-config", SAVED], config, d)).rejects.toThrow(
+			/only goes with agent add or agent sync/
+		);
 		await expect(agentCommand("list", ["--bogus"], config, d)).rejects.toThrow("unknown flag: --bogus");
 		await expect(agentCommand("add", ["ghost", "--claude-config", SAVED], config, d)).rejects.toThrow(/does not exist/);
 		await expect(agentCommand("add", ["Bad Name"], config, d)).rejects.toThrow(/not a valid agent user name/);
-		await expect(agentCommand("sync", ["newbie", "--claude-config", SAVED], config, d)).rejects.toThrow(/"newbie" is not a registered agent/);
+		await expect(agentCommand("sync", ["newbie", "--claude-config", SAVED], config, d)).rejects.toThrow(
+			/"newbie" is not a registered agent/
+		);
 		await expect(agentCommand("sync", ["Bad Name", "--claude-config", SAVED], config, d)).rejects.toThrow(/not a valid agent user name/);
 		expect(d.writeConfig).not.toHaveBeenCalled();
 	});
@@ -345,10 +471,22 @@ describe("other Claude config folders (#163)", () => {
 	});
 
 	it("remove reports a folder it can't clean and a config it can't write, and carries on", async () => {
-		const boom = withFolders({}, { pin: (folder: string) => { if (folder === VLLM) throw new Error("EACCES"); return undefined; }, });
-		boom.d.writeConfig = () => { throw new Error("EROFS"); };
+		const boom = withFolders(
+			{},
+			{
+				pin: (folder: string) => {
+					if (folder === VLLM) throw new Error("EACCES");
+					return undefined;
+				}
+			}
+		);
+		boom.d.writeConfig = () => {
+			throw new Error("EROFS");
+		};
 		expect(await agentCommand("remove", ["repo"], { ...config, claudeConfigDirs: { repo: [SAVED] } }, boom.d)).toBe(0);
-		expect(boom.err).toContain(`repo: could not remove the broker entry from ${VLLM}/.claude.json: EACCES. The agent is unregistered anyway; remove the entry by hand.`);
+		expect(boom.err).toContain(
+			`repo: could not remove the broker entry from ${VLLM}/.claude.json: EACCES. The agent is unregistered anyway; remove the entry by hand.`
+		);
 		expect(boom.err).toContain("repo: could not update the broker config: EROFS. Remove claudeConfigDirs.repo from it by hand.");
 		const none = withFolders({});
 		await agentCommand("remove", ["repo"], config, none.d);
@@ -356,14 +494,19 @@ describe("other Claude config folders (#163)", () => {
 	});
 
 	it("list shows the other folders' status after the home one", async () => {
-		const { d, out } = withFolders({ [claude("repo")]: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } }) }, {
-			pin: (folder: string) => {
-				if (folder === VLLM) throw new SkippedFolder(`${VLLM} is outside the agent's home directory`);
-				if (folder === "/home/repo/.claude") throw new Error("EIO");
-				return { io: ok({ [`${SEC}/.claude.json`]: JSON.stringify({ mcpServers: { github: OLD } }) }), close: () => {} };
+		const { d, out } = withFolders(
+			{ [claude("repo")]: JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } }) },
+			{
+				pin: (folder: string) => {
+					if (folder === VLLM) throw new SkippedFolder(`${VLLM} is outside the agent's home directory`);
+					if (folder === "/home/repo/.claude") throw new Error("EIO");
+					return { io: ok({ [`${SEC}/.claude.json`]: JSON.stringify({ mcpServers: { github: OLD } }) }), close: () => {} };
+				}
 			}
-		});
+		);
 		await agentCommand("list", [], config, d);
-		expect(out.find((l: string) => l.startsWith("repo "))).toBe(`repo  /run/gh-broker/agents/repo.sock  socket: yes  mcp: ok (/home/repo/.claude: can't read (EIO), ${SEC}: points elsewhere, ${VLLM}: skipped (${VLLM} is outside the agent's home directory))`);
+		expect(out.find((l: string) => l.startsWith("repo "))).toBe(
+			`repo  /run/gh-broker/agents/repo.sock  socket: yes  mcp: ok (/home/repo/.claude: can't read (EIO), ${SEC}: points elsewhere, ${VLLM}: skipped (${VLLM} is outside the agent's home directory))`
+		);
 	});
 });

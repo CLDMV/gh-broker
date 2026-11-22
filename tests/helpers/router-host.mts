@@ -13,6 +13,14 @@ import { GhcrService } from "../../src/verbs/ghcr_push.ts";
  */
 export class HostRouter extends RealRouter {
 	constructor(config: any, secrets: any, upstream: any, appAuth?: any, otp?: any, ghcr?: any, resolveToken?: any) {
-		super(config, secrets, upstream, appAuth, otp ?? new OtpGate(config, secrets), ghcr ?? (config.ghcr ? new GhcrService(config.ghcr, secrets) : undefined), resolveToken);
+		super(
+			config,
+			secrets,
+			upstream,
+			appAuth,
+			otp ?? new OtpGate(config, secrets),
+			ghcr ?? (config.ghcr ? new GhcrService(config.ghcr, secrets) : undefined),
+			resolveToken
+		);
 	}
 }

@@ -107,7 +107,12 @@ describe("Router.call", () => {
 	});
 
 	it("advertisedTools leaves out a tool whose optional integration is not set up", () => {
-		const cfg = makeConfig({ tools: [{ name: "get_me", mode: "read" }, { name: "npm_scaffold", mode: "write", custom: true }] });
+		const cfg = makeConfig({
+			tools: [
+				{ name: "get_me", mode: "read" },
+				{ name: "npm_scaffold", mode: "write", custom: true }
+			]
+		});
 		expect(new Router(cfg, secrets as any, upstream as any).advertisedTools().map((t) => t.name)).toEqual(["get_me"]);
 	});
 
@@ -181,7 +186,13 @@ describe("Router.call", () => {
 			const del = await r.call("delete_branch", { owner: "cldmv", repo: "x", branch: "feat/y" });
 			expect(JSON.parse((del.content[0] as any).text)).toMatchObject({ deleted: "feat/y", sha: "abc" });
 			const dis = await r.call("dismiss_alert", { owner: "cldmv", repo: "x", kind: "dependabot", alertNumber: 5, reason: "not_used" });
-			expect(JSON.parse((dis.content[0] as any).text)).toEqual({ kind: "dependabot", number: 5, state: "dismissed", reason: "not_used", url: null });
+			expect(JSON.parse((dis.content[0] as any).text)).toEqual({
+				kind: "dependabot",
+				number: 5,
+				state: "dismissed",
+				reason: "not_used",
+				url: null
+			});
 			expect(Octokit).toHaveBeenLastCalledWith({ auth: "token:cred:cldmv-write" });
 		});
 
@@ -203,17 +214,27 @@ describe("Router.call", () => {
 
 		it("npm_scaffold is unavailable when its token is not stored", async () => {
 			secrets.has.mockImplementation((ref: string) => ref !== "cred:npm-token");
-			const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } });
+			const cfg = makeConfig({
+				tools: [{ name: "npm_scaffold", mode: "write", custom: true }],
+				npm: { token: "cred:npm-token", scopes: ["@cldmv"] }
+			});
 			const r = new Router(cfg, secrets as any, upstream as any);
-			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" })).rejects.toThrow(/its credential "npm-token" is not stored/);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" })).rejects.toThrow(
+				/its credential "npm-token" is not stored/
+			);
 			expect(secrets.resolve).not.toHaveBeenCalled();
 		});
 
 		it("npm_scaffold reads GitHub on the READ PAT and resolves the npm token", async () => {
 			requestMock.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
-			const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"] } });
+			const cfg = makeConfig({
+				tools: [{ name: "npm_scaffold", mode: "write", custom: true }],
+				npm: { token: "cred:npm-token", scopes: ["@cldmv"] }
+			});
 			const r = new Router(cfg, secrets as any, upstream as any);
-			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" })).rejects.toThrow(/repository cldmv\/x not found/);
+			await expect(r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" })).rejects.toThrow(
+				/repository cldmv\/x not found/
+			);
 			expect(Octokit).toHaveBeenLastCalledWith({ auth: "token:cred:cldmv-read" });
 			expect(secrets.resolve).toHaveBeenCalledWith("cred:npm-token");
 		});
@@ -235,11 +256,18 @@ describe("Router.call", () => {
 			});
 			vi.stubGlobal("fetch", fetchMock);
 			try {
-				const cfg = makeConfig({ tools: [{ name: "npm_scaffold", mode: "write", custom: true }], npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://npm.example.test" } });
+				const cfg = makeConfig({
+					tools: [{ name: "npm_scaffold", mode: "write", custom: true }],
+					npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://npm.example.test" }
+				});
 				const r = new Router(cfg, secrets as any, upstream as any);
 				const out = await r.call("npm_scaffold", { owner: "cldmv", repo: "x", package: "@cldmv/x", npm_otp: "123456" });
 				expect(JSON.parse((out.content[0] as any).text)).toMatchObject({ status: "needs_otp", done: ["publish"], remaining: ["trust"] });
-				expect(urls).toEqual(["GET https://npm.example.test/@cldmv%2fx?write=true", "PUT https://npm.example.test/@cldmv%2fx", "GET https://npm.example.test/@cldmv%2fx?write=true"]);
+				expect(urls).toEqual([
+					"GET https://npm.example.test/@cldmv%2fx?write=true",
+					"PUT https://npm.example.test/@cldmv%2fx",
+					"GET https://npm.example.test/@cldmv%2fx?write=true"
+				]);
 				expect(fetchMock.mock.calls[1]![1].headers.authorization).toBe("Bearer token:cred:npm-token");
 			} finally {
 				vi.unstubAllGlobals();
@@ -312,7 +340,10 @@ describe("Router.call", () => {
 		it("report_release_prs runs on a read-PAT Octokit and returns the JSON report as text", async () => {
 			requestMock.mockImplementation(async (route: string) =>
 				route === "POST /graphql"
-					? { data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } }, headers: {} }
+					? {
+							data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } },
+							headers: {}
+						}
 					: { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} }
 			);
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
@@ -322,7 +353,11 @@ describe("Router.call", () => {
 				content: [
 					{
 						type: "text",
-						text: JSON.stringify({ scanned: { releasePrs: 0 }, summary: { ready: 0, needsChangelog: 0, unknownVersion: 0 }, releasePrs: [] })
+						text: JSON.stringify({
+							scanned: { releasePrs: 0 },
+							summary: { ready: 0, needsChangelog: 0, unknownVersion: 0 },
+							releasePrs: []
+						})
 					}
 				]
 			});
@@ -367,7 +402,10 @@ describe("Router.call", () => {
 		it("report_dependents runs on a read-PAT Octokit and returns the JSON report as text", async () => {
 			requestMock.mockImplementation(async (route: string) =>
 				route === "POST /graphql"
-					? { data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } }, headers: {} }
+					? {
+							data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } },
+							headers: {}
+						}
 					: { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} }
 			);
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
@@ -381,13 +419,21 @@ describe("Router.call", () => {
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
 			const out = await r.call("report_custom_properties", { owner: "cldmv", repo: "nexus" });
 			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
-			expect(JSON.parse((out as any).content[0].text)).toEqual({ owner: "cldmv", repo: "nexus", repos: [{ repo: "nexus", properties: { "branch-model": "v4" } }], count: 1 });
+			expect(JSON.parse((out as any).content[0].text)).toEqual({
+				owner: "cldmv",
+				repo: "nexus",
+				repos: [{ repo: "nexus", properties: { "branch-model": "v4" } }],
+				count: 1
+			});
 		});
 
 		it("report_dependents looks up latest on the configured npm registry", async () => {
 			requestMock.mockImplementation(async (route: string) =>
 				route === "POST /graphql"
-					? { data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } }, headers: {} }
+					? {
+							data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } },
+							headers: {}
+						}
 					: { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} }
 			);
 			const fetchMock = vi.fn(async () => ({ status: 200, headers: { get: () => null }, text: async () => '{"version":"2.0.0"}' }));
@@ -404,7 +450,9 @@ describe("Router.call", () => {
 		});
 
 		it("report_ci_status runs on a read-PAT Octokit and returns the JSON report as text", async () => {
-			requestMock.mockResolvedValueOnce({ data: { head: { sha: "abc" } }, headers: {} }).mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
+			requestMock
+				.mockResolvedValueOnce({ data: { head: { sha: "abc" } }, headers: {} })
+				.mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
 			const out = await r.call("report_ci_status", { owner: "cldmv", repo: "gh-broker", pull: 5 });
 			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
@@ -417,12 +465,22 @@ describe("Router.call", () => {
 			const queuePrRunJob = () =>
 				requestMock
 					.mockResolvedValueOnce({ data: { head: { sha: "abc" } }, headers: {} })
-					.mockResolvedValueOnce({ data: { workflow_runs: [{ id: 9, name: "CI", status: "completed", conclusion: "failure", html_url: "https://gh/run/9" }] }, headers: {} })
-					.mockResolvedValueOnce({ data: { jobs: [{ id: 555, name: "test", status: "completed", conclusion: "failure", html_url: "https://gh/job/555", steps: [] }] }, headers: {} });
+					.mockResolvedValueOnce({
+						data: { workflow_runs: [{ id: 9, name: "CI", status: "completed", conclusion: "failure", html_url: "https://gh/run/9" }] },
+						headers: {}
+					})
+					.mockResolvedValueOnce({
+						data: {
+							jobs: [{ id: 555, name: "test", status: "completed", conclusion: "failure", html_url: "https://gh/job/555", steps: [] }]
+						},
+						headers: {}
+					});
 
 			it("calls get_job_logs with failed_only+run_id and attaches the matched job's log", async () => {
 				queuePrRunJob();
-				upstream.forward.mockResolvedValue({ content: [{ type: "text", text: JSON.stringify({ logs: [{ job_id: 555, logs_content: "boom" }] }) }] });
+				upstream.forward.mockResolvedValue({
+					content: [{ type: "text", text: JSON.stringify({ logs: [{ job_id: 555, logs_content: "boom" }] }) }]
+				});
 				const r = new Router(makeConfig(), secrets as any, upstream as any);
 				const out: any = await r.call("report_ci_status", { owner: "cldmv", repo: "gh-broker", pull: 5, verbosity: 3 });
 				expect(upstream.forward).toHaveBeenCalledWith(
@@ -467,7 +525,9 @@ describe("Router.call", () => {
 
 			it("ignores a logs entry with a malformed job_id/logs_content", async () => {
 				queuePrRunJob();
-				upstream.forward.mockResolvedValue({ content: [{ type: "text", text: JSON.stringify({ logs: [{ job_id: "not-a-number", logs_content: "x" }] }) }] });
+				upstream.forward.mockResolvedValue({
+					content: [{ type: "text", text: JSON.stringify({ logs: [{ job_id: "not-a-number", logs_content: "x" }] }) }]
+				});
 				const r = new Router(makeConfig(), secrets as any, upstream as any);
 				const out: any = await r.call("report_ci_status", { owner: "cldmv", repo: "gh-broker", pull: 5, verbosity: 3 });
 				expect(JSON.parse(out.content[0].text).failures[0].logTail).toBeUndefined();
@@ -485,9 +545,19 @@ describe("Router.call", () => {
 
 		it("forwards untouched when method isn't get, even with ciVerbosity present", async () => {
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
-			const out = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get_diff", ciVerbosity: 1 });
+			const out = await r.call("pull_request_read", {
+				owner: "cldmv",
+				repo: "gh-broker",
+				pullNumber: 5,
+				method: "get_diff",
+				ciVerbosity: 1
+			});
 			expect(out).toEqual({ content: [{ type: "text", text: "ok" }] });
-			expect(upstream.forward).toHaveBeenCalledWith("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get_diff" }, "token:cred:cldmv-read");
+			expect(upstream.forward).toHaveBeenCalledWith(
+				"pull_request_read",
+				{ owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get_diff" },
+				"token:cred:cldmv-read"
+			);
 		});
 
 		it("injects a ci field computed from the PR's head sha when ciVerbosity is given", async () => {
@@ -497,23 +567,48 @@ describe("Router.call", () => {
 			const out = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get", ciVerbosity: 0 });
 			expect(Octokit).toHaveBeenCalledWith({ auth: "token:cred:cldmv-read" });
 			// Strips gh-broker's own params before forwarding upstream.
-			expect(upstream.forward).toHaveBeenCalledWith("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get" }, "token:cred:cldmv-read");
+			expect(upstream.forward).toHaveBeenCalledWith(
+				"pull_request_read",
+				{ owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get" },
+				"token:cred:cldmv-read"
+			);
 			expect(out).toEqual({
-				content: [{ type: "text", text: JSON.stringify({ number: 5, head: { sha: "abc123" }, ci: { pull: 5, summary: { passed: 0, failed: 0, pending: 0 } } }) }]
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({ number: 5, head: { sha: "abc123" }, ci: { pull: 5, summary: { passed: 0, failed: 0, pending: 0 } } })
+					}
+				]
 			});
 		});
 
 		it("tier 3 on the augmented pull_request_read also fetches logs via get_job_logs", async () => {
 			upstream.forward.mockImplementation(async (tool: string) => {
-				if (tool === "pull_request_read") return { content: [{ type: "text", text: JSON.stringify({ number: 5, head: { sha: "abc123" } }) }] };
-				if (tool === "get_job_logs") return { content: [{ type: "text", text: JSON.stringify({ logs: [{ job_id: 555, logs_content: "boom" }] }) }] };
+				if (tool === "pull_request_read")
+					return { content: [{ type: "text", text: JSON.stringify({ number: 5, head: { sha: "abc123" } }) }] };
+				if (tool === "get_job_logs")
+					return { content: [{ type: "text", text: JSON.stringify({ logs: [{ job_id: 555, logs_content: "boom" }] }) }] };
 				throw new Error(`unexpected upstream tool ${tool}`);
 			});
 			requestMock
-				.mockResolvedValueOnce({ data: { workflow_runs: [{ id: 9, name: "CI", status: "completed", conclusion: "failure", html_url: "https://gh/run/9" }] }, headers: {} })
-				.mockResolvedValueOnce({ data: { jobs: [{ id: 555, name: "test", status: "completed", conclusion: "failure", html_url: "https://gh/job/555", steps: [] }] }, headers: {} });
+				.mockResolvedValueOnce({
+					data: { workflow_runs: [{ id: 9, name: "CI", status: "completed", conclusion: "failure", html_url: "https://gh/run/9" }] },
+					headers: {}
+				})
+				.mockResolvedValueOnce({
+					data: {
+						jobs: [{ id: 555, name: "test", status: "completed", conclusion: "failure", html_url: "https://gh/job/555", steps: [] }]
+					},
+					headers: {}
+				});
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
-			const out: any = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, method: "get", ciVerbosity: 3 });
+			const out: any = await r.call("pull_request_read", {
+				owner: "cldmv",
+				repo: "gh-broker",
+				pullNumber: 5,
+				method: "get",
+				ciVerbosity: 3
+			});
 			expect(upstream.forward).toHaveBeenCalledWith(
 				"get_job_logs",
 				{ owner: "cldmv", repo: "gh-broker", run_id: 9, failed_only: true, return_content: true, tail_lines: 200 },
@@ -526,7 +621,13 @@ describe("Router.call", () => {
 			upstream.forward.mockResolvedValue({ content: [{ type: "text", text: JSON.stringify({ number: 5, head: { sha: "abc123" } }) }] });
 			requestMock.mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
 			const r = new Router(makeConfig(), secrets as any, upstream as any);
-			const out: any = await r.call("pull_request_read", { owner: "cldmv", repo: "gh-broker", pullNumber: 5, ciVerbosity: 0, logLines: 50 });
+			const out: any = await r.call("pull_request_read", {
+				owner: "cldmv",
+				repo: "gh-broker",
+				pullNumber: 5,
+				ciVerbosity: 0,
+				logLines: 50
+			});
 			expect(JSON.parse(out.content[0].text).ci).toEqual({ pull: 5, summary: { passed: 0, failed: 0, pending: 0 } });
 		});
 
@@ -574,7 +675,10 @@ describe("Router.call", () => {
 			it("tier 0 adds a ci summary to each item, strips the extension params and keeps other fields", async () => {
 				upstream.forward.mockResolvedValue(listText(prs));
 				requestMock
-					.mockResolvedValueOnce({ data: { workflow_runs: [{ id: 1, name: "CI", status: "completed", conclusion: "failure", html_url: "u" }] }, headers: {} })
+					.mockResolvedValueOnce({
+						data: { workflow_runs: [{ id: 1, name: "CI", status: "completed", conclusion: "failure", html_url: "u" }] },
+						headers: {}
+					})
 					.mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
 				const r = new Router(makeConfig(), secrets as any, upstream as any);
 				const out: any = await r.call("list_pull_requests", { ...base, ciVerbosity: 0, logLines: 5, maxDetail: 1 });
@@ -590,14 +694,22 @@ describe("Router.call", () => {
 				const failing = { id: 1, name: "CI", status: "completed", conclusion: "failure", html_url: "u" };
 				requestMock.mockImplementation(async (route: string) =>
 					route.endsWith("/jobs")
-						? { data: { jobs: [{ id: 7, name: "test", status: "completed", conclusion: "failure", html_url: "j", steps: [] }] }, headers: {} }
+						? {
+								data: { jobs: [{ id: 7, name: "test", status: "completed", conclusion: "failure", html_url: "j", steps: [] }] },
+								headers: {}
+							}
 						: { data: { workflow_runs: [failing] }, headers: {} }
 				);
 				const r = new Router(makeConfig(), secrets as any, upstream as any);
 				const out: any = await r.call("list_pull_requests", { ...base, ciVerbosity: 1, maxDetail: 1 });
 				const items = JSON.parse(out.content[0].text);
 				expect(items[0].ci.failures).toEqual([{ workflow: "CI", job: "test", runId: 1, runUrl: "u", conclusion: "failure" }]);
-				expect(items[1].ci).toEqual({ pull: 6, summary: { passed: 0, failed: 1, pending: 0 }, truncated: true, truncatedReason: "max-detail" });
+				expect(items[1].ci).toEqual({
+					pull: 6,
+					summary: { passed: 0, failed: 1, pending: 0 },
+					truncated: true,
+					truncatedReason: "max-detail"
+				});
 			});
 
 			it("tier 3 fetches failing job logs via get_job_logs", async () => {
@@ -607,18 +719,28 @@ describe("Router.call", () => {
 				});
 				requestMock.mockImplementation(async (route: string) =>
 					route.endsWith("/jobs")
-						? { data: { jobs: [{ id: 7, name: "test", status: "completed", conclusion: "failure", html_url: "j", steps: [] }] }, headers: {} }
+						? {
+								data: { jobs: [{ id: 7, name: "test", status: "completed", conclusion: "failure", html_url: "j", steps: [] }] },
+								headers: {}
+							}
 						: { data: { workflow_runs: [{ id: 1, name: "CI", status: "completed", conclusion: "failure", html_url: "u" }] }, headers: {} }
 				);
 				const r = new Router(makeConfig(), secrets as any, upstream as any);
 				const out: any = await r.call("list_pull_requests", { ...base, ciVerbosity: 3, logLines: 9 });
-				expect(upstream.forward).toHaveBeenCalledWith("get_job_logs", expect.objectContaining({ run_id: 1, tail_lines: 9 }), "token:cred:cldmv-read");
+				expect(upstream.forward).toHaveBeenCalledWith(
+					"get_job_logs",
+					expect.objectContaining({ run_id: 1, tail_lines: 9 }),
+					"token:cred:cldmv-read"
+				);
 				expect(JSON.parse(out.content[0].text)[0].ci.failures[0].logTail).toBe("boom");
 			});
 
 			it("marks PRs truncated once the rate-limit floor is hit", async () => {
 				upstream.forward.mockResolvedValue(listText(prs));
-				requestMock.mockResolvedValue({ data: { workflow_runs: [] }, headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "10" } });
+				requestMock.mockResolvedValue({
+					data: { workflow_runs: [] },
+					headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "10" }
+				});
 				const r = new Router(makeConfig(), secrets as any, upstream as any);
 				const out: any = await r.call("list_pull_requests", { ...base, ciVerbosity: 0 });
 				const items = JSON.parse(out.content[0].text);
@@ -631,12 +753,22 @@ describe("Router.call", () => {
 				requestMock.mockResolvedValueOnce({ data: { workflow_runs: [] }, headers: {} });
 				const r = new Router(makeConfig(), secrets as any, upstream as any);
 				const out: any = await r.call("list_pull_requests", { owner: "cldmv", ciVerbosity: 0 });
-				expect(JSON.parse(out.content[0].text)).toEqual([null, { title: "odd" }, { ...prs[0], ci: { pull: 5, summary: { passed: 0, failed: 0, pending: 0 } } }]);
+				expect(JSON.parse(out.content[0].text)).toEqual([
+					null,
+					{ title: "odd" },
+					{ ...prs[0], ci: { pull: 5, summary: { passed: 0, failed: 0, pending: 0 } } }
+				]);
 			});
 
 			it("returns the result untouched for no text block, non-JSON, non-array, or nothing to look up", async () => {
 				const r = new Router(makeConfig(), secrets as any, upstream as any);
-				for (const res of [{ content: [] }, { content: [{ type: "text", text: "not json" }] }, listText({ not: "an array" }), listText([]), listText([{ title: "x" }])]) {
+				for (const res of [
+					{ content: [] },
+					{ content: [{ type: "text", text: "not json" }] },
+					listText({ not: "an array" }),
+					listText([]),
+					listText([{ title: "x" }])
+				]) {
 					upstream.forward.mockResolvedValue(res);
 					expect(await r.call("list_pull_requests", { ...base, ciVerbosity: 0 })).toEqual(res);
 				}
@@ -662,7 +794,12 @@ describe("Router.call", () => {
 });
 
 describe("Router.call — GHCR verbs", () => {
-	const ghcr = { dropDir: "/srv/gh-broker/ghcr-drop", protectReleaseTags: true, maxArchiveBytes: 1024, owners: { cldmv: { username: "u", credential: "cred:cldmv-packages", images: ["hoot"] } } };
+	const ghcr = {
+		dropDir: "/srv/gh-broker/ghcr-drop",
+		protectReleaseTags: true,
+		maxArchiveBytes: 1024,
+		owners: { cldmv: { username: "u", credential: "cred:cldmv-packages", images: ["hoot"] } }
+	};
 	const tools = [
 		{ name: "ghcr_push", mode: "write", custom: true },
 		{ name: "ghcr_push_status", mode: "read", custom: true },
@@ -677,13 +814,17 @@ describe("Router.call — GHCR verbs", () => {
 
 	it("dispatches ghcr_push_status to the GHCR service and returns JSON", async () => {
 		const r = new Router(makeConfig({ tools, ghcr }), secrets as any, { forward: vi.fn() } as any);
-		expect(await r.call("ghcr_push_status", { owner: "cldmv" })).toEqual({ content: [{ type: "text", text: JSON.stringify({ jobs: [] }) }] });
+		expect(await r.call("ghcr_push_status", { owner: "cldmv" })).toEqual({
+			content: [{ type: "text", text: JSON.stringify({ jobs: [] }) }]
+		});
 	});
 
 	it("passes GHCR refusals through (allowlist checked before any network call or GHCR credential read)", async () => {
 		const r = new Router(makeConfig({ tools, ghcr }), secrets as any, { forward: vi.fn() } as any);
 		await expect(r.call("ghcr_tags", { owner: "cldmv", image: "private" })).rejects.toThrow(/not on the allowlist/);
-		await expect(r.call("ghcr_push", { owner: "cldmv", image: "private", tag: "t", archive: "a.tar" })).rejects.toThrow(/not on the allowlist/);
+		await expect(r.call("ghcr_push", { owner: "cldmv", image: "private", tag: "t", archive: "a.tar" })).rejects.toThrow(
+			/not on the allowlist/
+		);
 		expect(secrets.resolve).not.toHaveBeenCalledWith("cred:cldmv-packages");
 	});
 
@@ -694,7 +835,9 @@ describe("Router.call — GHCR verbs", () => {
 
 	it("refuses GHCR verbs when config.ghcr is absent", async () => {
 		const r = new Router(makeConfig({ tools }), secrets as any, { forward: vi.fn() } as any);
-		await expect(r.call("ghcr_push", { owner: "cldmv", image: "hoot", tag: "t", archive: "a" })).rejects.toThrow(/tool "ghcr_push" is not available on this broker: GHCR pushes are not configured/);
+		await expect(r.call("ghcr_push", { owner: "cldmv", image: "hoot", tag: "t", archive: "a" })).rejects.toThrow(
+			/tool "ghcr_push" is not available on this broker: GHCR pushes are not configured/
+		);
 	});
 
 	it("refuses an owner whose GHCR credential is not stored, while another owner's is", async () => {
@@ -702,11 +845,16 @@ describe("Router.call — GHCR verbs", () => {
 			dropDir: "/srv/x/drop",
 			protectReleaseTags: true,
 			maxArchiveBytes: 1,
-			owners: { cldmv: { username: "u", credential: "cred:cldmv-packages", images: ["hoot"] }, other: { username: "o", credential: "cred:other-packages", images: ["x"] } }
+			owners: {
+				cldmv: { username: "u", credential: "cred:cldmv-packages", images: ["hoot"] },
+				other: { username: "o", credential: "cred:other-packages", images: ["x"] }
+			}
 		};
 		secrets.has.mockImplementation((ref: string) => ref === "cred:other-packages");
 		const r = new Router(makeConfig({ tools, ghcr }), secrets as any, { forward: vi.fn() } as any);
-		await expect(r.call("ghcr_push_status", { owner: "cldmv" })).rejects.toThrow(/owner "cldmv"'s GHCR credential "cldmv-packages" is not stored/);
+		await expect(r.call("ghcr_push_status", { owner: "cldmv" })).rejects.toThrow(
+			/owner "cldmv"'s GHCR credential "cldmv-packages" is not stored/
+		);
 		await expect(r.call("ghcr_push_status", { owner: "other" })).resolves.toMatchObject({ content: [{ type: "text" }] });
 		expect(secrets.resolve).not.toHaveBeenCalledWith("cred:cldmv-packages");
 	});

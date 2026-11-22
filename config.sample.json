@@ -19,13 +19,9 @@
 	},
 	"npm": {
 		"token": "cred:npm-token",
-		"scopes": [
-			"@your-org"
-		],
+		"scopes": ["@your-org"],
 		"registry": "https://registry.npmjs.org",
-		"tokenOrgs": [
-			"your-org"
-		]
+		"tokenOrgs": ["your-org"]
 	},
 	"ghcr": {
 		"dropDir": "/srv/gh-broker/ghcr-drop",
@@ -35,10 +31,7 @@
 			"your-org": {
 				"username": "your-login",
 				"credential": "cred:your-org-packages",
-				"images": [
-					"your-image",
-					"your-image-worker-*"
-				]
+				"images": ["your-image", "your-image-worker-*"]
 			}
 		}
 	}

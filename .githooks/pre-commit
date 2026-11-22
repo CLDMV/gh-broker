@@ -1,0 +1,57 @@
+#!/bin/sh
+#
+# CLDMV fleet pre-commit hook.
+#
+# Runs the repo's lint + format checks before a commit, then any repo-local
+# `precommit:local` checks. Each uses `npm run <script> --if-present`, so this
+# is a graceful no-op in a repo that hasn't defined the script yet — the same
+# hook is safe to drop into any repo.
+#
+# Installed into .git/hooks/pre-commit by examples/git-hooks/install.mjs, wired
+# to the package.json `prepare` script (fires on `npm install`). It installs
+# into .git/hooks (NOT via core.hooksPath) on purpose: a global core.hooksPath
+# dispatcher chains to .git/hooks/<name>, so writing here keeps global policy
+# (e.g. no-coauthor / no-unsigned-push) intact while adding the lint/format gate.
+#
+# Scoping to staged files (optional): if package.json defines `lint:staged`
+# and/or `format:check:staged`, the hook calls that script with the staged
+# paths as arguments (`npm run lint:staged -- <paths>`) instead of running the
+# whole-repo `lint` / `format:check`. Each is chosen independently. The repo
+# decides how paths map to tools or workspace packages. With no staged scripts
+# the whole-repo `lint` / `format:check` run exactly as before. The hook stays
+# check-only: it never writes and never re-stages. Post-merge CI still runs the
+# full sweep.
+#
+# Project-specific extra checks: define a `precommit:local` npm script and it
+# runs last, after lint/format — no need to fork this shared hook.
+#
+# On failure:
+#   - formatting: run `npm run format` to auto-fix, then re-stage.
+#   - lint:       run `npm run lint` to see the problems.
+set -e
+
+# Does package.json define the given npm script?
+has_script() {
+	node -e 'try { process.exit(require("./package.json").scripts?.[process.argv[1]] ? 0 : 1); } catch { process.exit(1); }' "$1"
+}
+
+# Staged paths (added/copied/modified/renamed), NUL-delimited so names with
+# spaces or newlines survive. Empty when nothing is staged.
+staged_file="$(mktemp)"
+trap 'rm -f "$staged_file"' EXIT
+git diff --cached --name-only --diff-filter=ACMR -z > "$staged_file"
+
+# run_check <staged-script> <whole-repo-script>
+run_check() {
+	if has_script "$1"; then
+		if [ -s "$staged_file" ]; then
+			xargs -0 npm run "$1" -- < "$staged_file"
+		fi
+	else
+		npm run "$2" --if-present
+	fi
+}
+
+run_check lint:staged lint
+run_check format:check:staged format:check
+npm run precommit:local --if-present

@@ -14,11 +14,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OtpGate, OtpRefusal, machineConfig, otpAuditRow } from "../src/otp/gate.ts";
 import { otpSettings } from "../src/otp/policy.ts";
-import { base32Encode, hotp, stepAt, totpAt } from "../src/otp/totp.ts";
+import { base32Encode, totpAt } from "../src/otp/totp.ts";
 import { DEFAULTS, emptyPerson, formatStatus as libFormatStatus, parseOtpOptions, spendThrough, stepOtp } from "@cldmv/lib-otp";
 import { emptyState, emptyUser, personOf, secondsUntilFreshCode, spendRecentCodes } from "../src/otp/state.ts";
 import * as cliOtp from "../src/cli/otp.ts";
@@ -71,7 +71,8 @@ function refusal(fn: () => unknown): OtpRefusal {
 	throw new Error("expected a refusal");
 }
 
-const SPENT = /^OTP code for merge_pull_request is spent \(it, or a newer code, was already used\): ask the user for the next code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
+const SPENT =
+	/^OTP code for merge_pull_request is spent \(it, or a newer code, was already used\): ask the user for the next code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
 const UNSAVED = "OTP could not be checked: the broker could not save its OTP state. Nothing was run.";
 
 beforeEach(() => {
@@ -144,7 +145,11 @@ describe("the reason-code → audit-row table", () => {
 			case "locked-out":
 				return stepOtp(emptyPerson(), { kind: "code-bad", now: T0 }, parseOtpOptions({ maxFailures: 1 })).outcome!;
 			case "hard-locked-now":
-				return stepOtp(emptyPerson(), { kind: "code-bad", now: T0 }, parseOtpOptions({ maxFailures: 1, hardLockTrigger: { lockouts: 1, windowMs: 86_400_000 } })).outcome!;
+				return stepOtp(
+					emptyPerson(),
+					{ kind: "code-bad", now: T0 },
+					parseOtpOptions({ maxFailures: 1, hardLockTrigger: { lockouts: 1, windowMs: 86_400_000 } })
+				).outcome!;
 			default:
 				return { reason, ...over };
 		}
@@ -153,7 +158,14 @@ describe("the reason-code → audit-row table", () => {
 	it("locked-out → today's otp lockout row", () => {
 		const outcome = outcomeOf("locked-out");
 		expect(outcome).toMatchObject({ reason: "locked-out" });
-		expect(otpAuditRow(TOOL, "repo", outcome, opts)).toEqual({ tool: TOOL, user: "repo", decision: "deny", otp: "lockout", until: (outcome as any).until, detail: "5 bad codes" });
+		expect(otpAuditRow(TOOL, "repo", outcome, opts)).toEqual({
+			tool: TOOL,
+			user: "repo",
+			decision: "deny",
+			otp: "lockout",
+			until: (outcome as any).until,
+			detail: "5 bad codes"
+		});
 	});
 
 	it("hard-locked-now → today's otp hard-lock row (one row, replacing the lockout)", () => {
@@ -169,7 +181,14 @@ describe("the reason-code → audit-row table", () => {
 	});
 
 	it("every other outcome writes no extra row", () => {
-		for (const outcome of [outcomeOf("bad-code"), outcomeOf("spent-code"), outcomeOf("window"), outcomeOf("opened", { counter: 1, window: "w", expiresAt: null }), outcomeOf("locked", { until: "x" }), outcomeOf("hard-locked", { since: "x" })]) {
+		for (const outcome of [
+			outcomeOf("bad-code"),
+			outcomeOf("spent-code"),
+			outcomeOf("window"),
+			outcomeOf("opened", { counter: 1, window: "w", expiresAt: null }),
+			outcomeOf("locked", { until: "x" }),
+			outcomeOf("hard-locked", { since: "x" })
+		]) {
 			expect(otpAuditRow(TOOL, "repo", outcome, opts)).toBeUndefined();
 		}
 	});
@@ -244,8 +263,14 @@ describe("the CLI's spend runs through the package's spendThrough", () => {
 	it("lib-otp's admin-unlock names its three outcomes (library behavior, exercised here for the mapping)", () => {
 		const machine = parseOtpOptions();
 		expect(stepOtp(emptyPerson(), { kind: "admin-unlock", by: "root", now: NOW }, machine).outcome).toEqual({ reason: "no-entry" });
-		expect(stepOtp(personOf({ ...emptyUser(), failures: 2 }), { kind: "admin-unlock", by: "root", now: NOW }, machine).outcome).toEqual({ reason: "cleared" });
-		const unlocked = stepOtp(personOf({ ...emptyUser(), hardLock: { since: "2026-11-01T12:00:00.000Z", lockouts: 3 } }), { kind: "admin-unlock", by: "root", now: NOW }, machine);
+		expect(stepOtp(personOf({ ...emptyUser(), failures: 2 }), { kind: "admin-unlock", by: "root", now: NOW }, machine).outcome).toEqual({
+			reason: "cleared"
+		});
+		const unlocked = stepOtp(
+			personOf({ ...emptyUser(), hardLock: { since: "2026-11-01T12:00:00.000Z", lockouts: 3 } }),
+			{ kind: "admin-unlock", by: "root", now: NOW },
+			machine
+		);
 		expect(unlocked.outcome).toEqual({ reason: "unlocked" });
 		// The post-unlock record keeps the machine's spend and the windows.
 		expect(unlocked.state.lastCounter).toBe(Math.floor(NOW / 30_000) + 1);
@@ -261,16 +286,27 @@ describe("the CLI's spend runs through the package's spendThrough", () => {
 describe("the CLI status rendering over the package's formatters", () => {
 	it("each user's block is the package's formatStatus block, byte-identical", () => {
 		const hardLock = { since: "2026-11-01T12:00:00.000Z", lockouts: 3 };
-		const block = libFormatStatus([{ person: "repo", locked: true, failures: 2, maxFailures: 5, lockedUntil: null, lockoutsInWindow: 3, maxLockouts: 3, hardLock }], {
-			configured: true,
-			unlockCommand: "sudo gh-broker otp unlock"
-		}).slice(1);
-		const lines = cliOtp.formatStatus([{ user: "repo", locked: true, failures: 2, maxFailures: 5, lockedUntil: null, lockoutsLast24h: 3, maxLockouts: 3, hardLock }], {
-			statePath: "/p",
-			fileStatus: "ok",
-			configured: true
-		});
+		const block = libFormatStatus(
+			[{ person: "repo", locked: true, failures: 2, maxFailures: 5, lockedUntil: null, lockoutsInWindow: 3, maxLockouts: 3, hardLock }],
+			{
+				configured: true,
+				unlockCommand: "sudo gh-broker otp unlock"
+			}
+		).slice(1);
+		const lines = cliOtp.formatStatus(
+			[{ user: "repo", locked: true, failures: 2, maxFailures: 5, lockedUntil: null, lockoutsLast24h: 3, maxLockouts: 3, hardLock }],
+			{
+				statePath: "/p",
+				fileStatus: "ok",
+				configured: true
+			}
+		);
 		expect(lines).toEqual(["OTP configured: yes", "state file: /p (ok)", ...block]);
-		expect(block).toEqual(["repo:", "  bad codes so far: 2 of 5", "  short lockouts in the last 24 h: 3 of 3", `  HARD LOCK since 2026-11-01T12:00:00.000Z after 3 lockouts. Clear it with: sudo gh-broker otp unlock repo`]);
+		expect(block).toEqual([
+			"repo:",
+			"  bad codes so far: 2 of 5",
+			"  short lockouts in the last 24 h: 3 of 3",
+			`  HARD LOCK since 2026-11-01T12:00:00.000Z after 3 lockouts. Clear it with: sudo gh-broker otp unlock repo`
+		]);
 	});
 });

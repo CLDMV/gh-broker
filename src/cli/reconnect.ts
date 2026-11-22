@@ -31,7 +31,7 @@ import { brokerKeyOf, extraFolders, inFolder, MCP_FILE, type FolderIo, type Plac
 import { TmuxTimeout, type Pane, type TmuxServer, type TmuxServers } from "./tmux.ts";
 import type { ConfigLayer } from "./config-merge.ts";
 
-export const RECONNECT_HELP = `agent reconnect [<user>] [--dry-run]
+export const RECONNECT_HELP = `agent reconnect [<user>] [--dry-run] [--wait <time>]
 
 Sends "/mcp reconnect <key>" to every running Claude Code session of a
 registered agent (or all of them): the sessions the broker restart drops.
@@ -40,9 +40,12 @@ its .claude.json files. A pane is skipped, with its id and the reason, when
 someone is typing in it, a dialog (a permission prompt, a question, a menu)
 is showing, it is in copy mode, or its key is not one that is safe to type
 blind. Claude working in it is fine: what is typed is queued.
-Exits 0 when every pane was sent to, 3 when some were skipped (run it
-again once they're clear), 1 when a named user doesn't exist. --dry-run lists what it would
-send where.`;
+--dry-run lists what it would send where. --wait <time> (e.g. 90s, 5m; at
+most 30m) keeps checking the panes skipped for text in the input box or a
+dialog every few seconds, and sends to each once it is clear; the ones still
+blocked when the time is up are skipped. Exits 0 when every pane was sent
+to, 3 when some were skipped (run it again once they're clear), 1 when a
+named user doesn't exist.`;
 
 /** The effects `agent reconnect` (and `upgrade`'s last step) use. */
 export interface ReconnectDeps {
@@ -59,6 +62,22 @@ export interface ReconnectDeps {
 	tmuxPaneText: (server: TmuxServer, pane: string, info: UserInfo) => string | undefined;
 	/** Send literal text to a pane as the agent and press Enter (tmux send-keys -l, then a separate Enter). */
 	tmuxSend: (server: TmuxServer, pane: string, text: string, info: UserInfo) => void;
+	/** The clock and a blocking pause, for --wait. */
+	now: () => number;
+	sleep: (ms: number) => void;
+}
+
+/** How often --wait re-checks the panes it is waiting on. */
+export const WAIT_POLL_MS = 5000;
+/** The longest --wait accepted. */
+export const MAX_WAIT_MS = 30 * 60 * 1000;
+
+/** "90", "90s", "5m" -> milliseconds; undefined when it isn't one of those or is over MAX_WAIT_MS. */
+export function parseWait(v: string): number | undefined {
+	const m = /^(\d{1,4})(s|m)?$/.exec(v);
+	if (!m) return undefined;
+	const ms = Number(m[1]) * (m[2] === "m" ? 60_000 : 1000);
+	return ms > 0 && ms <= MAX_WAIT_MS ? ms : undefined;
 }
 
 /**
@@ -69,6 +88,7 @@ export interface ReconnectDeps {
  */
 
 /** Any CSI escape (SGR colours and attributes, cursor moves) — dropped before matching screen shapes. */
+// eslint-disable-next-line no-control-regex -- matching terminal escape sequences is the point
 const CSI = /\x1b\[[0-9;:?]*[ -/]*[@-~]/g;
 
 /**
@@ -80,6 +100,7 @@ export function undimmed(line: string): string {
 	let out = "";
 	let dim = false;
 	let last = 0;
+	// eslint-disable-next-line no-control-regex -- matching terminal escape sequences is the point
 	for (const m of line.matchAll(/\x1b\[([0-9;:?]*)([ -/]*[@-~])/g)) {
 		if (!dim) out += line.slice(last, m.index);
 		last = m.index! + m[0].length;
@@ -141,21 +162,31 @@ export function composerState(text: string): "empty" | "typing" | "none" {
 export const safeKey = (key: string): boolean => /^[A-Za-z0-9_.-]{1,64}$/.test(key);
 
 /** Control characters never reach root's terminal in a log line: a socket path, pane id or a tmux error message carrying C0 or C1 controls (U+009B is CSI on some terminals) is blanked out. */
+// eslint-disable-next-line no-control-regex -- blanking control characters is the point
 const clean = (s: string): string => s.replace(/[\x00-\x1f\x7f\x80-\x9f]/g, "?");
 
-/** Split `agent reconnect` arguments into the agent users (at most one), --dry-run and --help. */
-function parseReconnectArgs(rest: string[]): { users: string[]; dryRun: boolean; help: boolean } {
+/** Split `agent reconnect` arguments into the agent users (at most one), --dry-run, --wait and --help. */
+function parseReconnectArgs(rest: string[]): { users: string[]; dryRun: boolean; help: boolean; waitMs: number; wait?: string } {
 	const users: string[] = [];
 	let dryRun = false;
 	let help = false;
-	for (const a of rest) {
+	let waitMs = 0;
+	let wait: string | undefined;
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i]!;
 		if (a === "--dry-run") dryRun = true;
 		else if (a === "-h" || a === "--help") help = true;
-		else if (a.startsWith("-")) throw new Error(`unknown flag: ${a}`);
+		else if (a === "--wait" || a.startsWith("--wait=")) {
+			const v = a === "--wait" ? rest[++i] : a.slice("--wait=".length);
+			const ms = v === undefined ? undefined : parseWait(v);
+			if (ms === undefined) throw new Error("--wait takes a time up to 30m, e.g. --wait 90s or --wait 5m");
+			waitMs = ms;
+			wait = v;
+		} else if (a.startsWith("-")) throw new Error(`unknown flag: ${a}`);
 		else users.push(a);
 	}
 	if (users.length > 1) throw new Error("name at most one agent user: sudo gh-broker agent reconnect [<user>]");
-	return { users, dryRun, help };
+	return { users, dryRun, help, waitMs, ...(wait !== undefined ? { wait } : {}) };
 }
 
 /**
@@ -189,7 +220,7 @@ function keyFor(pane: Pane, info: UserInfo, keys: Map<string, string>): string |
  * there were none), 3 when some were only skipped (they can be retried), 1 when a user is missing.
  */
 export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps): number {
-	const { users, dryRun, help } = parseReconnectArgs(rest);
+	const { users, dryRun, help, waitMs, wait } = parseReconnectArgs(rest);
 	if (help) {
 		d.log(RECONNECT_HELP);
 		return 0;
@@ -207,6 +238,15 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		d.log(`${user} ${clean(socket)} ${clean(pane)} ${key ?? "-"} skipped (${why})`);
 		skipped++;
 	};
+	// With --wait, a pane blocked only by text in its input box or a dialog is set aside and
+	// re-checked until it clears or the time runs out, instead of being skipped now.
+	const waiting: { user: string; socket: string; server: TmuxServer; info: UserInfo; pane: string; key: string; why: string }[] = [];
+	const blocked = (user: string, socket: string, server: TmuxServer, info: UserInfo, pane: string, key: string, why: string): void => {
+		if (waitMs > 0 && !dryRun) {
+			d.log(`${user} ${clean(socket)} ${clean(pane)} ${key} waiting (${why})`);
+			waiting.push({ user, socket, server, info, pane, key, why });
+		} else skip(user, socket, pane, key, why);
+	};
 	for (const user of users.length ? users : registered) {
 		const info = d.userInfo(user);
 		if (!info) {
@@ -220,7 +260,10 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		let panes = 0;
 		const { servers, skipped: deadSockets } = d.tmuxSockets(info);
 		// Socket files whose tmux server has exited are leftovers, not sessions: one count line, not one line each.
-		if (deadSockets.length) d.log(`${user}: ${deadSockets.length} stale tmux socket${deadSockets.length === 1 ? "" : "s"} ignored (no tmux server running on ${deadSockets.length === 1 ? "it" : "them"})`);
+		if (deadSockets.length)
+			d.log(
+				`${user}: ${deadSockets.length} stale tmux socket${deadSockets.length === 1 ? "" : "s"} ignored (no tmux server running on ${deadSockets.length === 1 ? "it" : "them"})`
+			);
 		for (const server of servers) {
 			const socket = server.socket;
 			let panesOnServer: Pane[];
@@ -269,7 +312,15 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				}
 				const composer = composerState(pane.text);
 				if (composer !== "empty") {
-					skip(user, socket, pane.id, key, composer === "typing" ? "composer not empty, or a dialog is showing" : "no Claude Code prompt on screen");
+					blocked(
+						user,
+						socket,
+						server,
+						info,
+						pane.id,
+						key,
+						composer === "typing" ? "composer not empty, or a dialog is showing" : "no Claude Code prompt on screen"
+					);
 					continue;
 				}
 				if (dryRun) {
@@ -290,7 +341,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 						continue;
 					}
 					if (composerState(fresh) !== "empty") {
-						skip(user, socket, pane.id, key, "changed since capture");
+						blocked(user, socket, server, info, pane.id, key, "changed since capture");
 						continue;
 					}
 					try {
@@ -305,6 +356,39 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 			}
 		}
 		if (panes === 0) d.log(`${user}: no Claude Code sessions running${servers.length ? "" : " (no tmux server)"}`);
+	}
+	if (waiting.length > 0) {
+		d.log(`waiting up to ${wait} for ${waiting.length} pane${waiting.length === 1 ? "" : "s"} to clear`);
+		const deadline = d.now() + waitMs;
+		while (waiting.length > 0 && d.now() < deadline) {
+			d.sleep(Math.min(WAIT_POLL_MS, Math.max(0, deadline - d.now())));
+			for (let i = waiting.length - 1; i >= 0; i--) {
+				const w = waiting[i]!;
+				let text: string | undefined;
+				try {
+					text = d.tmuxPaneText(w.server, w.pane, w.info);
+				} catch (err) {
+					if (!(err instanceof TmuxTimeout)) throw err;
+					continue; // tmux didn't answer this round; try again next round
+				}
+				if (text === undefined) {
+					waiting.splice(i, 1);
+					skip(w.user, w.socket, w.pane, w.key, "gone while waiting");
+					continue;
+				}
+				if (composerState(text) !== "empty") continue;
+				waiting.splice(i, 1);
+				try {
+					d.tmuxSend(w.server, w.pane, `/mcp reconnect ${w.key}`, w.info);
+				} catch (err) {
+					skip(w.user, w.socket, w.pane, w.key, `send failed: ${clean((err as Error).message)}`);
+					continue;
+				}
+				d.log(`${w.user} ${clean(w.socket)} ${clean(w.pane)} ${w.key} sent`);
+				sent++;
+			}
+		}
+		for (const w of waiting) skip(w.user, w.socket, w.pane, w.key, `${w.why}; still after waiting ${wait}`);
 	}
 	d.log(dryRun ? `dry run: ${sent} pane(s) would get "/mcp reconnect"` : `sent ${sent}, skipped ${skipped}`);
 	if (skipped === 0) return 0;

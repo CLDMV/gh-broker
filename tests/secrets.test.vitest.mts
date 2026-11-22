@@ -9,7 +9,10 @@ import { loadSecretStore } from "../src/secrets.ts";
 const mockRead = vi.mocked(readFileSync);
 const SECRETS = "/x/secrets.json";
 
-function config(owners: Record<string, unknown> = { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } }, extra: Record<string, unknown> = {}): any {
+function config(
+	owners: Record<string, unknown> = { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
+	extra: Record<string, unknown> = {}
+): any {
 	return { listen: "unix:/x", upstream: "https://x", tools: [], owners, secrets: { provider: "file", path: SECRETS }, ...extra };
 }
 
@@ -92,7 +95,9 @@ describe("loadSecretStore (file provider)", () => {
 
 	it("rejects an owner cred name with a path separator (traversal guard)", () => {
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
-		expect(() => loadSecretStore(config({ cldmv: { read: "cred:../../etc/shadow", write: "cred:cldmv-write" } }))).toThrow(/unsafe credential name/);
+		expect(() => loadSecretStore(config({ cldmv: { read: "cred:../../etc/shadow", write: "cred:cldmv-write" } }))).toThrow(
+			/unsafe credential name/
+		);
 	});
 
 	it("rejects an unsafe cred name at resolve time", () => {
@@ -108,7 +113,12 @@ describe("loadSecretStore (file provider)", () => {
 	});
 
 	it("treats the ghcr credentials as optional: startup does not need them, has() reports them", () => {
-		const ghcr = { dropDir: "/srv/x/y", protectReleaseTags: true, maxArchiveBytes: 1, owners: { cldmv: { username: "u", credential: "cred:cldmv-packages", images: ["hoot"] } } };
+		const ghcr = {
+			dropDir: "/srv/x/y",
+			protectReleaseTags: true,
+			maxArchiveBytes: 1,
+			owners: { cldmv: { username: "u", credential: "cred:cldmv-packages", images: ["hoot"] } }
+		};
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w" });
 		expect(loadSecretStore(config(undefined, { ghcr })).has("cred:cldmv-packages")).toBe(false);
 		secretsFile({ "cldmv-read": "r", "cldmv-write": "w", "cldmv-packages": "p" });
@@ -144,7 +154,9 @@ describe("loadSecretStore (file provider)", () => {
 		const without = loadSecretStore(config(undefined, { npm }));
 		expect(without.has("cred:npm-token")).toBe(false);
 		expect(without.has("cred:cldmv-read")).toBe(true);
-		expect(() => loadSecretStore(config(undefined, { npm: { ...npm, token: "npm_inline" } }))).toThrow(/config.npm.token must be a "cred:<name>" ref/);
+		expect(() => loadSecretStore(config(undefined, { npm: { ...npm, token: "npm_inline" } }))).toThrow(
+			/config.npm.token must be a "cred:<name>" ref/
+		);
 		expect(() => loadSecretStore(config(undefined, { npm: { ...npm, token: "cred:../x" } }))).toThrow(/unsafe credential name/);
 	});
 

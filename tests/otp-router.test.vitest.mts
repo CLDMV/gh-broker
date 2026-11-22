@@ -74,7 +74,10 @@ const lastAudit = () => JSON.parse(logs[logs.length - 1]!);
 
 describe("Router: disabled-by-default tools (#146)", () => {
 	it("hides and refuses a Copilot coding tool until it's enabled, then gates it by default", async () => {
-		const tools = [{ name: "assign_copilot_to_issue", mode: "write" }, { name: "otp_status", mode: "read", custom: true }];
+		const tools = [
+			{ name: "assign_copilot_to_issue", mode: "write" },
+			{ name: "otp_status", mode: "read", custom: true }
+		];
 		const off = setup({ tools });
 		expect(off.router.advertisedTools().map((t) => t.name)).toEqual(["otp_status"]);
 		await expect(off.call("assign_copilot_to_issue", { owner: "cldmv", repo: "x", issue_number: 1, otp: off.code() })).rejects.toThrow(
@@ -88,14 +91,27 @@ describe("Router: disabled-by-default tools (#146)", () => {
 		const on = setup({ tools: [{ ...tools[0], enabled: true }, tools[1]] });
 		expect(on.router.advertisedTools().map((t) => t.name)).toEqual(["assign_copilot_to_issue", "otp_status"]);
 		expect(JSON.parse(((await on.call("otp_status", {})).content[0] as any).text).gatedTools).toEqual(["assign_copilot_to_issue"]);
-		await expect(on.call("assign_copilot_to_issue", { owner: "cldmv", repo: "x", issue_number: 1 })).rejects.toThrow(/OTP required for assign_copilot_to_issue/);
+		await expect(on.call("assign_copilot_to_issue", { owner: "cldmv", repo: "x", issue_number: 1 })).rejects.toThrow(
+			/OTP required for assign_copilot_to_issue/
+		);
 		await on.call("assign_copilot_to_issue", { owner: "cldmv", repo: "x", issue_number: 1, otp: on.code() });
-		expect(on.upstream.forward).toHaveBeenCalledWith("assign_copilot_to_issue", { owner: "cldmv", repo: "x", issue_number: 1 }, "token:cred:cldmv-write");
+		expect(on.upstream.forward).toHaveBeenCalledWith(
+			"assign_copilot_to_issue",
+			{ owner: "cldmv", repo: "x", issue_number: 1 },
+			"token:cred:cldmv-write"
+		);
 	});
 
 	it("lets config disable any tool, and ungate an enabled Copilot tool", async () => {
-		const h = setup({ tools: [{ name: "get_me", mode: "read", enabled: false }, { name: "create_pull_request_with_copilot", mode: "write", enabled: true, otp: false }] });
-		await expect(h.call("get_me", { owner: "cldmv" })).rejects.toThrow('tool "get_me" is not available on this broker: it is disabled in config.tools ("enabled": false)');
+		const h = setup({
+			tools: [
+				{ name: "get_me", mode: "read", enabled: false },
+				{ name: "create_pull_request_with_copilot", mode: "write", enabled: true, otp: false }
+			]
+		});
+		await expect(h.call("get_me", { owner: "cldmv" })).rejects.toThrow(
+			'tool "get_me" is not available on this broker: it is disabled in config.tools ("enabled": false)'
+		);
 		await h.call("create_pull_request_with_copilot", { owner: "cldmv", repo: "x", problem_statement: "p" });
 		expect(h.upstream.forward).toHaveBeenCalledTimes(1);
 	});
@@ -104,41 +120,74 @@ describe("Router: disabled-by-default tools (#146)", () => {
 describe("Router + OTP gate: new tools (#146)", () => {
 	it("gates create_repository by default and runs it on the write PAT of the org the repo lands in", async () => {
 		const h = setup();
-		await expect(h.call("create_repository", { name: "x", organization: "CLDMV", private: true })).rejects.toThrow(/OTP required for create_repository/);
+		await expect(h.call("create_repository", { name: "x", organization: "CLDMV", private: true })).rejects.toThrow(
+			/OTP required for create_repository/
+		);
 		expect(h.upstream.forward).not.toHaveBeenCalled();
 		await h.call("create_repository", { name: "x", organization: "CLDMV", private: false, otp: h.code() });
-		expect(h.upstream.forward).toHaveBeenCalledWith("create_repository", { name: "x", organization: "CLDMV", private: false }, "token:cred:cldmv-write");
-		expect(lastAudit()).toMatchObject({ tool: "create_repository", owner: "cldmv", repo: "cldmv/x", decision: "forward", ok: true, otp: "opened" });
+		expect(h.upstream.forward).toHaveBeenCalledWith(
+			"create_repository",
+			{ name: "x", organization: "CLDMV", private: false },
+			"token:cred:cldmv-write"
+		);
+		expect(lastAudit()).toMatchObject({
+			tool: "create_repository",
+			owner: "cldmv",
+			repo: "cldmv/x",
+			decision: "forward",
+			ok: true,
+			otp: "opened"
+		});
 	});
 
 	it("refuses a repo with no organization or no explicit private before the gate, so no code is spent or counted", async () => {
 		const h = setup();
 		const c = h.code();
-		await expect(h.call("create_repository", { name: "x", private: true, otp: c })).rejects.toThrow(/"organization" is required .* personal account/);
-		await expect(h.call("create_repository", { name: "x", organization: "cldmv", otp: c })).rejects.toThrow(/"private" is required, true or false/);
+		await expect(h.call("create_repository", { name: "x", private: true, otp: c })).rejects.toThrow(
+			/"organization" is required .* personal account/
+		);
+		await expect(h.call("create_repository", { name: "x", organization: "cldmv", otp: c })).rejects.toThrow(
+			/"private" is required, true or false/
+		);
 		await expect(h.call("fork_repository", { owner: "someone", repo: "y", otp: c })).rejects.toThrow(/"organization" is required/);
-		await expect(h.call("create_repository", { name: "x", organization: "OtherOrg", private: true, otp: c })).rejects.toThrow(/no credentials configured for owner "otherorg"/);
+		await expect(h.call("create_repository", { name: "x", organization: "OtherOrg", private: true, otp: c })).rejects.toThrow(
+			/no credentials configured for owner "otherorg"/
+		);
 		expect(lastAudit()).toMatchObject({ tool: "create_repository", mode: "write", owner: "otherorg", decision: "error" });
 		await expect(h.call("create_repository", { name: "x", otp: c })).rejects.toThrow(/"organization" is required/);
 		expect(lastAudit().owner).toBeUndefined();
-		await expect(h.call("actions_run_trigger", { owner: "cldmv", repo: "x", method: "delete_workflow_run_logs", run_id: 1, otp: c })).rejects.toThrow(/"delete_workflow_run_logs" is not allowed in gh-broker/);
+		await expect(
+			h.call("actions_run_trigger", { owner: "cldmv", repo: "x", method: "delete_workflow_run_logs", run_id: 1, otp: c })
+		).rejects.toThrow(/"delete_workflow_run_logs" is not allowed in gh-broker/);
 		expect(lastAudit()).toMatchObject({ tool: "actions_run_trigger", mode: "write", owner: "cldmv", decision: "error" });
 		expect(lastAudit().otp).toBeUndefined();
 		expect(h.upstream.forward).not.toHaveBeenCalled();
 		// The code is still unspent: it opens a window now.
 		await h.call("fork_repository", { owner: "someone", repo: "y", organization: "CLDMV", otp: c });
-		expect(h.upstream.forward).toHaveBeenCalledWith("fork_repository", { owner: "someone", repo: "y", organization: "CLDMV" }, "token:cred:cldmv-write");
+		expect(h.upstream.forward).toHaveBeenCalledWith(
+			"fork_repository",
+			{ owner: "someone", repo: "y", organization: "CLDMV" },
+			"token:cred:cldmv-write"
+		);
 		expect(lastAudit()).toMatchObject({ owner: "cldmv", repo: "cldmv/y", source: "someone/y", otp: "opened" });
 		// Other actions_run_trigger methods go through the gate as usual.
 		await h.call("actions_run_trigger", { owner: "cldmv", repo: "x", method: "rerun_failed_jobs", run_id: 1, otp: c });
-		expect(h.upstream.forward).toHaveBeenLastCalledWith("actions_run_trigger", { owner: "cldmv", repo: "x", method: "rerun_failed_jobs", run_id: 1 }, "token:cred:cldmv-write");
+		expect(h.upstream.forward).toHaveBeenLastCalledWith(
+			"actions_run_trigger",
+			{ owner: "cldmv", repo: "x", method: "rerun_failed_jobs", run_id: 1 },
+			"token:cred:cldmv-write"
+		);
 		expect(lastAudit()).toMatchObject({ tool: "actions_run_trigger", otp: "window" });
 	});
 
 	it("leaves update_pull_request_branch ungated", async () => {
 		const h = setup();
 		await h.call("update_pull_request_branch", { owner: "cldmv", repo: "x", pullNumber: 3 });
-		expect(h.upstream.forward).toHaveBeenCalledWith("update_pull_request_branch", { owner: "cldmv", repo: "x", pullNumber: 3 }, "token:cred:cldmv-write");
+		expect(h.upstream.forward).toHaveBeenCalledWith(
+			"update_pull_request_branch",
+			{ owner: "cldmv", repo: "x", pullNumber: 3 },
+			"token:cred:cldmv-write"
+		);
 	});
 });
 
@@ -147,9 +196,20 @@ describe("Router + OTP gate", () => {
 		const h = setup();
 		const c = h.code();
 		await h.call("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1, otp: c });
-		expect(h.upstream.forward).toHaveBeenCalledWith("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1 }, "token:cred:cldmv-write");
+		expect(h.upstream.forward).toHaveBeenCalledWith(
+			"merge_pull_request",
+			{ owner: "cldmv", repo: "x", pullNumber: 1 },
+			"token:cred:cldmv-write"
+		);
 		const opened = lastAudit();
-		expect(opened).toMatchObject({ tool: "merge_pull_request", user: "repo", decision: "forward", ok: true, otp: "opened", window: expect.stringMatching(/^[0-9a-f]{16}$/) });
+		expect(opened).toMatchObject({
+			tool: "merge_pull_request",
+			user: "repo",
+			decision: "forward",
+			ok: true,
+			otp: "opened",
+			window: expect.stringMatching(/^[0-9a-f]{16}$/)
+		});
 
 		await h.call("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 2, otp: c });
 		expect(lastAudit()).toMatchObject({ otp: "window", window: opened.window });
@@ -202,19 +262,31 @@ describe("Router + OTP gate", () => {
 
 	it("hides and refuses gated tools while OTP isn't set up, but otp_status still answers", async () => {
 		for (const h of [setup({ otp: null }), setup({ seedStored: false })]) {
-			expect(h.router.advertisedTools().map((t) => t.name)).toEqual(["get_me", "create_pull_request", "otp_status", "update_pull_request_branch"]);
+			expect(h.router.advertisedTools().map((t) => t.name)).toEqual([
+				"get_me",
+				"create_pull_request",
+				"otp_status",
+				"update_pull_request_branch"
+			]);
 			await expect(h.call("merge_pull_request", { owner: "cldmv", otp: "123456" })).rejects.toThrow(
 				/tool "merge_pull_request" is not available on this broker: OTP is not set up on this broker.*re-run the installer/
 			);
 			const status = JSON.parse(((await h.call("otp_status", {})).content[0] as any).text);
-			expect(status).toMatchObject({ configured: false, gatedTools: ["merge_pull_request", "npm_scaffold", "create_repository", "fork_repository", "actions_run_trigger"] });
+			expect(status).toMatchObject({
+				configured: false,
+				gatedTools: ["merge_pull_request", "npm_scaffold", "create_repository", "fork_repository", "actions_run_trigger"]
+			});
 		}
 	});
 
 	it("a user's hard lock blocks every tool for that user, ungated ones too, except otp_status; others carry on", async () => {
 		const h = setup();
-		writeFileSync(h.statePath, JSON.stringify({ ...emptyState(), users: { repo: { ...emptyUser(), hardLock: { since: "2026-11-01T11:00:00.000Z", lockouts: 3 } } } }));
-		const msg = 'gh-broker is locked for repo after repeated bad OTP codes (since 2026-11-01T11:00:00.000Z). Ask the user to run "sudo gh-broker otp unlock repo" on box. Nothing was run.';
+		writeFileSync(
+			h.statePath,
+			JSON.stringify({ ...emptyState(), users: { repo: { ...emptyUser(), hardLock: { since: "2026-11-01T11:00:00.000Z", lockouts: 3 } } } })
+		);
+		const msg =
+			'gh-broker is locked for repo after repeated bad OTP codes (since 2026-11-01T11:00:00.000Z). Ask the user to run "sudo gh-broker otp unlock repo" on box. Nothing was run.';
 		await expect(h.call("get_me", { owner: "cldmv" })).rejects.toThrow(msg);
 		expect(lastAudit()).toMatchObject({ tool: "get_me", user: "repo", decision: "deny", otp: "hard-locked" });
 		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: h.code() })).rejects.toThrow(msg);
@@ -243,7 +315,9 @@ describe("Router + OTP gate", () => {
 		const h = setup();
 		const c = h.code();
 		await h.call("merge_pull_request", { owner: "cldmv", otp: c }, "repo");
-		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: c }, "glmtest")).rejects.toThrow(/OTP code for merge_pull_request is spent/);
+		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: c }, "glmtest")).rejects.toThrow(
+			/OTP code for merge_pull_request is spent/
+		);
 		expect(lastAudit()).toMatchObject({ user: "glmtest", decision: "deny", otp: "refused" });
 		expect(h.upstream.forward).toHaveBeenCalledTimes(1);
 	});
@@ -251,14 +325,20 @@ describe("Router + OTP gate", () => {
 	it("a corrupt state file fails closed for every tool but otp_status", async () => {
 		const h = setup();
 		writeFileSync(h.statePath, "garbage");
-		await expect(h.call("get_me", { owner: "cldmv" })).rejects.toThrow(/gh-broker is locked for every agent: its OTP state file is unreadable or corrupt .*"sudo gh-broker otp unlock --all"/);
+		await expect(h.call("get_me", { owner: "cldmv" })).rejects.toThrow(
+			/gh-broker is locked for every agent: its OTP state file is unreadable or corrupt .*"sudo gh-broker otp unlock --all"/
+		);
 		await expect(h.call("otp_status", {})).resolves.toBeDefined();
 	});
 
 	it("a short lockout refuses gated tools only", async () => {
 		const h = setup({ otp: { maxFailures: 1 } });
-		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: "000000" })).rejects.toThrow(/was not accepted, and that was too many bad codes/);
-		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: h.code() })).rejects.toThrow("OTP is locked for 10 more minute(s) after too many bad codes. Nothing was run.");
+		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: "000000" })).rejects.toThrow(
+			/was not accepted, and that was too many bad codes/
+		);
+		await expect(h.call("merge_pull_request", { owner: "cldmv", otp: h.code() })).rejects.toThrow(
+			"OTP is locked for 10 more minute(s) after too many bad codes. Nothing was run."
+		);
 		expect(lastAudit()).toMatchObject({ otp: "locked" });
 		await expect(h.call("get_me", { owner: "cldmv" })).resolves.toBeDefined();
 	});

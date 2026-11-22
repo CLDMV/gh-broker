@@ -129,7 +129,14 @@ function repoFromUrl(repositoryUrl: string): { owner: string; repo: string } {
 }
 
 /** First of `paths` that exists at `ref`, or undefined. A 404 means "not there"; any other error propagates. */
-async function findChangelog(octokit: Octokit, budget: CallBudget, owner: string, repo: string, ref: string, paths: string[]): Promise<string | undefined> {
+async function findChangelog(
+	octokit: Octokit,
+	budget: CallBudget,
+	owner: string,
+	repo: string,
+	ref: string,
+	paths: string[]
+): Promise<string | undefined> {
 	for (const path of paths) {
 		try {
 			await reqOne(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", { owner, repo, path, ref });
@@ -163,7 +170,11 @@ export async function reportReleasePrs(octokit: Octokit, input: ReportReleasePrs
 
 		for (const hit of search.items) {
 			const { owner, repo } = repoFromUrl(hit.repository_url);
-			const pull = await reqOne<RawPull>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}", { owner, repo, pull_number: hit.number });
+			const pull = await reqOne<RawPull>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+				owner,
+				repo,
+				pull_number: hit.number
+			});
 			const version = parseReleaseVersion(hit.title);
 			const base = {
 				repo: `${owner}/${repo}`,
@@ -186,7 +197,14 @@ export async function reportReleasePrs(octokit: Octokit, input: ReportReleasePrs
 			// Pushed before the analysis so a cap hit mid-analysis still reports this PR's status.
 			releasePrs.push(entry);
 			if (input.analyze) {
-				entry.analysis = await analyzeRelease(octokit, budget, { owner, repo, pull: hit.number, head: pull.head.ref, version, ...(entry.changelogPath ? { changelogPath: entry.changelogPath } : {}) });
+				entry.analysis = await analyzeRelease(octokit, budget, {
+					owner,
+					repo,
+					pull: hit.number,
+					head: pull.head.ref,
+					version,
+					...(entry.changelogPath ? { changelogPath: entry.changelogPath } : {})
+				});
 			}
 		}
 	} catch (err) {
@@ -211,7 +229,9 @@ export async function reportReleasePrs(octokit: Octokit, input: ReportReleasePrs
 		for (const p of releasePrs) if (p.analysis) verdicts[p.analysis.verdict] = (verdicts[p.analysis.verdict] ?? 0) + 1;
 	}
 	// With analysis, "missing" means "not done": a ready-but-stale changelog still needs work.
-	const listed = input.onlyMissing ? releasePrs.filter((p) => (p.analysis ? p.analysis.verdict !== "done" : p.status !== "ready")) : releasePrs;
+	const listed = input.onlyMissing
+		? releasePrs.filter((p) => (p.analysis ? p.analysis.verdict !== "done" : p.status !== "ready"))
+		: releasePrs;
 
 	return {
 		scanned: { releasePrs: hits },
@@ -231,8 +251,21 @@ export const REPORT_RELEASE_PRS_SCHEMA = {
 	properties: {
 		owner: { type: "string", description: "repository owner (org/user login) — selects the read credential" },
 		repo: { type: "string", description: "repository name; omit to search every repo this owner has" },
-		onlyMissing: { type: "boolean", description: "return only release PRs that still need work (no changelog, unreadable version, or — with analyze — a verdict other than done); summary counts still cover all", default: false },
-		analyze: { type: "boolean", description: "also compute, per release PR: open PRs against its release branch (doc / dependency / feature / draft), whether an existing changelog is up to date (missing PRs, version heading, README), and a verdict (done / in-flight / wait / gray / write / update / inspect). ~5 extra calls per release PR — raise maxApiCalls for a whole org", default: false },
-		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` }
+		onlyMissing: {
+			type: "boolean",
+			description:
+				"return only release PRs that still need work (no changelog, unreadable version, or — with analyze — a verdict other than done); summary counts still cover all",
+			default: false
+		},
+		analyze: {
+			type: "boolean",
+			description:
+				"also compute, per release PR: open PRs against its release branch (doc / dependency / feature / draft), whether an existing changelog is up to date (missing PRs, version heading, README), and a verdict (done / in-flight / wait / gray / write / update / inspect). ~5 extra calls per release PR — raise maxApiCalls for a whole org",
+			default: false
+		},
+		maxApiCalls: {
+			type: "number",
+			description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})`
+		}
 	}
 };

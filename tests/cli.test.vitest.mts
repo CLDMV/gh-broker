@@ -36,7 +36,12 @@ describe("runCli dispatch", () => {
 	});
 
 	it("prints upgrade and reconnect help without root and without a readable config", async () => {
-		const { d, out } = makeDeps({ isRoot: () => false, readConfig: () => { throw new Error("ENOENT"); } });
+		const { d, out } = makeDeps({
+			isRoot: () => false,
+			readConfig: () => {
+				throw new Error("ENOENT");
+			}
+		});
 		expect(await runCli(["upgrade", "--help"], d)).toBe(0);
 		expect(out[0]).toBe(UPGRADE_HELP);
 		expect(await runCli(["upgrade", "-h"], d)).toBe(0);
@@ -49,13 +54,21 @@ describe("runCli dispatch", () => {
 	});
 
 	it("reports an unreadable config", async () => {
-		const { d, err } = makeDeps({ readConfig: () => { throw new Error("ENOENT"); } });
+		const { d, err } = makeDeps({
+			readConfig: () => {
+				throw new Error("ENOENT");
+			}
+		});
 		expect(await runCli(["agent", "list"], d)).toBe(1);
 		expect(err[0]).toContain("cannot read the broker config: ENOENT");
 	});
 
 	it("turns a command failure into an error and exit 1", async () => {
-		const { d, err } = makeDeps({ readState: () => { throw new Error("EACCES"); } });
+		const { d, err } = makeDeps({
+			readState: () => {
+				throw new Error("EACCES");
+			}
+		});
 		expect(await runCli(["otp", "status"], d)).toBe(1);
 		expect(err[0]).toBe("gh-broker otp status: EACCES");
 	});
@@ -83,8 +96,12 @@ describe("runCli dispatch", () => {
 	it("reports a reconnect or upgrade failure as gh-broker agent reconnect / upgrade", async () => {
 		const reconnect = makeDeps({ groups: () => [] });
 		expect(await runCli(["agent", "reconnect", "nobody"], reconnect.d)).toBe(1);
-		expect(reconnect.err[0]).toBe("gh-broker agent reconnect: \"nobody\" is not a registered agent");
-		const upgrade = makeDeps({ npmInstall: () => { throw new Error("npm ERR! network"); } });
+		expect(reconnect.err[0]).toBe('gh-broker agent reconnect: "nobody" is not a registered agent');
+		const upgrade = makeDeps({
+			npmInstall: () => {
+				throw new Error("npm ERR! network");
+			}
+		});
 		expect(await runCli(["upgrade"], upgrade.d)).toBe(1);
 		expect(upgrade.err[0]).toBe("step 1/3 (npm install) failed: npm ERR! network");
 	});

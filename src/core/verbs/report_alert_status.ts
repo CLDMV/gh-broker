@@ -204,7 +204,12 @@ function isUnavailable(err: unknown): boolean {
 }
 
 /** reqOne, with a 404 meaning "not there" instead of an error. */
-async function getOrUndefined<T>(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>): Promise<T | undefined> {
+async function getOrUndefined<T>(
+	octokit: Octokit,
+	budget: CallBudget,
+	route: string,
+	params: Record<string, unknown>
+): Promise<T | undefined> {
 	try {
 		return await reqOne<T>(octokit, budget, route, params);
 	} catch (err) {
@@ -271,7 +276,13 @@ export async function reportAlertStatus(octokit: Octokit, input: ReportAlertStat
 	const readRepos = async (repos: string[]) => {
 		for (const repo of repos) {
 			try {
-				const raws = await paginateAfter<unknown>(octokit, budget, "GET /repos/{owner}/{repo}/dependabot/alerts", { owner: input.owner, repo, state: "open" }, alertLimit);
+				const raws = await paginateAfter<unknown>(
+					octokit,
+					budget,
+					"GET /repos/{owner}/{repo}/dependabot/alerts",
+					{ owner: input.owner, repo, state: "open" },
+					alertLimit
+				);
 				if (raws.length >= alertLimit) truncatedReason ??= "max-alerts";
 				add(raws, input.owner, repo);
 			} catch (err) {
@@ -287,7 +298,13 @@ export async function reportAlertStatus(octokit: Octokit, input: ReportAlertStat
 			await readRepos([...new Set(named)]);
 		} else {
 			try {
-				const raws = await paginateAfter<unknown>(octokit, budget, "GET /orgs/{owner}/dependabot/alerts", { owner: input.owner, state: "open" }, alertLimit);
+				const raws = await paginateAfter<unknown>(
+					octokit,
+					budget,
+					"GET /orgs/{owner}/dependabot/alerts",
+					{ owner: input.owner, state: "open" },
+					alertLimit
+				);
 				scope = "org";
 				if (raws.length >= alertLimit) truncatedReason ??= "max-alerts";
 				add(raws, input.owner, "");
@@ -345,12 +362,24 @@ async function classifyRepoAlerts(
 	const info = await reqOne<{ default_branch: string }>(octokit, budget, "GET /repos/{owner}/{repo}", { owner, repo });
 	const defaultBranch = info.default_branch;
 	const branchSha = async (branch: string) =>
-		(await getOrUndefined<{ commit: { sha: string } }>(octokit, budget, "GET /repos/{owner}/{repo}/branches/{branch}", { owner, repo, branch }))?.commit.sha;
+		(
+			await getOrUndefined<{ commit: { sha: string } }>(octokit, budget, "GET /repos/{owner}/{repo}/branches/{branch}", {
+				owner,
+				repo,
+				branch
+			})
+		)?.commit.sha;
 	const defaultSha = await branchSha(defaultBranch);
 	const nextSha = await branchSha("next");
 	const hotfixesSha = await branchSha("hotfixes");
 
-	const pulls = await paginate<RawPull>(octokit, budget, "GET /repos/{owner}/{repo}/pulls", { owner, repo, state: "all", sort: "created", direction: "desc" }, opts.prLimit);
+	const pulls = await paginate<RawPull>(
+		octokit,
+		budget,
+		"GET /repos/{owner}/{repo}/pulls",
+		{ owner, repo, state: "all", sort: "created", direction: "desc" },
+		opts.prLimit
+	);
 	const depPulls = pulls.filter(isDependencyPr);
 
 	// Lockfile text per commit + path; null caches a miss so a missing file is asked for once.
@@ -359,7 +388,12 @@ async function classifyRepoAlerts(
 		const key = `${sha}:${path}`;
 		if (lockCache.has(key)) return lockCache.get(key)!;
 		let loaded: LoadedLock | null = null;
-		const meta = await getOrUndefined<RawContent | RawContent[]>(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", { owner, repo, path, ref: sha });
+		const meta = await getOrUndefined<RawContent | RawContent[]>(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", {
+			owner,
+			repo,
+			path,
+			ref: sha
+		});
 		if (meta && !Array.isArray(meta) && meta.type === "file") {
 			if ((meta.size ?? 0) > opts.maxLockfileBytes) {
 				loaded = { path, tooLarge: true };
@@ -367,7 +401,11 @@ async function classifyRepoAlerts(
 				loaded = { path, text: decode(meta.content) };
 			} else {
 				// Files over 1 MB come back from the contents API without a body; the blob API serves them.
-				const blob = await reqOne<{ content: string }>(octokit, budget, "GET /repos/{owner}/{repo}/git/blobs/{file_sha}", { owner, repo, file_sha: meta.sha });
+				const blob = await reqOne<{ content: string }>(octokit, budget, "GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
+					owner,
+					repo,
+					file_sha: meta.sha
+				});
 				loaded = { path, text: decode(blob.content) };
 			}
 		}
@@ -418,7 +456,13 @@ async function classifyRepoAlerts(
 			const later = merged.filter((m) => m.merged_at! > closedAt).sort((x, y) => x.merged_at!.localeCompare(y.merged_at!))[0];
 			return { number: p.number, url: p.html_url, title: p.title, closedAt, ...(later ? { supersededBy: later.number } : {}) };
 		});
-		const mergedPrs: MergedPrRef[] = merged.map((p) => ({ number: p.number, url: p.html_url, title: p.title, base: p.base.ref, mergedAt: p.merged_at! }));
+		const mergedPrs: MergedPrRef[] = merged.map((p) => ({
+			number: p.number,
+			url: p.html_url,
+			title: p.title,
+			base: p.base.ref,
+			mergedAt: p.merged_at!
+		}));
 
 		let lockfile: AlertStatus["lockfile"];
 		if (a.ecosystem === "npm") {
@@ -480,7 +524,9 @@ async function classifyRepoAlerts(
 		...(lastPrAt ? { lastPrAt } : {}),
 		looksPaused: unanswered.length > 0,
 		...(unanswered.length > 0
-			? { reason: `${unanswered.length} fixable alert(s) older than 7 days with no Dependabot PR opened since${lastPrAt ? ` (last one ${lastPrAt})` : " (none in the PRs read)"}` }
+			? {
+					reason: `${unanswered.length} fixable alert(s) older than 7 days with no Dependabot PR opened since${lastPrAt ? ` (last one ${lastPrAt})` : " (none in the PRs read)"}`
+				}
 			: {})
 	};
 
@@ -508,16 +554,32 @@ export const REPORT_ALERT_STATUS_SCHEMA = {
 	properties: {
 		owner: { type: "string", description: "repository owner (org/user login) — selects the read credential" },
 		repo: { type: "string", description: "one repository; omit (with repos) to cover every repo with open Dependabot alerts" },
-		repos: { type: "array", items: { type: "string" }, description: "several repositories (names, with or without the owner prefix), e.g. the byRepo list of a report_security_alerts run" },
+		repos: {
+			type: "array",
+			items: { type: "string" },
+			description: "several repositories (names, with or without the owner prefix), e.g. the byRepo list of a report_security_alerts run"
+		},
 		buckets: {
 			type: "array",
 			items: { type: "string", enum: ALL_BUCKETS },
 			description: "list only alerts in these buckets; summary and per-repo counts still cover every alert"
 		},
-		maxRepos: { type: "number", description: `safety cap on repos swept when the org-level endpoint is unavailable (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})` },
-		alertLimit: { type: "number", description: `safety cap on alerts fetched (org mode) or per repo (default ${DEFAULT_ALERT_LIMIT}, hard cap ${HARD_ALERT_LIMIT})` },
+		maxRepos: {
+			type: "number",
+			description: `safety cap on repos swept when the org-level endpoint is unavailable (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})`
+		},
+		alertLimit: {
+			type: "number",
+			description: `safety cap on alerts fetched (org mode) or per repo (default ${DEFAULT_ALERT_LIMIT}, hard cap ${HARD_ALERT_LIMIT})`
+		},
 		prLimit: { type: "number", description: `PRs read per repo, newest first (default ${DEFAULT_PR_LIMIT}, hard cap ${HARD_PR_LIMIT})` },
-		maxLockfileBytes: { type: "number", description: `lockfiles larger than this are not read (default ${DEFAULT_MAX_LOCKFILE_BYTES}, hard cap ${HARD_MAX_LOCKFILE_BYTES})` },
-		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` }
+		maxLockfileBytes: {
+			type: "number",
+			description: `lockfiles larger than this are not read (default ${DEFAULT_MAX_LOCKFILE_BYTES}, hard cap ${HARD_MAX_LOCKFILE_BYTES})`
+		},
+		maxApiCalls: {
+			type: "number",
+			description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})`
+		}
 	}
 };

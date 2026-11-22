@@ -44,9 +44,12 @@ describe("reportSecurityAlerts — org-level reads", () => {
 	it("reads the three org endpoints with state=open and normalizes each alert type", async () => {
 		const octokit = octokitWith(async (route, params) => {
 			expect(params).toMatchObject({ owner: "cldmv", state: "open" });
-			if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [dependabot(1, { repository: { full_name: "CLDMV/a" } })], headers: {} };
-			if (route === "GET /orgs/{owner}/code-scanning/alerts") return { data: [codeql(2, { repository: { full_name: "CLDMV/b" } })], headers: {} };
-			if (route === "GET /orgs/{owner}/secret-scanning/alerts") return { data: [secret(3, { repository: { full_name: "CLDMV/c" } })], headers: {} };
+			if (route === "GET /orgs/{owner}/dependabot/alerts")
+				return { data: [dependabot(1, { repository: { full_name: "CLDMV/a" } })], headers: {} };
+			if (route === "GET /orgs/{owner}/code-scanning/alerts")
+				return { data: [codeql(2, { repository: { full_name: "CLDMV/b" } })], headers: {} };
+			if (route === "GET /orgs/{owner}/secret-scanning/alerts")
+				return { data: [secret(3, { repository: { full_name: "CLDMV/c" } })], headers: {} };
 			throw new Error(`unexpected route ${route}`);
 		});
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv" });
@@ -100,7 +103,10 @@ describe("reportSecurityAlerts — org-level reads", () => {
 	});
 
 	it("never returns the secret value", async () => {
-		const octokit = octokitWith(async (route) => ({ data: route.includes("secret-scanning") ? [secret(1, { repository: { full_name: "CLDMV/c" } })] : [], headers: {} }));
+		const octokit = octokitWith(async (route) => ({
+			data: route.includes("secret-scanning") ? [secret(1, { repository: { full_name: "CLDMV/c" } })] : [],
+			headers: {}
+		}));
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv", types: ["secrets"] });
 		expect(JSON.stringify(out)).not.toContain("ghp_SHOULD_NEVER_BE_RETURNED");
 		expect(out.alerts[0]).not.toHaveProperty("secret");
@@ -134,7 +140,10 @@ describe("reportSecurityAlerts — org-level reads", () => {
 
 	it("pages the code-scanning org endpoint with page numbers", async () => {
 		const full = Array.from({ length: 100 }, (_, i) => codeql(i + 1, { repository: { full_name: "CLDMV/a" } }));
-		const octokit = octokitWith(async (_route, params) => ({ data: params.page === 1 ? full : [codeql(101, { repository: { full_name: "CLDMV/a" } })], headers: {} }));
+		const octokit = octokitWith(async (_route, params) => ({
+			data: params.page === 1 ? full : [codeql(101, { repository: { full_name: "CLDMV/a" } })],
+			headers: {}
+		}));
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv", types: ["codeql"] });
 		expect(out.alerts).toHaveLength(101);
 	});
@@ -162,7 +171,8 @@ describe("reportSecurityAlerts — org-level reads", () => {
 		const bare = { number: 7, html_url: "u", created_at: "t", repository: { full_name: "CLDMV/a" } };
 		const octokit = octokitWith(async (route) => {
 			if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [bare], headers: {} };
-			if (route === "GET /orgs/{owner}/code-scanning/alerts") return { data: [{ ...bare, rule: {}, most_recent_instance: { location: { path: "x.ts" } } }], headers: {} };
+			if (route === "GET /orgs/{owner}/code-scanning/alerts")
+				return { data: [{ ...bare, rule: {}, most_recent_instance: { location: { path: "x.ts" } } }], headers: {} };
 			return { data: [{ ...bare }], headers: {} };
 		});
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv" });
@@ -175,7 +185,13 @@ describe("reportSecurityAlerts — org-level reads", () => {
 	it("leaves the location off a code scanning alert whose instance has no path", async () => {
 		const bare = { number: 7, html_url: "u", created_at: "t", repository: { full_name: "CLDMV/a" } };
 		const octokit = octokitWith(async (route) => ({
-			data: route === "GET /orgs/{owner}/code-scanning/alerts" ? [{ ...bare, most_recent_instance: { location: {} } }, { ...bare, number: 8 }] : [],
+			data:
+				route === "GET /orgs/{owner}/code-scanning/alerts"
+					? [
+							{ ...bare, most_recent_instance: { location: {} } },
+							{ ...bare, number: 8 }
+						]
+					: [],
 			headers: {}
 		}));
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv" });
@@ -183,7 +199,12 @@ describe("reportSecurityAlerts — org-level reads", () => {
 	});
 
 	it("flags max-alerts when a type fills its alertLimit", async () => {
-		const octokit = octokitWith(async (route) => ({ data: route.includes("dependabot") ? [dependabot(1, { repository: { full_name: "CLDMV/a" } }), dependabot(2, { repository: { full_name: "CLDMV/a" } })] : [], headers: {} }));
+		const octokit = octokitWith(async (route) => ({
+			data: route.includes("dependabot")
+				? [dependabot(1, { repository: { full_name: "CLDMV/a" } }), dependabot(2, { repository: { full_name: "CLDMV/a" } })]
+				: [],
+			headers: {}
+		}));
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv", alertLimit: 2 });
 		expect(out.truncated).toBe(true);
 		expect(out.truncatedReason).toBe("max-alerts");
@@ -196,18 +217,24 @@ describe("reportSecurityAlerts — per-repo fallback", () => {
 
 	it("falls back to a per-repo sweep for a type whose org endpoint is 403/404, keeping the types that worked", async () => {
 		const octokit = octokitWith(async (route, params) => {
-			if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [dependabot(1, { repository: { full_name: "CLDMV/a" } })], headers: {} };
+			if (route === "GET /orgs/{owner}/dependabot/alerts")
+				return { data: [dependabot(1, { repository: { full_name: "CLDMV/a" } })], headers: {} };
 			if (route === "GET /orgs/{owner}/code-scanning/alerts") throw status(403, "Resource not accessible by personal access token");
 			if (route === "GET /orgs/{owner}/secret-scanning/alerts") throw status(404, "Not Found");
 			if (route === "GET /orgs/{owner}/repos") return { data: [{ name: "a" }, { name: "b", archived: true }, { name: "c" }], headers: {} };
 			if (route === "GET /repos/{owner}/{repo}/code-scanning/alerts") return { data: params.repo === "a" ? [codeql(4)] : [], headers: {} };
-			if (route === "GET /repos/{owner}/{repo}/secret-scanning/alerts") return { data: params.repo === "c" ? [secret(5)] : [], headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/secret-scanning/alerts")
+				return { data: params.repo === "c" ? [secret(5)] : [], headers: {} };
 			throw new Error(`unexpected route ${route}`);
 		});
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv" });
 		expect(out.scope).toEqual({ dependabot: "org", codeql: "per-repo", secrets: "per-repo" });
 		expect(out.scanned).toEqual({ repos: 2 });
-		expect(out.alerts.map((a) => `${a.type}:${a.repo}#${a.number}`).sort()).toEqual(["codeql:cldmv/a#4", "dependabot:CLDMV/a#1", "secrets:cldmv/c#5"]);
+		expect(out.alerts.map((a) => `${a.type}:${a.repo}#${a.number}`).sort()).toEqual([
+			"codeql:cldmv/a#4",
+			"dependabot:CLDMV/a#1",
+			"secrets:cldmv/c#5"
+		]);
 		expect(out.disabled).toBeUndefined();
 	});
 
@@ -216,7 +243,8 @@ describe("reportSecurityAlerts — per-repo fallback", () => {
 			if (orgDenied(route)) throw status(404);
 			if (route === "GET /orgs/{owner}/repos") return { data: [{ name: "a" }, { name: "b" }, { name: "c" }], headers: {} };
 			if (route === "GET /repos/{owner}/{repo}/dependabot/alerts") return { data: params.repo === "a" ? [dependabot(1)] : [], headers: {} };
-			if (route === "GET /repos/{owner}/{repo}/code-scanning/alerts") throw status(403, "Code Security must be enabled for this repository to use code scanning.");
+			if (route === "GET /repos/{owner}/{repo}/code-scanning/alerts")
+				throw status(403, "Code Security must be enabled for this repository to use code scanning.");
 			if (route === "GET /repos/{owner}/{repo}/secret-scanning/alerts") {
 				if (params.repo === "b") throw status(404, "Secret scanning is disabled on this repository.");
 				return { data: [], headers: {} };
@@ -277,7 +305,8 @@ describe("reportSecurityAlerts — per-repo fallback", () => {
 describe("reportSecurityAlerts — limits and errors", () => {
 	it("returns partial results flagged max-api-calls when the call budget runs out", async () => {
 		const octokit = octokitWith(async (route) => {
-			if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [dependabot(1, { repository: { full_name: "CLDMV/a" } })], headers: {} };
+			if (route === "GET /orgs/{owner}/dependabot/alerts")
+				return { data: [dependabot(1, { repository: { full_name: "CLDMV/a" } })], headers: {} };
 			return { data: [], headers: {} };
 		});
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv", maxApiCalls: 1 });
@@ -291,7 +320,8 @@ describe("reportSecurityAlerts — limits and errors", () => {
 
 	it("returns partial results with retryAfterSeconds when rate limited mid-scan", async () => {
 		const octokit = octokitWith(async (route) => {
-			if (route === "GET /orgs/{owner}/dependabot/alerts") return { data: [dependabot(1, { repository: { full_name: "CLDMV/a" } })], headers: {} };
+			if (route === "GET /orgs/{owner}/dependabot/alerts")
+				return { data: [dependabot(1, { repository: { full_name: "CLDMV/a" } })], headers: {} };
 			throw Object.assign(new Error("Forbidden"), { status: 403, response: { headers: { "retry-after": "30" } } });
 		});
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv" });
@@ -302,31 +332,47 @@ describe("reportSecurityAlerts — limits and errors", () => {
 	});
 
 	it("omits retryAfterSeconds when GitHub sent none", async () => {
-		const octokit = octokitWith(async () => { throw status(429, "Too Many Requests"); });
+		const octokit = octokitWith(async () => {
+			throw status(429, "Too Many Requests");
+		});
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv" });
 		expect(out.truncatedReason).toBe("rate-limited");
 		expect(out).not.toHaveProperty("retryAfterSeconds");
 	});
 
 	it("stops proactively at the rate-limit floor", async () => {
-		const octokit = octokitWith(async () => ({ data: [dependabot(1)], headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "50" } }));
+		const octokit = octokitWith(async () => ({
+			data: [dependabot(1)],
+			headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "50" }
+		}));
 		const out = await reportSecurityAlerts(octokit, { owner: "cldmv" });
 		expect(out.truncatedReason).toBe("rate-limited");
 	});
 
 	it("propagates an unexpected error from an org endpoint", async () => {
-		const octokit = octokitWith(async () => { throw status(500, "server exploded"); });
+		const octokit = octokitWith(async () => {
+			throw status(500, "server exploded");
+		});
 		await expect(reportSecurityAlerts(octokit, { owner: "cldmv" })).rejects.toThrow("server exploded");
 	});
 
 	it("propagates an unexpected error from a per-repo endpoint", async () => {
-		const octokit = octokitWith(async () => { throw status(500, "server exploded"); });
+		const octokit = octokitWith(async () => {
+			throw status(500, "server exploded");
+		});
 		await expect(reportSecurityAlerts(octokit, { owner: "cldmv", repo: "r" })).rejects.toThrow("server exploded");
 	});
 
 	it("clamps the caps to their hard maximums", async () => {
 		const octokit = octokitWith(async () => ({ data: [], headers: {} }));
-		await reportSecurityAlerts(octokit, { owner: "cldmv", repo: "r", types: ["codeql"], alertLimit: 99999, maxApiCalls: 99999, maxRepos: 99999 });
+		await reportSecurityAlerts(octokit, {
+			owner: "cldmv",
+			repo: "r",
+			types: ["codeql"],
+			alertLimit: 99999,
+			maxApiCalls: 99999,
+			maxRepos: 99999
+		});
 		expect(octokit.request).toHaveBeenCalledTimes(1);
 	});
 

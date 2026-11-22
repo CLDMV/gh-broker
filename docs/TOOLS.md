@@ -2,11 +2,11 @@
 
 Every tool the broker advertises falls into one of three categories, set per entry in `config.tools` (`src/types.ts` `ToolRule`) and dispatched accordingly in `router.ts`:
 
-| Category | Config flag | What happens | Example |
-|---|---|---|---|
-| **Proxied** | (neither flag) | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior) |
-| **Custom** | `"custom": true` | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads). | `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_dependents`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `minimize_comment`, `delete_branch`, `dismiss_alert`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags`, `otp_status` |
-| **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it. | `pull_request_read`'s and `list_pull_requests`'s `ciVerbosity` extension |
+| Category      | Config flag       | What happens                                                                                                                                                                                                                      | Example                                                                                                                                                                                                                                                                                                                                                        |
+| ------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Proxied**   | (neither flag)    | Forwarded to the hosted GitHub MCP untouched — the advertised schema and response are exactly what the hosted MCP defines (the one addition: `issue_write`'s description carries a warning that `labels` replaces the whole set). | `list_issues`, `pull_request_read` (base behavior)                                                                                                                                                                                                                                                                                                             |
+| **Custom**    | `"custom": true`  | Handled entirely locally — no call to the hosted MCP at all. The broker builds its own `Octokit` from the resolved PAT and does the work itself (raw REST/GraphQL, or composing several reads).                                   | `report_unlabeled`, `report_security_alerts`, `report_alert_status`, `report_release_prs`, `report_dependents`, `report_release_changes`, `report_ci_status`, `issue_labels`, `npm_scaffold`, `resolve_review_thread`, `reply_review_thread`, `minimize_comment`, `delete_branch`, `dismiss_alert`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags`, `otp_status` |
+| **Augmented** | `"augment": true` | Forwarded to the hosted MCP like a plain proxy, then the broker post-processes the result before returning it.                                                                                                                    | `pull_request_read`'s and `list_pull_requests`'s `ciVerbosity` extension                                                                                                                                                                                                                                                                                       |
 
 The broker is not obligated to make a proxied tool's advertised schema or response match the hosted MCP's exactly — see the `augment` category above. It presents its own MCP contract to the agent; a tool can extend what the hosted MCP offers.
 
@@ -28,7 +28,7 @@ Some tools should only run after the user has approved them. A tool marked `"otp
 
 **Refusals.** Nothing runs on a refusal. The answer says which case it was, so the agent can tell the user why it needs another code:
 
-```
+```text
 OTP required for <tool>: ask the user for a current code from their authenticator app and pass it as "otp". Nothing was run.
 OTP code for <tool> is spent (it, or a newer code, was already used): ask the user for the next code from their authenticator app and pass it as "otp". Nothing was run.
 OTP code for <tool> was not accepted (<n> of <maxFailures> bad codes before a lockout of <lockout length>): ask the user for a fresh code from their authenticator app and pass it as "otp". Nothing was run.
@@ -40,7 +40,7 @@ The `otp` argument is the broker's own: it is removed from the arguments of ever
 
 **Guessing.** A missing code doesn't count, and neither does a real code whose time step is already spent (reused, or spent by an unlock): it is refused but isn't a guess. Each wrong or expired code does count: after `maxFailures` (default 5) the gated tools are refused for that user for `lockoutSeconds` (default 600) without any code being checked (`OTP is locked for <n> more minute(s) after too many bad codes. Nothing was run.`). After `maxLockouts` (default 3) of those short lockouts in a rolling 24 hours, that user is hard-locked: every tool except `otp_status` is refused for them, ungated ones included, until root clears it. Other agents are not affected.
 
-```
+```text
 gh-broker is locked for <user> after repeated bad OTP codes (since <ISO>). Ask the user to run "sudo gh-broker otp unlock <user>" on <host>. Nothing was run.
 ```
 
@@ -81,16 +81,16 @@ A user with no entry has nothing recorded, and the broker drops entries that hav
 
 These need a code unless their entry says `"otp": false`, because each can publish, merge, release or undo something under the user's name:
 
-| Tool | Why |
-|---|---|
-| `create_repository` | A new repo, private or public. |
-| `fork_repository` | A new repo in the org. |
-| `merge_pull_request` | Ships code into the base branch. |
-| `pull_request_review_write` | An approval counts toward required reviews. |
-| `actions_run_trigger` | Dispatches a workflow, re-runs or cancels a run. A re-run of a release or publish job releases again; some manual workflows (`v4-bootstrap`, org onboarding) change settings, rulesets, tags and releases. Its `delete_workflow_run_logs` method is refused outright, gated or not: a run's logs are the record of what it did. |
-| `label_write` | Renaming or deleting a repo label changes every issue and PR carrying it, and the release and status workflows match label names exactly. |
-| `delete_branch` | See [`delete_branch`](#delete_branch). |
-| `dismiss_alert` | See [`dismiss_alert`](#dismiss_alert). |
+| Tool                        | Why                                                                                                                                                                                                                                                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create_repository`         | A new repo, private or public.                                                                                                                                                                                                                                                                                                  |
+| `fork_repository`           | A new repo in the org.                                                                                                                                                                                                                                                                                                          |
+| `merge_pull_request`        | Ships code into the base branch.                                                                                                                                                                                                                                                                                                |
+| `pull_request_review_write` | An approval counts toward required reviews.                                                                                                                                                                                                                                                                                     |
+| `actions_run_trigger`       | Dispatches a workflow, re-runs or cancels a run. A re-run of a release or publish job releases again; some manual workflows (`v4-bootstrap`, org onboarding) change settings, rulesets, tags and releases. Its `delete_workflow_run_logs` method is refused outright, gated or not: a run's logs are the record of what it did. |
+| `label_write`               | Renaming or deleting a repo label changes every issue and PR carrying it, and the release and status workflows match label names exactly.                                                                                                                                                                                       |
+| `delete_branch`             | See [`delete_branch`](#delete_branch).                                                                                                                                                                                                                                                                                          |
+| `dismiss_alert`             | See [`dismiss_alert`](#dismiss_alert).                                                                                                                                                                                                                                                                                          |
 
 The Copilot coding-agent tools are on this list too, and are also [disabled by default](#disabled-by-default).
 
@@ -118,7 +118,16 @@ The gate's state for the calling agent user, plus every hard-locked user. Read, 
 {
 	"configured": true,
 	"user": "repo",
-	"gatedTools": ["create_repository", "fork_repository", "merge_pull_request", "pull_request_review_write", "actions_run_trigger", "label_write", "delete_branch", "dismiss_alert"],
+	"gatedTools": [
+		"create_repository",
+		"fork_repository",
+		"merge_pull_request",
+		"pull_request_review_write",
+		"actions_run_trigger",
+		"label_write",
+		"delete_branch",
+		"dismiss_alert"
+	],
 	"windowSeconds": 300,
 	"openWindows": 1,
 	"nextWindowExpiresAt": "2026-11-01T12:05:00.000Z",
@@ -129,7 +138,9 @@ The gate's state for the calling agent user, plus every hard-locked user. Read, 
 	"maxLockouts": 3,
 	"hardLock": null,
 	"unlockCommand": "sudo gh-broker otp unlock repo",
-	"lockedUsers": [{ "user": "glmtest", "since": "2026-11-01T11:00:00.000Z", "lockouts": 3, "unlockCommand": "sudo gh-broker otp unlock glmtest" }],
+	"lockedUsers": [
+		{ "user": "glmtest", "since": "2026-11-01T11:00:00.000Z", "lockouts": 3, "unlockCommand": "sudo gh-broker otp unlock glmtest" }
+	],
 	"host": "broker-host"
 }
 ```
@@ -155,16 +166,16 @@ Issues and/or PRs with no labels, for one repo or every non-archived repo an own
 }
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner` | string | — (required) | Selects the read credential. |
-| `repo` | string | — | Omit to scan every non-archived repo visible to this owner's read PAT (enumerated via `GET /orgs/{owner}/repos`, falling back to `GET /users/{owner}/repos` on a 404). |
-| `target` | `"issues"` \| `"pulls"` \| `"both"` | `"both"` | |
-| `state` | `"open"` \| `"closed"` \| `"all"` | `"open"` | |
-| `includeDrafts` | boolean | `false` | A draft PR with no labels isn't triage-ready by default; include it explicitly if wanted. |
-| `maxRepos` | number | 50 (hard cap 200) | Only relevant when `repo` is omitted. |
-| `perRepoLimit` | number | 200 (hard cap 1000) | Items scanned per repo, per resource type. |
-| `maxApiCalls` | number | 250 (hard cap 1000) | Hard ceiling on total REST calls for one invocation, regardless of the two caps above. |
+| Param           | Type                                | Default             | Notes                                                                                                                                                                  |
+| --------------- | ----------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`         | string                              | — (required)        | Selects the read credential.                                                                                                                                           |
+| `repo`          | string                              | —                   | Omit to scan every non-archived repo visible to this owner's read PAT (enumerated via `GET /orgs/{owner}/repos`, falling back to `GET /users/{owner}/repos` on a 404). |
+| `target`        | `"issues"` \| `"pulls"` \| `"both"` | `"both"`            |                                                                                                                                                                        |
+| `state`         | `"open"` \| `"closed"` \| `"all"`   | `"open"`            |                                                                                                                                                                        |
+| `includeDrafts` | boolean                             | `false`             | A draft PR with no labels isn't triage-ready by default; include it explicitly if wanted.                                                                              |
+| `maxRepos`      | number                              | 50 (hard cap 200)   | Only relevant when `repo` is omitted.                                                                                                                                  |
+| `perRepoLimit`  | number                              | 200 (hard cap 1000) | Items scanned per repo, per resource type.                                                                                                                             |
+| `maxApiCalls`   | number                              | 250 (hard cap 1000) | Hard ceiling on total REST calls for one invocation, regardless of the two caps above.                                                                                 |
 
 Real example — `CLDMV/gh-broker` scanned for unlabeled issues/PRs (`state: "all"`):
 
@@ -172,7 +183,14 @@ Real example — `CLDMV/gh-broker` scanned for unlabeled issues/PRs (`state: "al
 {
 	"scanned": { "repos": 1, "issues": 4, "pulls": 54 },
 	"unlabeled": [
-		{ "repo": "CLDMV/gh-broker", "type": "issue", "number": 9, "title": "Deploy/runtime is Linux + systemd only, despite the app being portable Node", "url": "https://github.com/CLDMV/gh-broker/issues/9", "createdAt": "2026-08-03T02:04:22Z" }
+		{
+			"repo": "CLDMV/gh-broker",
+			"type": "issue",
+			"number": 9,
+			"title": "Deploy/runtime is Linux + systemd only, despite the app being portable Node",
+			"url": "https://github.com/CLDMV/gh-broker/issues/9",
+			"createdAt": "2026-08-03T02:04:22Z"
+		}
 	]
 }
 ```
@@ -192,28 +210,28 @@ Every open Dependabot, code-scanning (CodeQL) and secret-scanning alert, for one
 }
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner` | string | — (required) | Selects the read credential. |
-| `repo` | string | — | Omit to cover every non-archived repo the owner has. When given, only the per-repo endpoints are used. |
-| `types` | array of `"dependabot"` \| `"codeql"` \| `"secrets"` | all three | |
-| `maxRepos` | number | 200 (hard cap 500) | Only relevant to a per-repo sweep (see below). |
-| `alertLimit` | number | 500 (hard cap 5000) | Alerts fetched per type in org mode, or per repo per type in a per-repo sweep. |
-| `maxApiCalls` | number | 700 (hard cap 3000) | Hard ceiling on total REST calls for one invocation. |
-| `summaryOnly` | boolean | `false` | Return only the per-repo roll-up and counts. An org run is about 700 KB with the alert list and a few KB without it; `alertsOmitted` says how many alerts were left out. |
-| `minSeverity` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | — | Keep only alerts at or above this severity. Secret-scanning alerts have no severity and are always kept. |
-| `repos` | string[] | — | Keep only these repos (names, with or without the owner prefix, case-insensitive). |
-| `classify` | boolean | `false` | Add each repo's flow tier to its roll-up row. About 3 REST calls per repo that has alerts. |
+| Param         | Type                                                 | Default             | Notes                                                                                                                                                                    |
+| ------------- | ---------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `owner`       | string                                               | — (required)        | Selects the read credential.                                                                                                                                             |
+| `repo`        | string                                               | —                   | Omit to cover every non-archived repo the owner has. When given, only the per-repo endpoints are used.                                                                   |
+| `types`       | array of `"dependabot"` \| `"codeql"` \| `"secrets"` | all three           |                                                                                                                                                                          |
+| `maxRepos`    | number                                               | 200 (hard cap 500)  | Only relevant to a per-repo sweep (see below).                                                                                                                           |
+| `alertLimit`  | number                                               | 500 (hard cap 5000) | Alerts fetched per type in org mode, or per repo per type in a per-repo sweep.                                                                                           |
+| `maxApiCalls` | number                                               | 700 (hard cap 3000) | Hard ceiling on total REST calls for one invocation.                                                                                                                     |
+| `summaryOnly` | boolean                                              | `false`             | Return only the per-repo roll-up and counts. An org run is about 700 KB with the alert list and a few KB without it; `alertsOmitted` says how many alerts were left out. |
+| `minSeverity` | `"critical"` \| `"high"` \| `"medium"` \| `"low"`    | —                   | Keep only alerts at or above this severity. Secret-scanning alerts have no severity and are always kept.                                                                 |
+| `repos`       | string[]                                             | —                   | Keep only these repos (names, with or without the owner prefix, case-insensitive).                                                                                       |
+| `classify`    | boolean                                              | `false`             | Add each repo's flow tier to its roll-up row. About 3 REST calls per repo that has alerts.                                                                               |
 
 **Org-level first, per-repo as the fallback.** For each requested type the verb asks the org-level endpoint (`/orgs/{owner}/dependabot/alerts`, `/code-scanning/alerts`, `/secret-scanning/alerts`) — a handful of calls for the whole owner. If that endpoint is not available to the token (a user-owned account answers 404, a PAT without org alert access answers 403), that type alone falls back to one call per repo. `scope` in the result says which path each type took, and `disabled` counts the repos where a type is switched off or unreadable (code scanning and secret scanning are off on many repos, and that is a normal answer rather than an error).
 
 **Per-repo roll-up.** Every result carries `byRepo`: one row per repo with at least one alert (after the filters), worst first (criticals, then highs, then total), with `total`, per-type counts (`dependabot`, `codeql`, `secrets`) and `critical` / `high` / `medium` / `low`. With `classify: true` each row also has `tier` and `tierSignals`:
 
-| `tier` | Meaning |
-|---|---|
-| `v4` | `.github/workflows/next-release.yml` exists on the default branch, and `next` carries its own work (or there is no `dev` branch). |
+| `tier`      | Meaning                                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `v4`        | `.github/workflows/next-release.yml` exists on the default branch, and `next` carries its own work (or there is no `dev` branch).          |
 | `dev-trunk` | A v4 repo with a `dev` branch that differs from the default branch while `next` is missing or equal to the default branch (scaffold only). |
-| `non-v4` | No `next-release.yml` on the default branch — even if `next` / `hotfixes` branches exist. |
+| `non-v4`    | No `next-release.yml` on the default branch — even if `next` / `hotfixes` branches exist.                                                  |
 
 The tier is a structural signal, not a verdict. A stale `dev` branch on a repo whose `next` happens to equal `master` right after a release reads as `dev-trunk`; `tierSignals` carries the raw facts (`v4Workflow`, `defaultBranch`, `next`, `dev`, `nextEqualsDefault`, `devDiffersFromDefault`) so a caller can cross-check.
 
@@ -225,7 +243,22 @@ Each alert is normalized to one shape: `repo`, `type`, `number`, `severity`, `su
 	"scope": { "dependabot": "org", "codeql": "per-repo", "secrets": "per-repo" },
 	"counts": { "dependabot": { "high": 1 }, "codeql": {}, "secrets": {} },
 	"alerts": [
-		{ "repo": "CLDMV/gh-broker", "type": "dependabot", "number": 19, "severity": "medium", "summary": "…", "url": "https://github.com/CLDMV/gh-broker/security/dependabot/19", "createdAt": "2026-10-02T20:10:30Z", "package": "ip-address", "ecosystem": "npm", "manifest": "package-lock.json", "scope": "runtime", "ghsa": "GHSA-j6r3-76f7-8jcv", "vulnerableRange": "<= 10.7.0", "patchedVersion": "10.7.1" }
+		{
+			"repo": "CLDMV/gh-broker",
+			"type": "dependabot",
+			"number": 19,
+			"severity": "medium",
+			"summary": "…",
+			"url": "https://github.com/CLDMV/gh-broker/security/dependabot/19",
+			"createdAt": "2026-10-02T20:10:30Z",
+			"package": "ip-address",
+			"ecosystem": "npm",
+			"manifest": "package-lock.json",
+			"scope": "runtime",
+			"ghsa": "GHSA-j6r3-76f7-8jcv",
+			"vulnerableRange": "<= 10.7.0",
+			"patchedVersion": "10.7.1"
+		}
 	],
 	"disabled": { "codeql": 140, "secrets": 140 }
 }
@@ -248,27 +281,27 @@ For every open Dependabot alert, where its fix stands. `report_security_alerts` 
 }
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner` | string | — (required) | Selects the read credential. |
-| `repo` | string | — | One repo. |
-| `repos` | string[] | — | Several repos, with or without the owner prefix — for example the `byRepo` names of a `report_security_alerts` run. With neither `repo` nor `repos`, every repo with an open Dependabot alert is covered. |
-| `buckets` | array of bucket names | all | List only alerts in these buckets. `summary` and each repo's `counts` still cover every alert. |
-| `maxRepos` | number | 200 (hard cap 500) | Only used when the org-level alert endpoint is unavailable and the verb sweeps repo by repo. |
-| `alertLimit` | number | 500 (hard cap 5000) | Alerts fetched in org mode, or per repo. |
-| `prLimit` | number | 200 (hard cap 1000) | PRs read per repo, newest first, open and closed. |
-| `maxLockfileBytes` | number | 10 MB (hard cap 50 MB) | Larger lockfiles are not read; the alert's lockfile state is then `unknown` with reason `too-large`. |
-| `maxApiCalls` | number | 400 (hard cap 2000) | Hard ceiling on total REST calls for one invocation. |
+| Param              | Type                  | Default                | Notes                                                                                                                                                                                                     |
+| ------------------ | --------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`            | string                | — (required)           | Selects the read credential.                                                                                                                                                                              |
+| `repo`             | string                | —                      | One repo.                                                                                                                                                                                                 |
+| `repos`            | string[]              | —                      | Several repos, with or without the owner prefix — for example the `byRepo` names of a `report_security_alerts` run. With neither `repo` nor `repos`, every repo with an open Dependabot alert is covered. |
+| `buckets`          | array of bucket names | all                    | List only alerts in these buckets. `summary` and each repo's `counts` still cover every alert.                                                                                                            |
+| `maxRepos`         | number                | 200 (hard cap 500)     | Only used when the org-level alert endpoint is unavailable and the verb sweeps repo by repo.                                                                                                              |
+| `alertLimit`       | number                | 500 (hard cap 5000)    | Alerts fetched in org mode, or per repo.                                                                                                                                                                  |
+| `prLimit`          | number                | 200 (hard cap 1000)    | PRs read per repo, newest first, open and closed.                                                                                                                                                         |
+| `maxLockfileBytes` | number                | 10 MB (hard cap 50 MB) | Larger lockfiles are not read; the alert's lockfile state is then `unknown` with reason `too-large`.                                                                                                      |
+| `maxApiCalls`      | number                | 400 (hard cap 2000)    | Hard ceiling on total REST calls for one invocation.                                                                                                                                                      |
 
 Each alert gets one `bucket`. They are checked in this order, so the bucket is the furthest the fix has got:
 
-| `bucket` | Meaning |
-|---|---|
+| `bucket`              | Meaning                                                                                                                                                                                               |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `released-still-open` | The default branch's lockfile no longer resolves a vulnerable version (or no longer has the package), yet the alert is open. The fix didn't take: another manifest or directory, or a stale lockfile. |
-| `fixed-on-next` | `next` or `hotfixes` resolves only patched versions and the default branch doesn't. Waiting for a release. |
-| `open-pr` | An open PR bumps the package. A PR against the default branch carries `hotfixRedirect` when the hotfix redirector has opened its `hotfix-redirect/pr-<n>` twin. |
-| `closed-unmerged` | Only closed, unmerged PRs touch the package. Each closed PR carries `supersededBy` when a PR for the same package merged after it was closed. |
-| `no-pr` | Nothing in flight. Merged PRs that did not clear the alert are still listed in `mergedPrs`. |
+| `fixed-on-next`       | `next` or `hotfixes` resolves only patched versions and the default branch doesn't. Waiting for a release.                                                                                            |
+| `open-pr`             | An open PR bumps the package. A PR against the default branch carries `hotfixRedirect` when the hotfix redirector has opened its `hotfix-redirect/pr-<n>` twin.                                       |
+| `closed-unmerged`     | Only closed, unmerged PRs touch the package. Each closed PR carries `supersededBy` when a PR for the same package merged after it was closed.                                                         |
+| `no-pr`               | Nothing in flight. Merged PRs that did not clear the alert are still listed in `mergedPrs`.                                                                                                           |
 
 **Lockfiles.** For npm-ecosystem alerts the verb reads the lockfile nearest the alert's `manifest` on the default branch, `next` and `hotfixes` (when they exist). A manifest that is itself a lockfile is read directly; for a `package.json` it looks for `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml` and `yarn.lock` beside it and then in each parent directory up to the root, so a workspace package resolves to the workspace's lockfile. A version counts as vulnerable when it falls inside the alert's `vulnerableRange`, falling back to "below `patchedVersion`" when the range can't be read. Lockfiles are read at the branch's commit SHA and cached, so each one is fetched once per commit: a `next` that equals the default branch costs nothing extra. Files over 1 MB come through the blob API (one extra call). Alerts in other ecosystems get no `lockfile` block and are bucketed from their PRs alone.
 
@@ -293,7 +326,25 @@ Each lockfile state is `fixed`, `vulnerable` or `unknown`, with the `path` read 
 			"prListTruncated": true,
 			"counts": { "fixed-on-next": 1, "open-pr": 1 },
 			"alerts": [
-				{ "number": 19, "url": "https://github.com/CLDMV/gh-broker/security/dependabot/19", "severity": "medium", "package": "ip-address", "ecosystem": "npm", "manifest": "package-lock.json", "vulnerableRange": "<= 10.7.0", "patchedVersion": "10.7.1", "createdAt": "2026-10-02T20:10:30Z", "bucket": "fixed-on-next", "reason": "next resolves ip-address 10.7.1; waiting for a release", "lockfile": { "default": { "state": "vulnerable", "path": "package-lock.json", "versions": ["10.7.0"] }, "next": { "state": "fixed", "path": "package-lock.json", "versions": ["10.7.1"] }, "hotfixes": { "state": "vulnerable", "path": "package-lock.json", "versions": ["10.7.0"] } }, "openPrs": [] }
+				{
+					"number": 19,
+					"url": "https://github.com/CLDMV/gh-broker/security/dependabot/19",
+					"severity": "medium",
+					"package": "ip-address",
+					"ecosystem": "npm",
+					"manifest": "package-lock.json",
+					"vulnerableRange": "<= 10.7.0",
+					"patchedVersion": "10.7.1",
+					"createdAt": "2026-10-02T20:10:30Z",
+					"bucket": "fixed-on-next",
+					"reason": "next resolves ip-address 10.7.1; waiting for a release",
+					"lockfile": {
+						"default": { "state": "vulnerable", "path": "package-lock.json", "versions": ["10.7.0"] },
+						"next": { "state": "fixed", "path": "package-lock.json", "versions": ["10.7.1"] },
+						"hotfixes": { "state": "vulnerable", "path": "package-lock.json", "versions": ["10.7.0"] }
+					},
+					"openPrs": []
+				}
 			]
 		}
 	]
@@ -316,16 +367,16 @@ Every non-archived, non-fork repo an owner has that declares an npm package, wit
 }
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner` | string | — (required) | Selects the read credential. |
-| `name` | string | — (required) | npm package name, e.g. `@cldmv/fix-headers`. Anything that is not a valid npm name is rejected before any call is made. |
-| `latest` | boolean | `false` | Look up the latest published version on the npm registry and set `behind` on each declaration whose resolved version is older. The lookup is unauthenticated and uses `npm.registry` from the broker config when one is set. A failed lookup is reported as `latestError` and does not fail the verb. |
-| `classify` | boolean | `true` | Add each dependent repo's flow tier (`v4` / `dev-trunk` / `non-v4`) and `tierSignals`, the same classifier `report_security_alerts` uses. About 3 REST calls per dependent repo; pass `false` to skip them. |
-| `devBranches` | boolean | `true` | Also read every `package.json` on each repo's `dev` branch when it differs from the default branch, so dev-trunk repos are found. A `dev` whose root `version` is below the default branch's is skipped as abandoned and listed in `abandonedDev`. |
-| `maxRepos` | number | 200 (hard cap 500) | Repos verified, search candidates and dev branches together. |
-| `maxFileBytes` | number | 5000000 (hard cap 20000000) | Largest `package.json` or lockfile that is read. Bigger files are listed in `unread` with reason `too-large`. |
-| `maxApiCalls` | number | 600 (hard cap 3000) | Hard ceiling on total REST calls for one invocation. |
+| Param          | Type    | Default                     | Notes                                                                                                                                                                                                                                                                                                 |
+| -------------- | ------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`        | string  | — (required)                | Selects the read credential.                                                                                                                                                                                                                                                                          |
+| `name`         | string  | — (required)                | npm package name, e.g. `@cldmv/fix-headers`. Anything that is not a valid npm name is rejected before any call is made.                                                                                                                                                                               |
+| `latest`       | boolean | `false`                     | Look up the latest published version on the npm registry and set `behind` on each declaration whose resolved version is older. The lookup is unauthenticated and uses `npm.registry` from the broker config when one is set. A failed lookup is reported as `latestError` and does not fail the verb. |
+| `classify`     | boolean | `true`                      | Add each dependent repo's flow tier (`v4` / `dev-trunk` / `non-v4`) and `tierSignals`, the same classifier `report_security_alerts` uses. About 3 REST calls per dependent repo; pass `false` to skip them.                                                                                           |
+| `devBranches`  | boolean | `true`                      | Also read every `package.json` on each repo's `dev` branch when it differs from the default branch, so dev-trunk repos are found. A `dev` whose root `version` is below the default branch's is skipped as abandoned and listed in `abandonedDev`.                                                    |
+| `maxRepos`     | number  | 200 (hard cap 500)          | Repos verified, search candidates and dev branches together.                                                                                                                                                                                                                                          |
+| `maxFileBytes` | number  | 5000000 (hard cap 20000000) | Largest `package.json` or lockfile that is read. Bigger files are listed in `unread` with reason `too-large`.                                                                                                                                                                                         |
+| `maxApiCalls`  | number  | 600 (hard cap 3000)         | Hard ceiling on total REST calls for one invocation.                                                                                                                                                                                                                                                  |
 
 **How it finds repos.** One org-wide code search (`"<name>" org:<owner> filename:package.json`, up to 10 pages of 100) produces the candidate list. Each candidate repo is then read directly: its repo record (archived and fork repos are skipped and counted), then every matching `package.json` at the default branch. A manifest counts only when the package appears as a key in `dependencies`, `devDependencies` or `peerDependencies`; a repo that merely mentions the name in text lands in `scanned.notDeclared`. Code search is not trusted for completeness: it lags recent commits, only indexes default branches and returns at most 1000 hits, so `discovery.note` says so on every result, and `incomplete_results` / a full result window set `truncated`.
 
@@ -352,7 +403,13 @@ A `dev` that has fallen behind a release is abandoned, not a trunk: when its roo
 			"lockfile": "pnpm-lock.yaml",
 			"declarations": [
 				{ "path": "package.json", "declared": [{ "field": "devDependencies", "range": "^1.4.0" }], "resolved": "1.4.2", "behind": true },
-				{ "path": "tools/rummage/package.json", "member": "tools/rummage", "declared": [{ "field": "devDependencies", "range": "^1.5.0" }], "resolved": "1.5.0", "behind": false }
+				{
+					"path": "tools/rummage/package.json",
+					"member": "tools/rummage",
+					"declared": [{ "field": "devDependencies", "range": "^1.5.0" }],
+					"resolved": "1.5.0",
+					"behind": false
+				}
 			]
 		}
 	]
@@ -379,15 +436,15 @@ The custom property values set on one repo, or on every repo in an org. Use it t
 }
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner` | string | — (required) | The org. Selects the read credential. |
-| `repo` | string | — | One repo (`GET /repos/{owner}/{repo}/properties/values`). Omit to list every repo in the org (`GET /orgs/{org}/properties/values`). |
-| `property` | string | — | Keep only repos where this property is set, and report only this property. |
-| `value` | string | — | Needs `property`. Keep only repos where the property has this value; for a multi-select property, where its values include it. |
-| `repositoryQuery` | string | — | Org listing only. Passed through as GitHub's `repository_query` (repo search syntax, e.g. `archived:false`). |
-| `maxRepos` | number | 1000 (hard cap 5000) | Org listing: stop after this many repos. |
-| `maxApiCalls` | number | 30 (hard cap 100) | Hard ceiling on REST calls. The org listing costs one call per 100 repos. |
+| Param             | Type   | Default              | Notes                                                                                                                               |
+| ----------------- | ------ | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`           | string | — (required)         | The org. Selects the read credential.                                                                                               |
+| `repo`            | string | —                    | One repo (`GET /repos/{owner}/{repo}/properties/values`). Omit to list every repo in the org (`GET /orgs/{org}/properties/values`). |
+| `property`        | string | —                    | Keep only repos where this property is set, and report only this property.                                                          |
+| `value`           | string | —                    | Needs `property`. Keep only repos where the property has this value; for a multi-select property, where its values include it.      |
+| `repositoryQuery` | string | —                    | Org listing only. Passed through as GitHub's `repository_query` (repo search syntax, e.g. `archived:false`).                        |
+| `maxRepos`        | number | 1000 (hard cap 5000) | Org listing: stop after this many repos.                                                                                            |
+| `maxApiCalls`     | number | 30 (hard cap 100)    | Hard ceiling on REST calls. The org listing costs one call per 100 repos.                                                           |
 
 Returns `{ owner, repo?, repos: [{ repo, properties: { <name>: <value> } }], count }`. A value is a string, an array of strings (multi-select) or `null` (unset). `property` and `value` filter what GitHub returned. The org listing returns `truncated: true` with `truncatedReason` (`max-repos`, `max-api-calls`, `rate-limited`) instead of failing when a cap or the rate limit is hit.
 
@@ -404,30 +461,41 @@ Every open release PR for an owner (or one repo), and whether each one's per-ver
 }
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner` | string | — (required) | Selects the read credential. |
-| `repo` | string | — | Omit to search every repo the owner has. |
-| `onlyMissing` | boolean | `false` | List only PRs that are not `ready`. `summary` still counts all of them. |
-| `analyze` | boolean | `false` | Add an `analysis` block per release PR and a `verdicts` tally. About 5 more REST calls per release PR, so raise `maxApiCalls` for a whole org. With `onlyMissing`, "missing" then means "verdict other than `done`". |
-| `maxApiCalls` | number | 300 (hard cap 1000) | Hard ceiling on total REST calls for one invocation. |
+| Param         | Type    | Default             | Notes                                                                                                                                                                                                                |
+| ------------- | ------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`       | string  | — (required)        | Selects the read credential.                                                                                                                                                                                         |
+| `repo`        | string  | —                   | Omit to search every repo the owner has.                                                                                                                                                                             |
+| `onlyMissing` | boolean | `false`             | List only PRs that are not `ready`. `summary` still counts all of them.                                                                                                                                              |
+| `analyze`     | boolean | `false`             | Add an `analysis` block per release PR and a `verdicts` tally. About 5 more REST calls per release PR, so raise `maxApiCalls` for a whole org. With `onlyMissing`, "missing" then means "verdict other than `done`". |
+| `maxApiCalls` | number  | 300 (hard cap 1000) | Hard ceiling on total REST calls for one invocation.                                                                                                                                                                 |
 
 A release PR is an open PR carrying the `release` label, which the v4 release automation applies to both the `next → master` and the `hotfixes → master` PR. One search call covers the whole owner; each PR found then costs one call for its head/base and up to two to look for the changelog.
 
 The version is read from the `release: vX.Y.Z - …` title. The changelog is looked up **at the PR's head commit** (not the default branch), because the file lands on `next` before the release PR merges. Both `docs/changelog/v<major>/vX.Y.Z.md` and `docs/changelogs/v<major>/vX.Y.Z.md` are checked. Each PR gets one `status`:
 
-| `status` | Meaning |
-|---|---|
-| `ready` | The changelog file exists (`changelogPath` says where). |
+| `status`          | Meaning                                                                                      |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| `ready`           | The changelog file exists (`changelogPath` says where).                                      |
 | `needs-changelog` | The version is known but no changelog file exists (`checkedPaths` lists what was looked up). |
-| `unknown-version` | The title has no `release: vX.Y.Z`, so there is nothing to look up. |
+| `unknown-version` | The title has no `release: vX.Y.Z`, so there is nothing to look up.                          |
 
 ```json
 {
 	"scanned": { "releasePrs": 2 },
 	"summary": { "ready": 1, "needsChangelog": 1, "unknownVersion": 0 },
 	"releasePrs": [
-		{ "repo": "CLDMV/gh-broker", "pull": 91, "url": "https://github.com/CLDMV/gh-broker/pull/91", "title": "release: v0.4.3 - …", "version": "0.4.3", "head": "next", "base": "master", "draft": false, "status": "needs-changelog", "checkedPaths": ["docs/changelog/v0/v0.4.3.md", "docs/changelogs/v0/v0.4.3.md"] }
+		{
+			"repo": "CLDMV/gh-broker",
+			"pull": 91,
+			"url": "https://github.com/CLDMV/gh-broker/pull/91",
+			"title": "release: v0.4.3 - …",
+			"version": "0.4.3",
+			"head": "next",
+			"base": "master",
+			"draft": false,
+			"status": "needs-changelog",
+			"checkedPaths": ["docs/changelog/v0/v0.4.3.md", "docs/changelogs/v0/v0.4.3.md"]
+		}
 	]
 }
 ```
@@ -436,27 +504,27 @@ The version is read from the `release: vX.Y.Z - …` title. The changelog is loo
 
 `freshness.status` compares the changelog with the PRs that actually shipped in the release (read from the release PR's commits, first line of each; docs PRs and the version bump are ignored):
 
-| `freshness.status` | Meaning |
-|---|---|
-| `current` | The heading carries the release's version and every shipped PR is mentioned. |
-| `minor-gap` | Every user-facing PR is mentioned; only `ci` / `chore` / `style` / `test` PRs are not (`missingInternal`). |
-| `stale` | At least one user-facing PR is not mentioned (`missingUserFacing`). |
-| `version-drift` | The changelog's heading names a different version than the release PR's current title. |
-| `thin` | Looks like a stub (very short, or no Overview section). |
+| `freshness.status` | Meaning                                                                                                    |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `current`          | The heading carries the release's version and every shipped PR is mentioned.                               |
+| `minor-gap`        | Every user-facing PR is mentioned; only `ci` / `chore` / `style` / `test` PRs are not (`missingInternal`). |
+| `stale`            | At least one user-facing PR is not mentioned (`missingUserFacing`).                                        |
+| `version-drift`    | The changelog's heading names a different version than the release PR's current title.                     |
+| `thin`             | Looks like a stub (very short, or no Overview section).                                                    |
 
 `readmeMentionsVersion` reports whether the README's What's New block names the version; it does not change the status.
 
 The `verdict` is the release-docs decision table:
 
-| `verdict` | When |
-|---|---|
-| `done` | A changelog exists and is `current` or `minor-gap`. |
+| `verdict`   | When                                                                                                                                      |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `done`      | A changelog exists and is `current` or `minor-gap`.                                                                                       |
 | `in-flight` | It needs work and a doc PR is already open against the release branch (`docVersionMismatch` is set if that PR names a different version). |
-| `wait` | It needs work and feature/fix PRs are still open against the release branch. |
-| `gray` | It needs work and only dependency PRs or drafts are open. |
-| `write` | No changelog exists and nothing is open against the release branch. |
-| `update` | A changelog exists but is stale, drifted or thin, and nothing is open against the release branch. |
-| `inspect` | The release PR title has no readable version. |
+| `wait`      | It needs work and feature/fix PRs are still open against the release branch.                                                              |
+| `gray`      | It needs work and only dependency PRs or drafts are open.                                                                                 |
+| `write`     | No changelog exists and nothing is open against the release branch.                                                                       |
+| `update`    | A changelog exists but is stale, drifted or thin, and nothing is open against the release branch.                                         |
+| `inspect`   | The release PR title has no readable version.                                                                                             |
 
 The release PR's version can change while it is open (more PRs landing on `next` can raise the bump), so a `ready` changelog is only as current as the title it was matched against — re-run the report after `next` changes. Truncation follows the same pattern as the other report verbs; the extra reasons are `"max-results"` (more than one page of release PRs matched — GitHub's search returns 100 per page) and `"incomplete-search"` (GitHub reported the search timed out).
 
@@ -476,36 +544,36 @@ The source material for one release's changelog. `report_release_prs` `analyze` 
 }
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner`, `repo` | string | — (required) | |
-| `pull` | number | — (required) | The release PR (`next → master` or `hotfixes → master`). |
-| `detail` | `"titles"` \| `"summaries"` \| `"files"` \| `"diff"` | `"summaries"` | Per-PR depth, see below. |
-| `prs` | number[] | — | Only these PRs get `detail`; every other shipping PR comes back at `titles`. Numbers that aren't in the release are listed in `notInRelease`. |
-| `skeleton` | boolean | `false` | Also return `skeleton`, a markdown changelog in the per-version template: headings, one `### <title> ([#N](…))` entry per PR, no prose. |
-| `maxBodyChars` | number | 3000 | Per-PR body cap (`bodyTruncated: true` when cut). |
-| `maxFiles` | number | 50 (hard cap 300) | Per-PR file-list cap (`filesTruncated: true` when the PR has more). |
-| `maxPatchChars` | number | 3000 | Per-file patch cap with `detail: "diff"` (`patchTruncated: true` when cut). |
-| `maxDiffChars` | number | 60000 | Total patch characters across the whole report. Files past it get `patchSkipped: "max-diff-chars"`. |
-| `maxApiCalls` | number | 300 (hard cap 1000) | Hard ceiling on total REST calls for one invocation. |
+| Param           | Type                                                 | Default             | Notes                                                                                                                                         |
+| --------------- | ---------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`, `repo` | string                                               | — (required)        |                                                                                                                                               |
+| `pull`          | number                                               | — (required)        | The release PR (`next → master` or `hotfixes → master`).                                                                                      |
+| `detail`        | `"titles"` \| `"summaries"` \| `"files"` \| `"diff"` | `"summaries"`       | Per-PR depth, see below.                                                                                                                      |
+| `prs`           | number[]                                             | —                   | Only these PRs get `detail`; every other shipping PR comes back at `titles`. Numbers that aren't in the release are listed in `notInRelease`. |
+| `skeleton`      | boolean                                              | `false`             | Also return `skeleton`, a markdown changelog in the per-version template: headings, one `### <title> ([#N](…))` entry per PR, no prose.       |
+| `maxBodyChars`  | number                                               | 3000                | Per-PR body cap (`bodyTruncated: true` when cut).                                                                                             |
+| `maxFiles`      | number                                               | 50 (hard cap 300)   | Per-PR file-list cap (`filesTruncated: true` when the PR has more).                                                                           |
+| `maxPatchChars` | number                                               | 3000                | Per-file patch cap with `detail: "diff"` (`patchTruncated: true` when cut).                                                                   |
+| `maxDiffChars`  | number                                               | 60000               | Total patch characters across the whole report. Files past it get `patchSkipped: "max-diff-chars"`.                                           |
+| `maxApiCalls`   | number                                               | 300 (hard cap 1000) | Hard ceiling on total REST calls for one invocation.                                                                                          |
 
-| `detail` | Each PR carries |
-|---|---|
-| `titles` | `number`, `url`, `title`, `type` (and `scope`), `labels`, `author`, `mergedAt`, `closes`, `additions` / `deletions` / `changedFiles`, `breaking`, `section`, `documented` |
-| `summaries` | adds `body` |
-| `files` | adds `files`: `path`, `status`, `additions`, `deletions` |
-| `diff` | adds each file's `patch`. Lockfiles, `dist/` and `types/` get `patchSkipped: "generated"` instead. |
+| `detail`    | Each PR carries                                                                                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `titles`    | `number`, `url`, `title`, `type` (and `scope`), `labels`, `author`, `mergedAt`, `closes`, `additions` / `deletions` / `changedFiles`, `breaking`, `section`, `documented` |
+| `summaries` | adds `body`                                                                                                                                                               |
+| `files`     | adds `files`: `path`, `status`, `additions`, `deletions`                                                                                                                  |
+| `diff`      | adds each file's `patch`. Lockfiles, `dist/` and `types/` get `patchSkipped: "generated"` instead.                                                                        |
 
 A good pattern is one call at `titles` to see the whole release, then a second with `prs` set to the few PRs that need a closer look.
 
 **Which PRs ship.** The list starts from the release PR's commits, reading only the first line of each, with the same extraction `report_release_prs` `analyze` uses: squash commits by their trailing `(#N)`, merge commits by `Merge pull request #N`, branch commits without a number ignored, docs PRs and the version bump dropped. It is then scoped by net change rather than by the commit list, because `next` keeps its pre-squash history when it isn't reset after a release, and already-shipped PRs show up again. These are moved to `excluded`, each with a `reason`:
 
-| `reason` | Meaning |
-|---|---|
-| `earlier-release` | The PR is in the commits of an earlier release PR on the base branch. |
-| `earlier-changelog` | The previous version's changelog names it. |
-| `reverted` / `revert` | The PR was merged and then reverted inside the same range, so it nets to zero; `pair` names the other half. A revert of something outside the range stays in the list. |
-| `not-a-pr` | The number isn't a pull request. A PR merged with a merge commit brings its branch commits into the range, and one whose subject ends in an issue number, like `(#223)`, looks the same as a squash commit. |
+| `reason`              | Meaning                                                                                                                                                                                                     |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `earlier-release`     | The PR is in the commits of an earlier release PR on the base branch.                                                                                                                                       |
+| `earlier-changelog`   | The previous version's changelog names it.                                                                                                                                                                  |
+| `reverted` / `revert` | The PR was merged and then reverted inside the same range, so it nets to zero; `pair` names the other half. A revert of something outside the range stays in the list.                                      |
+| `not-a-pr`            | The number isn't a pull request. A PR merged with a merge commit brings its branch commits into the range, and one whose subject ends in an issue number, like `(#223)`, looks the same as a squash commit. |
 
 Earlier releases are found from the `release:` commits on the base branch (newest first, up to 5), walking back through any hotfix releases to the most recent full one. The newest is returned as `previousRelease` (`version`, `tag`, `pull`, `sha`, `kind: "full" | "hotfix"`). `tag` is the conventional `v<version>` name; it isn't looked up.
 
@@ -515,13 +583,13 @@ Earlier releases are found from the `release:` commits on the base branch (newes
 
 **Grouping.** `groups` maps each section to PR numbers: `breaking`, `features`, `fixes`, `security`, `ciTooling`, `documentation`, `dependencies`, and `ungrouped`. A breaking hint wins, then security (a `security` type or scope, or any label containing "security"). Otherwise the title's type and the labels must agree on one section:
 
-| Section | Types | Labels |
-|---|---|---|
-| `features` | `feat` | `type: feature`, `type: feature request`, `type: enhancement` |
-| `fixes` | `fix` | `type: bug` |
-| `dependencies` | `deps`, any `(deps)` / `(deps-dev)` scope, a Dependabot author | `type: dependencies`, `dependencies` |
-| `ciTooling` | `ci`, `chore`, `build`, `test`, `style` | `type: ci`, `type: config` |
-| `documentation` | `docs` | `type: documentation`, `documentation` |
+| Section         | Types                                                          | Labels                                                        |
+| --------------- | -------------------------------------------------------------- | ------------------------------------------------------------- |
+| `features`      | `feat`                                                         | `type: feature`, `type: feature request`, `type: enhancement` |
+| `fixes`         | `fix`                                                          | `type: bug`                                                   |
+| `dependencies`  | `deps`, any `(deps)` / `(deps-dev)` scope, a Dependabot author | `type: dependencies`, `dependencies`                          |
+| `ciTooling`     | `ci`, `chore`, `build`, `test`, `style`                        | `type: ci`, `type: config`                                    |
+| `documentation` | `docs`                                                         | `type: documentation`, `documentation`                        |
 
 When they disagree (a `chore:` labelled `type: enhancement`), or neither says anything (`refactor`, `perf`, a non-conventional title), the PR goes to `ungrouped` for the author to place.
 
@@ -542,16 +610,49 @@ When they disagree (a `chore:` labelled `type: enhancement`), or neither says an
 	"previousRelease": { "version": "1.2.1", "tag": "v1.2.1", "pull": 90, "sha": "…", "kind": "hotfix" },
 	"changelog": { "path": null, "checkedPaths": ["docs/changelog/v1/v1.3.0.md", "docs/changelogs/v1/v1.3.0.md"] },
 	"prs": [
-		{ "number": 10, "url": "https://github.com/CLDMV/r/pull/10", "title": "feat: add x", "type": "feat", "fetched": true, "labels": ["type: feature"], "author": "Shinrai", "mergedAt": "2026-10-30T00:00:00Z", "closes": [3], "additions": 120, "deletions": 4, "changedFiles": 6, "documented": false, "breaking": [], "section": "features" }
+		{
+			"number": 10,
+			"url": "https://github.com/CLDMV/r/pull/10",
+			"title": "feat: add x",
+			"type": "feat",
+			"fetched": true,
+			"labels": ["type: feature"],
+			"author": "Shinrai",
+			"mergedAt": "2026-10-30T00:00:00Z",
+			"closes": [3],
+			"additions": 120,
+			"deletions": 4,
+			"changedFiles": 6,
+			"documented": false,
+			"breaking": [],
+			"section": "features"
+		}
 	],
-	"groups": { "breaking": [], "features": [10], "fixes": [], "security": [], "ciTooling": [], "documentation": [], "dependencies": [], "ungrouped": [] },
+	"groups": {
+		"breaking": [],
+		"features": [10],
+		"fixes": [],
+		"security": [],
+		"ciTooling": [],
+		"documentation": [],
+		"dependencies": [],
+		"ungrouped": []
+	},
 	"excluded": [{ "number": 5, "title": "fix: old thing", "reason": "earlier-release" }],
 	"hotfixes": [{ "version": "1.2.1", "pull": 90, "title": "release: v1.2.1 - …", "url": "https://github.com/CLDMV/r/pull/90", "sha": "…" }],
 	"net": {
 		"breakingHints": [],
 		"packageJson": { "changed": ["version"], "version": { "from": "1.2.1", "to": "1.3.0" } },
-		"dependencies": [{ "name": "a", "scope": "runtime", "change": "changed", "from": "^1.0.0", "to": "^1.1.0", "lockedFrom": "1.0.5", "lockedTo": "1.1.2" }],
-		"files": { "changed": 9, "additions": 400, "deletions": 30, "excludingGenerated": { "changed": 7, "additions": 150, "deletions": 20 }, "complete": true }
+		"dependencies": [
+			{ "name": "a", "scope": "runtime", "change": "changed", "from": "^1.0.0", "to": "^1.1.0", "lockedFrom": "1.0.5", "lockedTo": "1.1.2" }
+		],
+		"files": {
+			"changed": 9,
+			"additions": 400,
+			"deletions": 30,
+			"excludingGenerated": { "changed": 7, "additions": 150, "deletions": 20 },
+			"complete": true
+		}
 	}
 }
 ```
@@ -573,23 +674,23 @@ CI health for a PR, or every open PR in a repo, at a verbosity the caller choose
 }
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner`, `repo` | string | — (required) | |
-| `pull` | number | — | Omit to scan every open PR in the repo — only PRs with a failure are included in the result. |
-| `verbosity` | `0`-`3` | `0` | See tiers below. |
-| `logLines` | number | 200 (hard cap 2000) | Tier-3 only: tail lines per failing job's log. |
-| `maxPulls` | number | 50 (hard cap 200) | Only relevant when `pull` is omitted. |
-| `maxApiCalls` | number | 250 (hard cap 1000) | |
+| Param           | Type    | Default             | Notes                                                                                        |
+| --------------- | ------- | ------------------- | -------------------------------------------------------------------------------------------- |
+| `owner`, `repo` | string  | — (required)        |                                                                                              |
+| `pull`          | number  | —                   | Omit to scan every open PR in the repo — only PRs with a failure are included in the result. |
+| `verbosity`     | `0`-`3` | `0`                 | See tiers below.                                                                             |
+| `logLines`      | number  | 200 (hard cap 2000) | Tier-3 only: tail lines per failing job's log.                                               |
+| `maxPulls`      | number  | 50 (hard cap 200)   | Only relevant when `pull` is omitted.                                                        |
+| `maxApiCalls`   | number  | 250 (hard cap 1000) |                                                                                              |
 
 ### Verbosity tiers
 
-| Tier | Adds |
-|---|---|
-| 0 (default) | `summary: { passed, failed, pending }` only |
-| 1 | Which run/job failed: `workflow`, `job`, `runId`, `runUrl`, `conclusion` |
-| 2 | + which step in that job failed, with `durationMs` |
-| 3 | + a tail of the failing job's log (`logTail`) |
+| Tier        | Adds                                                                     |
+| ----------- | ------------------------------------------------------------------------ |
+| 0 (default) | `summary: { passed, failed, pending }` only                              |
+| 1           | Which run/job failed: `workflow`, `job`, `runId`, `runUrl`, `conclusion` |
+| 2           | + which step in that job failed, with `durationMs`                       |
+| 3           | + a tail of the failing job's log (`logTail`)                            |
 
 Detail beyond tier 0 is fetched **only for runs that are actually failing** — a healthy PR costs exactly one API call regardless of the requested verbosity.
 
@@ -604,8 +705,21 @@ A dependency-bump PR with a genuine `npm ERESOLVE` peer-dependency conflict:
 	"pull": 35,
 	"summary": { "passed": 6, "failed": 1, "pending": 0 },
 	"failures": [
-		{ "workflow": "🧪 CI Tests & Build", "job": "Build & Test (24)", "runId": 34787050719, "conclusion": "cancelled", "steps": [{ "name": "Build and Test", "number": 2, "conclusion": "cancelled", "durationMs": 16000 }] },
-		{ "workflow": "🧪 CI Tests & Build", "job": "Build & Test (22.12)", "runId": 34787050719, "conclusion": "failure", "steps": [{ "name": "Build and Test", "number": 2, "conclusion": "failure", "durationMs": 8000 }], "logTail": "npm error ERESOLVE could not resolve\nnpm error While resolving: @cldmv/slothlet@3.15.1\nnpm error Found: typescript@7.0.2\n…\nnpm error peerOptional typescript@\"^6.0.3\" from @cldmv/slothlet@3.15.1\n…" }
+		{
+			"workflow": "🧪 CI Tests & Build",
+			"job": "Build & Test (24)",
+			"runId": 34787050719,
+			"conclusion": "cancelled",
+			"steps": [{ "name": "Build and Test", "number": 2, "conclusion": "cancelled", "durationMs": 16000 }]
+		},
+		{
+			"workflow": "🧪 CI Tests & Build",
+			"job": "Build & Test (22.12)",
+			"runId": 34787050719,
+			"conclusion": "failure",
+			"steps": [{ "name": "Build and Test", "number": 2, "conclusion": "failure", "durationMs": 8000 }],
+			"logTail": "npm error ERESOLVE could not resolve\nnpm error While resolving: @cldmv/slothlet@3.15.1\nnpm error Found: typescript@7.0.2\n…\nnpm error peerOptional typescript@\"^6.0.3\" from @cldmv/slothlet@3.15.1\n…"
+		}
 	]
 }
 ```
@@ -641,7 +755,7 @@ A normal `pull_request_read` call (`method: "get"`) can carry CI status inline b
 	"number": 35,
 	"title": "deps: bump typescript from 6.0.3 to 7.0.2",
 	"...": "…every other real pull_request_read field, untouched…",
-	"ci": { "pull": 35, "summary": { "passed": 6, "failed": 1, "pending": 0 }, "failures": [ "…same shape as report_ci_status…" ] }
+	"ci": { "pull": 35, "summary": { "passed": 6, "failed": 1, "pending": 0 }, "failures": ["…same shape as report_ci_status…"] }
 }
 ```
 
@@ -666,17 +780,17 @@ The hosted MCP's `issue_write` takes `labels` as a **replacement**: every label 
 }
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner` | string | — (required) | Selects the write credential. |
-| `repo` | string | — (required) | |
-| `issue_number` | integer | — (required) | An issue or a pull-request number. PRs use the same endpoints. |
-| `add` | string \| string[] | — | Append one or more labels (`POST …/issues/{n}/labels`, server-side append). Labels already on the issue are a no-op. |
-| `remove` | string \| string[] | — | Remove one or more labels (`DELETE …/issues/{n}/labels/{name}` each, using the spelling already on the issue). A label the issue doesn't have is skipped: no request, not an error. |
-| `swap` | `{ prefix, to }` | — | Remove every current label whose name starts with `prefix`, then add `to` (one label or several). A `to` label already on the issue is left in place rather than removed and re-added. |
-| `set` | string \| string[] | — | Replace the whole set (`PUT …/issues/{n}/labels`). Only as an explicit choice; cannot be combined with `add`, `remove` or `swap`. An empty `set` is refused, so it can never clear every label. |
-| `create_missing` | boolean | `false` | Create add-side labels that don't exist in the repo instead of refusing the call. |
-| `color` | string | `ededed` | 6-digit hex color (with or without `#`) for labels created by `create_missing`. Anything else is refused. |
+| Param            | Type               | Default      | Notes                                                                                                                                                                                           |
+| ---------------- | ------------------ | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`          | string             | — (required) | Selects the write credential.                                                                                                                                                                   |
+| `repo`           | string             | — (required) |                                                                                                                                                                                                 |
+| `issue_number`   | integer            | — (required) | An issue or a pull-request number. PRs use the same endpoints.                                                                                                                                  |
+| `add`            | string \| string[] | —            | Append one or more labels (`POST …/issues/{n}/labels`, server-side append). Labels already on the issue are a no-op.                                                                            |
+| `remove`         | string \| string[] | —            | Remove one or more labels (`DELETE …/issues/{n}/labels/{name}` each, using the spelling already on the issue). A label the issue doesn't have is skipped: no request, not an error.             |
+| `swap`           | `{ prefix, to }`   | —            | Remove every current label whose name starts with `prefix`, then add `to` (one label or several). A `to` label already on the issue is left in place rather than removed and re-added.          |
+| `set`            | string \| string[] | —            | Replace the whole set (`PUT …/issues/{n}/labels`). Only as an explicit choice; cannot be combined with `add`, `remove` or `swap`. An empty `set` is refused, so it can never clear every label. |
+| `create_missing` | boolean            | `false`      | Create add-side labels that don't exist in the repo instead of refusing the call.                                                                                                               |
+| `color`          | string             | `ededed`     | 6-digit hex color (with or without `#`) for labels created by `create_missing`. Anything else is refused.                                                                                       |
 
 `add`, `remove` and `swap` combine freely in one call. Naming the same label on both sides is refused, and a label on the add side is never removed by a `swap` prefix match (it stays put rather than being deleted and re-added).
 
@@ -684,7 +798,7 @@ The hosted MCP's `issue_write` takes `labels` as a **replacement**: every label 
 
 **Write order and partial failure.** Writes run in this order: create missing labels, one POST for the whole add side, then the DELETEs. Adding before removing means a failure part-way never leaves the issue with fewer labels than it should have; a `swap` whose POST is rate-limited keeps its old status label. If any write fails, the error names what was applied and what was not, and keeps the HTTP status:
 
-```
+```text
 issue_labels: failed part-way on cldmv/gh-broker#117: API rate limit exceeded. Applied: nothing. Not applied: added [status: verified]; removed [status: in progress].
 ```
 
@@ -723,18 +837,25 @@ npm only accepts a trusted publisher on a package that already exists, and that 
 A package published from a subfolder, before its `package.json` reaches the default branch:
 
 ```json
-{ "owner": "cldmv", "repo": "slothlet", "package": "@cldmv/slothlet-migrate", "path": "packaging/slothlet-migrate/package.json", "ref": "next", "npm_otp": "123456" }
+{
+	"owner": "cldmv",
+	"repo": "slothlet",
+	"package": "@cldmv/slothlet-migrate",
+	"path": "packaging/slothlet-migrate/package.json",
+	"ref": "next",
+	"npm_otp": "123456"
+}
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner` | string | — (required) | A configured owner. Its **read** PAT does the GitHub reads; the verb never writes to GitHub. |
-| `repo` | string | — (required) | The repo whose `package.json` (see `path`) names the package. |
-| `package` | string | — (required) | Lowercase scoped name, e.g. `@cldmv/new-thing`. Must be under a scope in `config.npm.scopes`. |
-| `npm_otp` | string | — (required) | 6–8 digit npm one-time password. Never logged or returned. (Named `npm_otp` because `otp` is the broker's own gate code, see [OTP gate](#otp-gate-and-otp_status); a gated `npm_scaffold` call carries both.) |
-| `workflow` | string | `publish.yml` | The repo's publish workflow file in `.github/workflows`; the trusted publisher names it. |
-| `path` | string | `package.json` | Repo-relative path of the `package.json` that names the package, for a package published from a subfolder (e.g. `packaging/thing/package.json`). No leading `/`, no `.` or `..` segments, and the file must be named `package.json`. |
-| `ref` | string | the default branch | Branch to read that `package.json` and the workflow file from, e.g. `next` for a package that only reaches the default branch with its first release. Must be an existing branch of the repo; tags and commit SHAs are refused. |
+| Param      | Type   | Default            | Notes                                                                                                                                                                                                                                |
+| ---------- | ------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `owner`    | string | — (required)       | A configured owner. Its **read** PAT does the GitHub reads; the verb never writes to GitHub.                                                                                                                                         |
+| `repo`     | string | — (required)       | The repo whose `package.json` (see `path`) names the package.                                                                                                                                                                        |
+| `package`  | string | — (required)       | Lowercase scoped name, e.g. `@cldmv/new-thing`. Must be under a scope in `config.npm.scopes`.                                                                                                                                        |
+| `npm_otp`  | string | — (required)       | 6–8 digit npm one-time password. Never logged or returned. (Named `npm_otp` because `otp` is the broker's own gate code, see [OTP gate](#otp-gate-and-otp_status); a gated `npm_scaffold` call carries both.)                        |
+| `workflow` | string | `publish.yml`      | The repo's publish workflow file in `.github/workflows`; the trusted publisher names it.                                                                                                                                             |
+| `path`     | string | `package.json`     | Repo-relative path of the `package.json` that names the package, for a package published from a subfolder (e.g. `packaging/thing/package.json`). No leading `/`, no `.` or `..` segments, and the file must be named `package.json`. |
+| `ref`      | string | the default branch | Branch to read that `package.json` and the workflow file from, e.g. `next` for a package that only reaches the default branch with its first release. Must be an existing branch of the repo; tags and commit SHAs are refused.      |
 
 **Guardrails, checked before any npm write.**
 
@@ -826,10 +947,10 @@ Dismiss one code scanning, Dependabot or secret scanning alert, or reopen it. Wr
 
 A dismissal needs a `reason`, spelled the way GitHub's API takes it for that kind:
 
-| `kind` | Reasons |
-|---|---|
-| `code_scanning` | `false positive`, `won't fix`, `used in tests` |
-| `dependabot` | `fix_started`, `inaccurate`, `no_bandwidth`, `not_used`, `tolerable_risk` |
+| `kind`            | Reasons                                                                                 |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `code_scanning`   | `false positive`, `won't fix`, `used in tests`                                          |
+| `dependabot`      | `fix_started`, `inaccurate`, `no_bandwidth`, `not_used`, `tolerable_risk`               |
 | `secret_scanning` | `false_positive`, `wont_fix`, `revoked`, `used_in_tests` (the alert is marked resolved) |
 
 `reopen: true` (no reason) sets the alert back to open. `comment` is optional; on a reopen only secret scanning stores one, so it's refused for the other two kinds. The answer is `{ kind, number, state, reason, url }` and nothing else: a secret scanning alert's API response carries the secret, which is never returned.
@@ -856,12 +977,12 @@ chmod g+r /srv/gh-broker/ghcr-drop/your-image-1.4.0.tar
 { "owner": "your-org", "image": "your-image", "tag": "1.4.0", "archive": "your-image-1.4.0.tar" }
 ```
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `owner` | string | — (required) | Must be configured in `config.ghcr.owners` (registry credential + allowlist), with its credential stored. No `config.owners` entry or GitHub PAT is needed. |
-| `image` | string | — (required) | The name under `ghcr.io/<owner>/`, e.g. `your-image`. Lowercase OCI path syntax. Must match one of `config.ghcr.owners.<owner>.images`. |
-| `tag` | string | — (required) | OCI tag grammar: `[A-Za-z0-9_][A-Za-z0-9._-]{0,127}`. |
-| `archive` | string | — (required) | Path to the archive inside `config.ghcr.dropDir`, absolute or relative to it. |
+| Param     | Type   | Default      | Notes                                                                                                                                                       |
+| --------- | ------ | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`   | string | — (required) | Must be configured in `config.ghcr.owners` (registry credential + allowlist), with its credential stored. No `config.owners` entry or GitHub PAT is needed. |
+| `image`   | string | — (required) | The name under `ghcr.io/<owner>/`, e.g. `your-image`. Lowercase OCI path syntax. Must match one of `config.ghcr.owners.<owner>.images`.                     |
+| `tag`     | string | — (required) | OCI tag grammar: `[A-Za-z0-9_][A-Za-z0-9._-]{0,127}`.                                                                                                       |
+| `archive` | string | — (required) | Path to the archive inside `config.ghcr.dropDir`, absolute or relative to it.                                                                               |
 
 The call validates everything, exchanges the PAT for a registry token, checks a protected tag, and then **returns at once** with a job id; the upload itself runs in the background (images are 1–3 GB). Poll [`ghcr_push_status`](#ghcr_push_status).
 
@@ -885,16 +1006,16 @@ The call validates everything, exchanges the PAT for a registry token, checks a 
 
 **Refusals, all before any upload.**
 
-| Check | Refused when |
-|---|---|
-| Arguments | an unknown key, a missing or mistyped field, an invalid image name or tag |
-| Owner | not in `config.ghcr.owners` |
-| Image | not on the owner's `images` allowlist (`*` matches within one path segment, never across `/`) |
-| Archive path | outside `dropDir` (checked on the path text before anything is opened) |
-| Archive file | a symlink, reached through a symlinked directory that leads outside `dropDir`, a hard link (`nlink > 1`), a FIFO, device or directory, empty, larger than `maxArchiveBytes`, or not readable by the broker |
-| Archive content | not an image archive, several images, an unsupported or foreign layer, a blob that is missing or doesn't match its digest or size |
-| Credential | the token exchange fails (expired PAT, missing `write:packages`) |
-| Release tag | `protectReleaseTags` is on, the tag looks like `1.2.3` / `v1.2.3`, and it already exists. Checked at submit and again right before the manifest `PUT`, so two queued pushes of the same new release tag can't both land |
+| Check           | Refused when                                                                                                                                                                                                            |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Arguments       | an unknown key, a missing or mistyped field, an invalid image name or tag                                                                                                                                               |
+| Owner           | not in `config.ghcr.owners`                                                                                                                                                                                             |
+| Image           | not on the owner's `images` allowlist (`*` matches within one path segment, never across `/`)                                                                                                                           |
+| Archive path    | outside `dropDir` (checked on the path text before anything is opened)                                                                                                                                                  |
+| Archive file    | a symlink, reached through a symlinked directory that leads outside `dropDir`, a hard link (`nlink > 1`), a FIFO, device or directory, empty, larger than `maxArchiveBytes`, or not readable by the broker              |
+| Archive content | not an image archive, several images, an unsupported or foreign layer, a blob that is missing or doesn't match its digest or size                                                                                       |
+| Credential      | the token exchange fails (expired PAT, missing `write:packages`)                                                                                                                                                        |
+| Release tag     | `protectReleaseTags` is on, the tag looks like `1.2.3` / `v1.2.3`, and it already exists. Checked at submit and again right before the manifest `PUT`, so two queued pushes of the same new release tag can't both land |
 
 **Queue.** Jobs run one at a time in submission order. At most 8 can be queued or running; a ninth push is refused until one finishes. Job state is kept in memory only, so a broker restart forgets every job. A push interrupted that way leaves nothing tagged, because the tag only moves with the final manifest `PUT`.
 
@@ -921,7 +1042,13 @@ Omit `job` to list this owner's recent jobs (the newest 50 finished jobs are kep
 	"image": "ghcr.io/your-org/your-image",
 	"tag": "1.4.0",
 	"progress": { "phase": "done", "layersTotal": 9, "blobsUploaded": 4, "blobsSkipped": 6, "bytesTotal": 431209876, "bytesSent": 118220311 },
-	"result": { "digest": "sha256:9f2c…", "mediaType": "application/vnd.oci.image.manifest.v1+json", "size": 431209876, "blobsUploaded": 4, "blobsSkipped": 6 }
+	"result": {
+		"digest": "sha256:9f2c…",
+		"mediaType": "application/vnd.oci.image.manifest.v1+json",
+		"size": 431209876,
+		"blobsUploaded": 4,
+		"blobsSkipped": 6
+	}
 }
 ```
 
@@ -957,24 +1084,24 @@ List the tags of an allowlisted image, e.g. to check a push landed. Read, `mode:
 }
 ```
 
-| Key | Default | Notes |
-|---|---|---|
-| `dropDir` | — (required) | Absolute, normalized, at least two levels deep, and not under `/etc`, `/run`, `/home`, `/tmp`, `/root` or other system paths. The unit runs with `ProtectHome=true` and `PrivateTmp=true`, so `/srv` is the natural place. The installer creates it `2750 <agent>:gh-broker`. |
-| `protectReleaseTags` | `true` | Refuse to overwrite an existing tag matching `^v?\d+\.\d+\.\d+$`. |
-| `maxArchiveBytes` | 16 GiB | Largest archive accepted. |
-| `owners.<o>.username` | — (required) | GitHub login the classic PAT belongs to; sent as the Basic-auth user in the token exchange. |
-| `owners.<o>.credential` | — (required) | `cred:<name>` ref to a classic PAT with `write:packages` only. The credential itself is optional: while no owner's credential is stored the `ghcr_*` tools are not exposed, and a call for an owner whose credential is missing is refused. |
-| `owners.<o>.images` | — (required) | Allowlist of image names under `ghcr.io/<o>/`. `*` matches `[a-z0-9._-]*` within one segment. |
+| Key                     | Default      | Notes                                                                                                                                                                                                                                                                         |
+| ----------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dropDir`               | — (required) | Absolute, normalized, at least two levels deep, and not under `/etc`, `/run`, `/home`, `/tmp`, `/root` or other system paths. The unit runs with `ProtectHome=true` and `PrivateTmp=true`, so `/srv` is the natural place. The installer creates it `2750 <agent>:gh-broker`. |
+| `protectReleaseTags`    | `true`       | Refuse to overwrite an existing tag matching `^v?\d+\.\d+\.\d+$`.                                                                                                                                                                                                             |
+| `maxArchiveBytes`       | 16 GiB       | Largest archive accepted.                                                                                                                                                                                                                                                     |
+| `owners.<o>.username`   | — (required) | GitHub login the classic PAT belongs to; sent as the Basic-auth user in the token exchange.                                                                                                                                                                                   |
+| `owners.<o>.credential` | — (required) | `cred:<name>` ref to a classic PAT with `write:packages` only. The credential itself is optional: while no owner's credential is stored the `ghcr_*` tools are not exposed, and a call for an owner whose credential is missing is refused.                                   |
+| `owners.<o>.images`     | — (required) | Allowlist of image names under `ghcr.io/<o>/`. `*` matches `[a-z0-9._-]*` within one segment.                                                                                                                                                                                 |
 
 Unknown keys anywhere in the block are refused. The block is operator data, not shipped policy: `config.example.json` carries none of it. Set it with `--ghcr-owner <org> --ghcr-username <login> --ghcr-image <glob>` (plus `--ghcr-drop-dir`, `--ghcr-max-archive-bytes`, `--[no-]protect-release-tags`) or with a `ghcr` block in an installer `--config` file, which is the way to configure several owners. The installer keeps the deployed block on upgrade. See [`deploy/README.md`](../deploy/README.md#configuring-the-install).
 
 **Threat model.** The agent is untrusted with credentials but trusted to decide what to push within the allowlist.
 
-- *Credential exfiltration.* The PAT is sent only in the Basic-auth header of `https://ghcr.io/token`. The registry token is sent only to `https://ghcr.io`: every URL the registry returns (upload `Location`, pagination `Link`) is refused unless it is on that origin, and redirects are never followed. The registry host is a constant, not configuration. Every error message passes through a scrubber that replaces both secret values and anything shaped like an auth header or a GitHub token, and registry error bodies are reduced to their `code: message` pairs. Results, audit lines and log lines are built from the same scrubbed strings.
-- *Confused-deputy file reads.* The broker can read files the agent can't, including its own credentials. Pushing such a file as a "layer" would put it in a registry the agent can pull from. So the archive path is checked as text first, then opened once with `O_NOFOLLOW | O_NONBLOCK`, and the open descriptor is checked: a regular file with a single link, whose real path (`/proc/self/fd/<n>`) is inside the real drop directory. Every later read is a positional read on that descriptor. Links inside the tar are resolved against the tar's own members only.
-- *Reach.* Push and list only, only to allowlisted images of configured owners. No delete, no visibility changes. The PAT should carry `write:packages` and nothing else (`write:packages` implies `read:packages`). `delete:packages` must not be granted.
-- *Resource abuse.* Archive size, tar member count, JSON member size, layer count and the job queue are all bounded.
-- *Release integrity.* With `protectReleaseTags`, a published `1.2.3` can't be replaced, so a compromised agent can't swap a released image. Mutable tags such as `latest` can still move; keep the allowlist tight.
+- _Credential exfiltration._ The PAT is sent only in the Basic-auth header of `https://ghcr.io/token`. The registry token is sent only to `https://ghcr.io`: every URL the registry returns (upload `Location`, pagination `Link`) is refused unless it is on that origin, and redirects are never followed. The registry host is a constant, not configuration. Every error message passes through a scrubber that replaces both secret values and anything shaped like an auth header or a GitHub token, and registry error bodies are reduced to their `code: message` pairs. Results, audit lines and log lines are built from the same scrubbed strings.
+- _Confused-deputy file reads._ The broker can read files the agent can't, including its own credentials. Pushing such a file as a "layer" would put it in a registry the agent can pull from. So the archive path is checked as text first, then opened once with `O_NOFOLLOW | O_NONBLOCK`, and the open descriptor is checked: a regular file with a single link, whose real path (`/proc/self/fd/<n>`) is inside the real drop directory. Every later read is a positional read on that descriptor. Links inside the tar are resolved against the tar's own members only.
+- _Reach._ Push and list only, only to allowlisted images of configured owners. No delete, no visibility changes. The PAT should carry `write:packages` and nothing else (`write:packages` implies `read:packages`). `delete:packages` must not be granted.
+- _Resource abuse._ Archive size, tar member count, JSON member size, layer count and the job queue are all bounded.
+- _Release integrity._ With `protectReleaseTags`, a published `1.2.3` can't be replaced, so a compromised agent can't swap a released image. Mutable tags such as `latest` can still move; keep the allowlist tight.
 
 ---
 

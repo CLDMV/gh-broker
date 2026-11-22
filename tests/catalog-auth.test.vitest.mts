@@ -6,7 +6,12 @@ import type { TokenResolver } from "../src/types.ts";
 import { NO_PERSON } from "../src/types.ts";
 
 function makeConfig(tools: any[]): any {
-	return { listen: "unix:/x", upstream: "https://api.githubcopilot.com/mcp/", tools, owners: { cldmv: { read: "cred:r", write: "cred:w" } } };
+	return {
+		listen: "unix:/x",
+		upstream: "https://api.githubcopilot.com/mcp/",
+		tools,
+		owners: { cldmv: { read: "cred:r", write: "cred:w" } }
+	};
 }
 
 const UPSTREAM_TOOL = { name: "get_me", description: "real", inputSchema: { type: "object", properties: {} } };
@@ -21,7 +26,12 @@ describe("buildCatalog's library call shape (design #175 §2a/§2g)", () => {
 		const upstream = { listToolsFor: vi.fn().mockResolvedValue([UPSTREAM_TOOL]) };
 		const resolveToken = vi.fn(async () => "resolved-token");
 		const log = vi.fn();
-		const catalog = await buildCatalog(makeConfig([{ name: "get_me", mode: "read" }]), resolveToken as unknown as TokenResolver, upstream as any, { log });
+		const catalog = await buildCatalog(
+			makeConfig([{ name: "get_me", mode: "read" }]),
+			resolveToken as unknown as TokenResolver,
+			upstream as any,
+			{ log }
+		);
 		expect(resolveToken).toHaveBeenCalledTimes(1);
 		// No person of its own (schemas are owner-independent); the first configured owner's
 		// read credential, asked for as a github read.
@@ -37,13 +47,18 @@ describe("buildCatalog's library call shape (design #175 §2a/§2g)", () => {
 		const catalog = await buildCatalog(makeConfig([{ name: "get_me", mode: "read" }]), async () => null, upstream as any, { log });
 		expect(upstream.listToolsFor).not.toHaveBeenCalled();
 		expect(catalog).toEqual([{ name: "get_me", description: "(read) proxied to the GitHub MCP", inputSchema: { type: "object" } }]);
-		expect(log).toHaveBeenCalledWith(expect.stringMatching(/could not fetch upstream tool schemas \(the token resolver returned no token\)/));
+		expect(log).toHaveBeenCalledWith(
+			expect.stringMatching(/could not fetch upstream tool schemas \(the token resolver returned no token\)/)
+		);
 	});
 
 	it("honours opts.upstreamTimeoutMs", async () => {
 		const upstream = { listToolsFor: vi.fn().mockReturnValue(new Promise(() => {})) }; // never resolves
 		const log = vi.fn();
-		const catalog = await buildCatalog(makeConfig([{ name: "get_me", mode: "read" }]), async () => "tok", upstream as any, { upstreamTimeoutMs: 15, log });
+		const catalog = await buildCatalog(makeConfig([{ name: "get_me", mode: "read" }]), async () => "tok", upstream as any, {
+			upstreamTimeoutMs: 15,
+			log
+		});
 		expect(catalog).toEqual([{ name: "get_me", description: "(read) proxied to the GitHub MCP", inputSchema: { type: "object" } }]);
 		expect(log).toHaveBeenCalledWith(expect.stringMatching(/timed out after 15ms/));
 	});
@@ -69,10 +84,16 @@ describe("buildCatalog's library call shape (design #175 §2a/§2g)", () => {
 			]),
 			async () => "tok",
 			upstream as any,
-			{ log, unavailable: (rule) => (rule.name === "npm_scaffold" ? "the npm integration is not configured (enable it with the installer's --npm)" : undefined) }
+			{
+				log,
+				unavailable: (rule) =>
+					rule.name === "npm_scaffold" ? "the npm integration is not configured (enable it with the installer's --npm)" : undefined
+			}
 		);
 		expect(catalog.map((t) => t.name)).toEqual(["get_me"]);
-		expect(log).toHaveBeenCalledWith('catalog: "npm_scaffold" is not exposed: the npm integration is not configured (enable it with the installer\'s --npm)');
+		expect(log).toHaveBeenCalledWith(
+			'catalog: "npm_scaffold" is not exposed: the npm integration is not configured (enable it with the installer\'s --npm)'
+		);
 	});
 });
 

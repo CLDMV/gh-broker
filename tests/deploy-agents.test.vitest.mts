@@ -17,7 +17,8 @@ users:x:100:repo
 describe("names and paths", () => {
 	it("validates agent user names (group name stays within 32 chars)", () => {
 		for (const ok of ["repo", "_svc", "a", "glm-test_1", "a".repeat(16)]) expect(a.validAgentName(ok)).toBe(true);
-		for (const bad of ["", "Repo", "1abc", "a".repeat(17), "a b", "../x", "a.b", "__proto__", "root", "gh-broker", undefined, 5]) expect(a.validAgentName(bad as string)).toBe(false);
+		for (const bad of ["", "Repo", "1abc", "a".repeat(17), "a b", "../x", "a.b", "__proto__", "root", "gh-broker", undefined, 5])
+			expect(a.validAgentName(bad as string)).toBe(false);
 		expect(a.assertAgentName("repo")).toBe("repo");
 		expect(() => a.assertAgentName("Repo")).toThrow(/not a valid agent user name/);
 		expect((a.AGENT_GROUP_PREFIX + "a".repeat(16)).length).toBeLessThanOrEqual(32);
@@ -38,7 +39,11 @@ describe("group file", () => {
 
 	it("parses members, skipping malformed lines", () => {
 		expect(groups.find((g) => g.name === "root")).toEqual({ name: "root", gid: 0, members: [] });
-		expect(groups.find((g) => g.name === "gh-broker-agent-repo")).toEqual({ name: "gh-broker-agent-repo", gid: 990, members: ["gh-broker", "repo"] });
+		expect(groups.find((g) => g.name === "gh-broker-agent-repo")).toEqual({
+			name: "gh-broker-agent-repo",
+			gid: 990,
+			members: ["gh-broker", "repo"]
+		});
 		expect(groups.some((g) => g.name === "nogid" || g.name === "")).toBe(false);
 	});
 
@@ -75,7 +80,9 @@ describe("passwd, install location, versions", () => {
 	});
 
 	it("warns only when the package and the deployed version differ", () => {
-		expect(a.versionWarning("0.10.0", "0.9.0")).toContain('package is 0.10.0 but the deployed service is 0.9.0; run "sudo gh-broker upgrade"');
+		expect(a.versionWarning("0.10.0", "0.9.0")).toContain(
+			'package is 0.10.0 but the deployed service is 0.9.0; run "sudo gh-broker upgrade"'
+		);
 		expect(a.versionWarning("0.9.0", "0.9.0")).toBeUndefined();
 		expect(a.versionWarning("0.9.0", undefined)).toBeUndefined();
 		expect(a.versionWarning(undefined, "0.9.0")).toBeUndefined();

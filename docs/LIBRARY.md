@@ -6,15 +6,15 @@ The library is pure: it has no secrets, filesystem, sockets or clock of its own.
 
 ## What the host provides
 
-| Host concern | How it reaches the library |
-|---|---|
+| Host concern                            | How it reaches the library                               |
+| --------------------------------------- | -------------------------------------------------------- |
 | Which tools exist, owners, npm settings | The config's library half, validated by `parseConfigLib` |
-| Tokens | `ctx.resolveToken`, called per call, never cached |
-| OTP for gated tools | `ctx.approve`, required |
-| Cancellation and timeouts | `ctx.signal`, optional `ctx.timeoutMs` |
-| The hosted MCP client | `ctx.upstream`, or `upstreamUrl` on `createBroker` |
-| Security events | optional `ctx.audit` |
-| Per-call audit rows, MCP content blocks | the host, from what `invoke` returns |
+| Tokens                                  | `ctx.resolveToken`, called per call, never cached        |
+| OTP for gated tools                     | `ctx.approve`, required                                  |
+| Cancellation and timeouts               | `ctx.signal`, optional `ctx.timeoutMs`                   |
+| The hosted MCP client                   | `ctx.upstream`, or `upstreamUrl` on `createBroker`       |
+| Security events                         | optional `ctx.audit`                                     |
+| Per-call audit rows, MCP content blocks | the host, from what `invoke` returns                     |
 
 ## A minimal host
 
@@ -92,19 +92,19 @@ A thin adapter for hosts that dispatch by declared request. `request` is `{ op: 
 
 `InvokeError` has a `code` and a message that never contains a token, seed or path:
 
-| Code | Meaning |
-|---|---|
-| `unknown-tool` | not in the effective tool list |
-| `disabled` | the tool's rule has `enabled: false` |
-| `unavailable` | the host's availability check refused it |
-| `not-supported` | host-only tool: `otp_status`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags` |
-| `bad-args` | invalid arguments or `timeoutMs`, or a `run` op that doesn't match the tool |
-| `bad-request` | a malformed `run` request |
-| `no-owner` | no owner could be worked out from the arguments |
-| `no-upstream` | a forwarded tool with no upstream client |
-| `otp-required` | a gated tool and no `ctx.approve` |
-| `otp-refused` | `approve` returned something that isn't a valid verdict |
-| `no-access` | the resolver returned `null` |
+| Code            | Meaning                                                                     |
+| --------------- | --------------------------------------------------------------------------- |
+| `unknown-tool`  | not in the effective tool list                                              |
+| `disabled`      | the tool's rule has `enabled: false`                                        |
+| `unavailable`   | the host's availability check refused it                                    |
+| `not-supported` | host-only tool: `otp_status`, `ghcr_push`, `ghcr_push_status`, `ghcr_tags`  |
+| `bad-args`      | invalid arguments or `timeoutMs`, or a `run` op that doesn't match the tool |
+| `bad-request`   | a malformed `run` request                                                   |
+| `no-owner`      | no owner could be worked out from the arguments                             |
+| `no-upstream`   | a forwarded tool with no upstream client                                    |
+| `otp-required`  | a gated tool and no `ctx.approve`                                           |
+| `otp-refused`   | `approve` returned something that isn't a valid verdict                     |
+| `no-access`     | the resolver returned `null`                                                |
 
 A refusal from `approve` uses the code the host returned. Errors from a verb or from GitHub are not wrapped and pass through as they are.
 

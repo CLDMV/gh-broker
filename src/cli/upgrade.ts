@@ -25,7 +25,7 @@
  */
 import { NPM_INSTALL_COMMAND } from "./agents.ts";
 import { parseArgs } from "./install-args.ts";
-import type { ReconnectDeps } from "./reconnect.ts";
+import { parseWait, type ReconnectDeps } from "./reconnect.ts";
 import type { ConfigLayer } from "./config-merge.ts";
 
 /** The effects `gh-broker upgrade` uses (the reconnect effects for its last step, plus its own). */
@@ -44,7 +44,7 @@ export interface UpgradeDeps extends ReconnectDeps {
 
 export const UPGRADE_HELP = `gh-broker upgrade — the whole upgrade under one sudo.
 
-Usage: sudo gh-broker upgrade [--version <v>] [--force] [--no-reconnect] [install flags]
+Usage: sudo gh-broker upgrade [--version <v>] [--force] [--no-reconnect] [--wait <time>] [install flags]
 
   1. npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker@<latest|version>
   2. the newly installed binary's install, with these flags (see: gh-broker install --help)
@@ -53,7 +53,9 @@ Usage: sudo gh-broker upgrade [--version <v>] [--force] [--no-reconnect] [instal
 
 Stops at the first failed step and prints what to run to finish. Sessions step 3
 skips (someone typing, a dialog open) don't fail the upgrade; it says to rerun
-agent reconnect once they're clear. --no-reconnect skips step 3.
+agent reconnect once they're clear. --wait <time> (e.g. 5m) is passed to step 3,
+which then keeps checking those sessions and sends once each is clear.
+--no-reconnect skips step 3.
 The target must be a semantic version (--version 0.12.1); a downgrade needs --force. When the
 package is installed AND deployed at the target, nothing runs unless --force. Other flags pass
 through to install (e.g. --claude-config <user>:<dir>, --no-mcp-config) and are validated before
@@ -64,6 +66,8 @@ export interface UpgradeArgs {
 	version?: string;
 	force: boolean;
 	noReconnect: boolean;
+	/** --wait for the reconnect step, as given ("5m"). */
+	wait?: string;
 	help?: boolean;
 	installFlags: string[];
 }
@@ -83,11 +87,17 @@ export function parseUpgradeArgs(rest: string[]): UpgradeArgs {
 			// The version is handed to npm as a spec: anything but semver (a dist-tag, a URL, a
 			// git or file path) could make npm run arbitrary code as root, so it is refused here.
 			const v = a === "--version" ? rest[++i] : a.slice("--version=".length);
-			if (v === undefined || v.startsWith("-") || !SEMVER.test(v.replace(/^v/, ""))) throw new Error("--version takes a semantic version to install, e.g. --version 0.12.1");
+			if (v === undefined || v.startsWith("-") || !SEMVER.test(v.replace(/^v/, "")))
+				throw new Error("--version takes a semantic version to install, e.g. --version 0.12.1");
 			args.version = v.replace(/^v/, "");
+		} else if (a === "--wait" || a.startsWith("--wait=")) {
+			const v = a === "--wait" ? rest[++i] : a.slice("--wait=".length);
+			if (v === undefined || parseWait(v) === undefined) throw new Error("--wait takes a time up to 30m, e.g. --wait 90s or --wait 5m");
+			args.wait = v;
 		} else if (/^--(?:force|no-reconnect|help)=/.test(a)) throw new Error(`${a.slice(0, a.indexOf("="))} takes no value`);
 		else args.installFlags.push(a);
 	}
+	if (args.wait !== undefined && args.noReconnect) throw new Error("--wait is for the reconnect step, and --no-reconnect skips it");
 	return args;
 }
 
@@ -106,7 +116,7 @@ export function semverLess(a: string, b: string): boolean {
 }
 
 /** The flags `upgrade` itself parses (near-misses of these are refused before anything runs). */
-const OWN_FLAGS = ["version", "force", "no-reconnect", "help"];
+const OWN_FLAGS = ["version", "force", "no-reconnect", "wait", "help"];
 
 /** Levenshtein distance between two flag names. */
 export function editDistance(a: string, b: string): number {
@@ -138,19 +148,24 @@ export const shellQuote = (arg: string): string => (/^[A-Za-z0-9_@%+=:,./-]+$/.t
  * The steps `upgrade` runs, in order: npm install, the new binary's install, reconnect (unless
  * `reconnect` is false). The commands are also what the failure report tells the operator to run.
  */
-export function upgradeSteps(target: string, installFlags: string[], reconnect: boolean): UpgradeStep[] {
+export function upgradeSteps(target: string, installFlags: string[], reconnect: boolean, wait?: string): UpgradeStep[] {
 	const flags = installFlags.length ? ` ${installFlags.map(shellQuote).join(" ")}` : "";
 	const steps = [
 		{ name: "npm install", command: NPM_INSTALL_COMMAND.replace(/@latest$/, `@${target}`) },
 		{ name: "install", command: `sudo gh-broker install${flags}` }
 	];
-	if (reconnect) steps.push({ name: "agent reconnect", command: "sudo gh-broker agent reconnect" });
+	if (reconnect)
+		steps.push({ name: "agent reconnect", command: `sudo gh-broker agent reconnect${wait !== undefined ? ` --wait ${wait}` : ""}` });
 	return steps;
 }
 
 /** The lines telling an operator step `failed` (0-based) didn't run and what to run to finish: that step's command, then the remaining ones. */
 export function finishLines(steps: UpgradeStep[], failed: number, why: string): string[] {
-	return [`step ${failed + 1}/${steps.length} (${steps[failed]!.name}) failed: ${why}`, "finish by running:", ...steps.slice(failed).map((s) => `  ${s.command}`)];
+	return [
+		`step ${failed + 1}/${steps.length} (${steps[failed]!.name}) failed: ${why}`,
+		"finish by running:",
+		...steps.slice(failed).map((s) => `  ${s.command}`)
+	];
 }
 
 /**
@@ -183,17 +198,21 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 				return parseArgs(pending);
 			} catch (err) {
 				const unknown = /unknown flag: (.+?) \(see --help\)$/.exec((err as Error).message)?.[1];
-				if (!unknown || !pending.includes(unknown)) throw new Error(`install flags: ${(err as Error).message}`);
+				if (!unknown || !pending.includes(unknown)) throw new Error(`install flags: ${(err as Error).message}`, { cause: err });
 				const name = unknown.includes("=") ? unknown.slice(0, unknown.indexOf("=")) : unknown;
 				const near = nearOwnFlag(name);
-				if (near) throw new Error(`unknown flag: ${unknown} — did you mean ${near}?`);
-				if (!unknown.includes("=")) throw new Error(`unknown flag: ${unknown} — pass flags the new release knows as --flag=value`);
+				if (near) throw new Error(`unknown flag: ${unknown} — did you mean ${near}?`, { cause: err });
+				if (!unknown.includes("="))
+					throw new Error(`unknown flag: ${unknown} — pass flags the new release knows as --flag=value`, { cause: err });
 				passThrough.push(unknown);
 			}
 		}
 	};
 	const installArgs = validated();
-	if (installArgs.positional.length) throw new Error(`upgrade takes only flags — "${installArgs.positional.join(" ")}" would be an install argument; pass --agent-user <name> instead`);
+	if (installArgs.positional.length)
+		throw new Error(
+			`upgrade takes only flags — "${installArgs.positional.join(" ")}" would be an install argument; pass --agent-user <name> instead`
+		);
 	const target = args.version ?? d.latestVersion() ?? "latest";
 	const installed = d.installedVersion();
 	const deployed = d.deployedVersion();
@@ -210,7 +229,7 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 			return 0;
 		}
 	}
-	const steps = upgradeSteps(target, args.installFlags, !args.noReconnect);
+	const steps = upgradeSteps(target, args.installFlags, !args.noReconnect, args.wait);
 	// A forced downgrade stays visible on the step line (an unforced one is refused above).
 	const downgrade = args.force && target !== "latest" && installed !== undefined && semverLess(target, installed);
 	let reconnectSkipped = false;
@@ -221,7 +240,7 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 			// optional steps[2] its reconnect — see upgradeSteps.
 			if (i === 0) d.npmInstall(target);
 			else if (i === 1) d.runNewBinary(["install", ...args.installFlags]);
-			else d.runNewBinary(["agent", "reconnect"]);
+			else d.runNewBinary(["agent", "reconnect", ...(args.wait !== undefined ? ["--wait", args.wait] : [])]);
 		} catch (err) {
 			// Reconnect exits 3 when it only skipped panes (someone typing, a dialog open): the
 			// upgrade itself is done, and those sessions can be reconnected once they're clear.
@@ -234,6 +253,8 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 			return 1;
 		}
 	}
-	d.log(`✅ gh-broker is at ${target}${installed === target && deployed === target ? " (reinstalled)" : ""}${args.noReconnect ? "; reconnect skipped" : reconnectSkipped ? "; some sessions not reconnected" : ""}`);
+	d.log(
+		`✅ gh-broker is at ${target}${installed === target && deployed === target ? " (reinstalled)" : ""}${args.noReconnect ? "; reconnect skipped" : reconnectSkipped ? "; some sessions not reconnected" : ""}`
+	);
 	return 0;
 }

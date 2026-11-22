@@ -23,7 +23,18 @@
  * read-back check) with every filesystem effect injected. Root does that work in a directory the
  * agent user owns, so `readOwnedFile` refuses anything but the user's own plain file.
  */
-import { closeSync, constants, fstatSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, statSync, type Dirent } from "node:fs";
+import {
+	closeSync,
+	constants,
+	fstatSync,
+	openSync,
+	readdirSync,
+	readlinkSync,
+	readSync,
+	realpathSync,
+	statSync,
+	type Dirent
+} from "node:fs";
 import { basename } from "node:path";
 import { absoluteFolders } from "./config-merge.ts";
 import { agentGroup, socketPath, type UserInfo } from "./agents.ts";
@@ -91,7 +102,7 @@ export function readHead(path: string, max: number): string {
 	try {
 		const buf = Buffer.alloc(max);
 		let length = 0;
-		for (let n: number; length < max && (n = readSync(fd, buf, length, max - length, null)) > 0; ) length += n;
+		for (let n: number; length < max && (n = readSync(fd, buf, length, max - length, null)) > 0;) length += n;
 		return buf.toString("utf8", 0, length);
 	} finally {
 		closeSync(fd);
@@ -99,7 +110,8 @@ export function readHead(path: string, max: number): string {
 }
 
 /** Whether a process's argv is a Claude Code session: the `claude` binary, or node running the claude-code package. */
-export const isClaude = (argv: string[]): boolean => argv.slice(0, 2).some((a) => basename(a) === "claude" || a.includes("/@anthropic-ai/claude-code/"));
+export const isClaude = (argv: string[]): boolean =>
+	argv.slice(0, 2).some((a) => basename(a) === "claude" || a.includes("/@anthropic-ai/claude-code/"));
 
 /**
  * Read `path` as root on behalf of the user `uid`, without following a symlink: the file must be
@@ -125,7 +137,7 @@ export function readOwnedFile(path: string, uid: number): OwnedFile | undefined 
 		// Read at most one byte past the limit ourselves: the owner can grow the file after fstat.
 		const buf = Buffer.alloc(MAX_CONFIG_BYTES + 1);
 		let length = 0;
-		for (let n: number; length < buf.length && (n = readSync(fd, buf, length, buf.length - length, null)) > 0; ) length += n;
+		for (let n: number; length < buf.length && (n = readSync(fd, buf, length, buf.length - length, null)) > 0;) length += n;
 		if (length > MAX_CONFIG_BYTES) throw new UnsafeFile(`${path} is over the ${MAX_CONFIG_BYTES}-byte limit`);
 		return { text: buf.toString("utf8", 0, length), stat: { uid: st.uid, gid: st.gid, mode: st.mode } };
 	} finally {
@@ -228,7 +240,10 @@ export function mergeEntry(
 /**
  * The file text with every broker entry removed (an empty `mcpServers` is left in place).
  */
-export function dropEntries(text: string, dir: string): { status: "unreadable" | "absent" } | { status: "removed"; keys: string[]; text: string } {
+export function dropEntries(
+	text: string,
+	dir: string
+): { status: "unreadable" | "absent" } | { status: "removed"; keys: string[]; text: string } {
 	const cfg = parse(text);
 	if (cfg === undefined) return { status: "unreadable" };
 	const servers: Servers = isObject(cfg["mcpServers"]) ? cfg["mcpServers"] : {};
@@ -249,7 +264,13 @@ export function dropEntries(text: string, dir: string): { status: "unreadable" |
 export function applyMcpConfig(
 	{ folder, user, dir, owner, create = true }: { folder: string; user: string; dir: string; owner: FileOwner; create?: boolean },
 	io: McpIo
-): { status: "created" | "written" | "unchanged" | "unreadable" | "unsafe" | "no-file"; key?: string; reason?: string; entry: McpEntry; path: string } {
+): {
+	status: "created" | "written" | "unchanged" | "unreadable" | "unsafe" | "no-file";
+	key?: string;
+	reason?: string;
+	entry: McpEntry;
+	path: string;
+} {
 	const path = `${folder}/${MCP_FILE}`;
 	const entry = mcpEntry(user, dir);
 	const before = load(io, path, owner.uid);
@@ -266,7 +287,8 @@ export function applyMcpConfig(
 	}
 	io.write(path, merged.text, target);
 	const after = load(io, path, owner.uid);
-	if (after?.unsafe || mcpStatus((after as OwnedFile | undefined)?.text, user, dir) !== "ok") throw new Error(`${path}: the broker entry is not there after writing; restore ${MCP_BACKUP} if the file looks wrong`);
+	if (after?.unsafe || mcpStatus((after as OwnedFile | undefined)?.text, user, dir) !== "ok")
+		throw new Error(`${path}: the broker entry is not there after writing; restore ${MCP_BACKUP} if the file looks wrong`);
 	return { status: file === undefined ? "created" : "written", key: merged.key, entry, path };
 }
 
@@ -292,7 +314,10 @@ export function removeMcpConfig(
 
 /** The MCP status of the file in `folder` for `agent list`: mcpStatus, "unsafe (<reason>)", or `ifAbsent` when there is no file and that is given. */
 export function mcpFileStatus(args: { folder: string; user: string; dir: string; uid: number; ifAbsent?: undefined }, io: McpIo): string;
-export function mcpFileStatus(args: { folder: string; user: string; dir: string; uid: number; ifAbsent: string | null }, io: McpIo): string | null;
+export function mcpFileStatus(
+	args: { folder: string; user: string; dir: string; uid: number; ifAbsent: string | null },
+	io: McpIo
+): string | null;
 export function mcpFileStatus(
 	{ folder, user, dir, uid, ifAbsent }: { folder: string; user: string; dir: string; uid: number; ifAbsent?: string | null },
 	io: McpIo
@@ -307,14 +332,20 @@ export function mcpFileStatus(
  * directories (a symlink is skipped; readdir's entry types don't follow it). Whether one holds a
  * `.claude.json` is decided when it's opened, through pinFolder.
  */
-export function scanConfigFolders(home: string, { readdir = readdirSync }: { readdir?: (path: string, options: { withFileTypes: true }) => Dirent[] } = {}): string[] {
+export function scanConfigFolders(
+	home: string,
+	{ readdir = readdirSync }: { readdir?: (path: string, options: { withFileTypes: true }) => Dirent[] } = {}
+): string[] {
 	let entries: Dirent[];
 	try {
 		entries = readdir(home, { withFileTypes: true });
 	} catch {
 		return []; // no home directory, or root can't list it: only ~/.claude.json is tried
 	}
-	return entries.filter((e) => e.isDirectory() && e.name.startsWith(".claude")).map((e) => `${home}/${e.name}`).sort();
+	return entries
+		.filter((e) => e.isDirectory() && e.name.startsWith(".claude"))
+		.map((e) => `${home}/${e.name}`)
+		.sort();
 }
 
 /**
@@ -327,7 +358,14 @@ export function sessionConfigFolders(
 	{
 		proc = "/proc",
 		fs = { readdirSync, statSync, readHead }
-	}: { proc?: string; fs?: { readdirSync: (path: string) => string[]; statSync: (path: string) => { uid: number }; readHead: (path: string, max: number) => string } } = {}
+	}: {
+		proc?: string;
+		fs?: {
+			readdirSync: (path: string) => string[];
+			statSync: (path: string) => { uid: number };
+			readHead: (path: string, max: number) => string;
+		};
+	} = {}
 ): string[] {
 	const found = new Set<string>();
 	let pids: string[];
@@ -342,7 +380,10 @@ export function sessionConfigFolders(
 			const argv = fs.readHead(`${proc}/${pid}/cmdline`, MAX_CMDLINE_BYTES).split("\0");
 			if (!isClaude(argv)) continue;
 			const env = fs.readHead(`${proc}/${pid}/environ`, MAX_ENVIRON_BYTES).split("\0");
-			const value = env.find((e) => e.startsWith("CLAUDE_CONFIG_DIR="))?.slice("CLAUDE_CONFIG_DIR=".length).replace(/\/+$/, "");
+			const value = env
+				.find((e) => e.startsWith("CLAUDE_CONFIG_DIR="))
+				?.slice("CLAUDE_CONFIG_DIR=".length)
+				.replace(/\/+$/, "");
 			if (value?.startsWith("/")) found.add(value);
 		} catch {
 			// the process exited while being read
@@ -457,7 +498,10 @@ export function extraFolders(info: UserInfo, d: { mcpIO: FolderIo }, config: Pic
 	const found = [...(d.mcpIO.scan?.(info.home) ?? []), ...(d.mcpIO.sessions?.(info.uid) ?? [])];
 	const seen = new Set([home, info.home]);
 	const out: Place[] = [];
-	for (const [list, isSaved] of [[saved, true], [found, false]] as const) {
+	for (const [list, isSaved] of [
+		[saved, true],
+		[found, false]
+	] as const) {
 		for (const folder of list) {
 			if (seen.has(folder)) continue;
 			seen.add(folder);

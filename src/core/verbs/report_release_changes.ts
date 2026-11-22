@@ -310,7 +310,13 @@ export function dependencyChanges(from: Pkg, to: Pkg, lockFrom?: Lock, lockTo?: 
 		for (const name of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
 			const lf = name in a ? lockedVersion(lockFrom, name) : undefined;
 			const lt = name in b ? lockedVersion(lockTo, name) : undefined;
-			const change: DependencyChange["change"] | undefined = !(name in a) ? "added" : !(name in b) ? "removed" : a[name] !== b[name] || lf !== lt ? "changed" : undefined;
+			const change: DependencyChange["change"] | undefined = !(name in a)
+				? "added"
+				: !(name in b)
+					? "removed"
+					: a[name] !== b[name] || lf !== lt
+						? "changed"
+						: undefined;
 			if (!change) continue;
 			out.push({
 				name,
@@ -332,7 +338,11 @@ export function packageJsonDelta(from: Pkg, to: Pkg): { delta: NonNullable<NetFa
 	const changed = ["version", "engines", "exports", "bin", "files", "publishConfig", "main", "type"].filter((k) => !same(k));
 	const delta: NonNullable<NetFacts["packageJson"]> = { changed };
 	const hints: string[] = [];
-	if (!same("version")) delta.version = { ...(typeof from.version === "string" ? { from: from.version } : {}), ...(typeof to.version === "string" ? { to: to.version } : {}) };
+	if (!same("version"))
+		delta.version = {
+			...(typeof from.version === "string" ? { from: from.version } : {}),
+			...(typeof to.version === "string" ? { to: to.version } : {})
+		};
 	if (!same("engines")) {
 		delta.engines = { from: from.engines, to: to.engines };
 		hints.push(`engines changed: ${JSON.stringify(from.engines ?? null)} → ${JSON.stringify(to.engines ?? null)}`);
@@ -374,7 +384,18 @@ export function releaseType(previous: string | null | undefined, version: string
 export function buildSkeleton(r: ReportReleaseChangesResult): string {
 	const name = r.repo.split("/")[1];
 	const type = releaseType(r.previousRelease?.version, r.version);
-	const lines = [`# ${name} v${r.version ?? "X.Y.Z"} Changelog`, "", "**Release Date**: ", `**Release Type**: ${type ?? ""}`, "", "---", "", "## Overview", "", ""];
+	const lines = [
+		`# ${name} v${r.version ?? "X.Y.Z"} Changelog`,
+		"",
+		"**Release Date**: ",
+		`**Release Type**: ${type ?? ""}`,
+		"",
+		"---",
+		"",
+		"## Overview",
+		"",
+		""
+	];
 	const byNumber = new Map(r.prs.map((p) => [p.number, p]));
 	for (const key of [...SECTIONS, "ungrouped"] as const) {
 		const nums = r.groups[key];
@@ -419,9 +440,22 @@ interface RawCommit {
 }
 
 /** A file's raw text at `ref`; undefined on 404. */
-async function getRaw(octokit: Octokit, budget: CallBudget, owner: string, repo: string, path: string, ref: string): Promise<string | undefined> {
+async function getRaw(
+	octokit: Octokit,
+	budget: CallBudget,
+	owner: string,
+	repo: string,
+	path: string,
+	ref: string
+): Promise<string | undefined> {
 	try {
-		const data = await reqOne<unknown>(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", { owner, repo, path, ref, mediaType: { format: "raw" } });
+		const data = await reqOne<unknown>(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", {
+			owner,
+			repo,
+			path,
+			ref,
+			mediaType: { format: "raw" }
+		});
 		return typeof data === "string" ? data : undefined;
 	} catch (err) {
 		if (err instanceof RateLimited || err instanceof CallBudgetExhausted) throw err;
@@ -430,7 +464,14 @@ async function getRaw(octokit: Octokit, budget: CallBudget, owner: string, repo:
 	}
 }
 
-async function getJson<T>(octokit: Octokit, budget: CallBudget, owner: string, repo: string, path: string, ref: string): Promise<T | undefined> {
+async function getJson<T>(
+	octokit: Octokit,
+	budget: CallBudget,
+	owner: string,
+	repo: string,
+	path: string,
+	ref: string
+): Promise<T | undefined> {
 	const text = await getRaw(octokit, budget, owner, repo, path, ref);
 	if (text === undefined) return undefined;
 	try {
@@ -441,7 +482,14 @@ async function getJson<T>(octokit: Octokit, budget: CallBudget, owner: string, r
 }
 
 /** First of `paths` that exists at `ref`, with its text. */
-async function findText(octokit: Octokit, budget: CallBudget, owner: string, repo: string, paths: string[], ref: string): Promise<{ path: string; text: string } | undefined> {
+async function findText(
+	octokit: Octokit,
+	budget: CallBudget,
+	owner: string,
+	repo: string,
+	paths: string[],
+	ref: string
+): Promise<{ path: string; text: string } | undefined> {
 	for (const path of paths) {
 		const text = await getRaw(octokit, budget, owner, repo, path, ref);
 		if (text !== undefined) return { path, text };
@@ -462,17 +510,34 @@ export async function reportReleaseChanges(octokit: Octokit, input: ReportReleas
 	const deep = input.prs ? new Set(input.prs) : undefined;
 	const detailFor = (n: number): ChangeDetail => (deep && !deep.has(n) ? "titles" : detail);
 
-	const result: ReportReleaseChangesResult = { repo: `${owner}/${repo}`, pull: input.pull, prs: [], groups: emptyGroups(), excluded: [], hotfixes: [] };
+	const result: ReportReleaseChangesResult = {
+		repo: `${owner}/${repo}`,
+		pull: input.pull,
+		prs: [],
+		groups: emptyGroups(),
+		excluded: [],
+		hotfixes: []
+	};
 
 	try {
-		const release = await reqOne<RawPull>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}", { owner, repo, pull_number: input.pull });
+		const release = await reqOne<RawPull>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+			owner,
+			repo,
+			pull_number: input.pull
+		});
 		const head = release.head.ref;
 		const base = release.base.ref;
 		const version = parseReleaseVersion(release.title);
 		Object.assign(result, { url: release.html_url, title: release.title, version, head, base });
 
 		// 1. What the release PR's commits say ships (squash and merge commits, docs PRs and the bump dropped).
-		const commits = await paginate<RawCommit>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", { owner, repo, pull_number: input.pull }, 300);
+		const commits = await paginate<RawCommit>(
+			octokit,
+			budget,
+			"GET /repos/{owner}/{repo}/pulls/{pull_number}/commits",
+			{ owner, repo, pull_number: input.pull },
+			300
+		);
 		const candidates = releaseCommitPrs(commits.map((c) => c.commit.message));
 		const inRange = new Set(candidates.map((c) => c.number));
 		const drop = new Map<number, ExcludedPr>();
@@ -485,7 +550,12 @@ export async function reportReleaseChanges(octokit: Octokit, input: ReportReleas
 		}
 
 		// 2. Earlier releases on the base branch: what they shipped, and which were hotfixes.
-		const baseCommits = await reqOne<RawCommit[]>(octokit, budget, "GET /repos/{owner}/{repo}/commits", { owner, repo, sha: base, per_page: 50 });
+		const baseCommits = await reqOne<RawCommit[]>(octokit, budget, "GET /repos/{owner}/{repo}/commits", {
+			owner,
+			repo,
+			sha: base,
+			per_page: 50
+		});
 		const releaseCommits = baseCommits.filter((c) => /^release:/i.test(c.commit.message)).slice(0, MAX_EARLIER_RELEASES);
 		const shipped = new Set<number>();
 		const hotfixCandidates: Array<HotfixRelease> = [];
@@ -493,22 +563,44 @@ export async function reportReleaseChanges(octokit: Octokit, input: ReportReleas
 		for (const rc of releaseCommits) {
 			const subject = rc.commit.message.split("\n", 1)[0]!;
 			const rcVersion = parseReleaseVersion(subject);
-			const assoc = await reqOne<Array<{ number: number; title: string; html_url: string; head: { ref: string } }>>(octokit, budget, "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls", { owner, repo, commit_sha: rc.sha });
+			const assoc = await reqOne<Array<{ number: number; title: string; html_url: string; head: { ref: string } }>>(
+				octokit,
+				budget,
+				"GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls",
+				{ owner, repo, commit_sha: rc.sha }
+			);
 			const pr = assoc[0];
 			const hotfix = pr !== undefined && isHotfixRef(pr.head.ref);
 			if (result.previousRelease === null) {
-				result.previousRelease = { version: rcVersion, tag: rcVersion ? `v${rcVersion}` : null, ...(pr ? { pull: pr.number } : {}), sha: rc.sha, kind: hotfix ? "hotfix" : "full" };
+				result.previousRelease = {
+					version: rcVersion,
+					tag: rcVersion ? `v${rcVersion}` : null,
+					...(pr ? { pull: pr.number } : {}),
+					sha: rc.sha,
+					kind: hotfix ? "hotfix" : "full"
+				};
 			}
 			if (pr) {
-				const prCommits = await paginate<RawCommit>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", { owner, repo, pull_number: pr.number }, 300);
+				const prCommits = await paginate<RawCommit>(
+					octokit,
+					budget,
+					"GET /repos/{owner}/{repo}/pulls/{pull_number}/commits",
+					{ owner, repo, pull_number: pr.number },
+					300
+				);
 				for (const s of releaseCommitPrs(prCommits.map((c) => c.commit.message))) shipped.add(s.number);
-				if (hotfix && !isHotfixRef(head)) hotfixCandidates.push({ version: rcVersion, pull: pr.number, title: pr.title, url: pr.html_url, sha: rc.sha });
+				if (hotfix && !isHotfixRef(head))
+					hotfixCandidates.push({ version: rcVersion, pull: pr.number, title: pr.title, url: pr.html_url, sha: rc.sha });
 			}
 			// Everything older than the last full release is covered by it.
 			if (!hotfix) break;
 		}
 		if (hotfixCandidates.length > 0) {
-			const cmp = await reqOne<{ commits?: RawCommit[] }>(octokit, budget, "GET /repos/{owner}/{repo}/compare/{basehead}", { owner, repo, basehead: `${head}...${base}` });
+			const cmp = await reqOne<{ commits?: RawCommit[] }>(octokit, budget, "GET /repos/{owner}/{repo}/compare/{basehead}", {
+				owner,
+				repo,
+				basehead: `${head}...${base}`
+			});
 			const notOnHead = new Set((cmp.commits ?? []).map((c) => c.sha));
 			result.hotfixes = hotfixCandidates.filter((h) => notOnHead.has(h.sha));
 		}
@@ -556,7 +648,11 @@ export async function reportReleaseChanges(octokit: Octokit, input: ReportReleas
 		for (const entry of result.prs) {
 			let pr: RawPull;
 			try {
-				pr = await reqOne<RawPull>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}", { owner, repo, pull_number: entry.number });
+				pr = await reqOne<RawPull>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+					owner,
+					repo,
+					pull_number: entry.number
+				});
 			} catch (err) {
 				if ((err as { status?: number }).status !== 404) throw err;
 				notPrs.add(entry.number);
@@ -586,7 +682,13 @@ export async function reportReleaseChanges(octokit: Octokit, input: ReportReleas
 				if (body.length > maxBodyChars) entry.bodyTruncated = true;
 			}
 			if (level >= DETAIL_RANK.files) {
-				const files = await paginate<RawFile>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", { owner, repo, pull_number: entry.number }, maxFiles);
+				const files = await paginate<RawFile>(
+					octokit,
+					budget,
+					"GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+					{ owner, repo, pull_number: entry.number },
+					maxFiles
+				);
 				entry.files = files.map((f) => {
 					const file: ChangeFile = { path: f.filename, status: f.status, additions: f.additions, deletions: f.deletions };
 					if (level < DETAIL_RANK.diff || f.patch === undefined) return file;
@@ -602,7 +704,8 @@ export async function reportReleaseChanges(octokit: Octokit, input: ReportReleas
 		}
 
 		if (notPrs.size > 0) {
-			for (const entry of result.prs) if (notPrs.has(entry.number)) result.excluded.push({ number: entry.number, title: entry.title, reason: "not-a-pr" });
+			for (const entry of result.prs)
+				if (notPrs.has(entry.number)) result.excluded.push({ number: entry.number, title: entry.title, reason: "not-a-pr" });
 			result.excluded.sort((a, b) => a.number - b.number);
 			result.prs = result.prs.filter((entry) => !notPrs.has(entry.number));
 		}
@@ -620,7 +723,13 @@ export async function reportReleaseChanges(octokit: Octokit, input: ReportReleas
 			const lockTo = await getJson<Lock>(octokit, budget, owner, repo, "package-lock.json", release.head.sha);
 			net.dependencies = dependencyChanges(pkgFrom, pkgTo, lockFrom, lockTo);
 		}
-		const files = await paginate<RawFile>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", { owner, repo, pull_number: input.pull }, RELEASE_FILES_LIMIT);
+		const files = await paginate<RawFile>(
+			octokit,
+			budget,
+			"GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+			{ owner, repo, pull_number: input.pull },
+			RELEASE_FILES_LIMIT
+		);
 		const kept = files.filter((f) => !isGenerated(f.filename));
 		const sum = (list: RawFile[], k: "additions" | "deletions") => list.reduce((n, f) => n + f[k], 0);
 		net.files = {
@@ -665,15 +774,31 @@ export const REPORT_RELEASE_CHANGES_SCHEMA = {
 		detail: {
 			type: "string",
 			enum: ["titles", "summaries", "files", "diff"],
-			description: "per-PR depth: titles (number, title, type, labels, author, merge date, closed issues), summaries (adds the body, capped), files (adds path/status/additions/deletions per file), diff (adds each file's patch, capped; lockfiles, dist/ and types/ skipped)",
+			description:
+				"per-PR depth: titles (number, title, type, labels, author, merge date, closed issues), summaries (adds the body, capped), files (adds path/status/additions/deletions per file), diff (adds each file's patch, capped; lockfiles, dist/ and types/ skipped)",
 			default: "summaries"
 		},
-		prs: { type: "array", items: { type: "number" }, description: "only these PRs get `detail`; every other shipping PR comes back at titles. Scan at titles first, then open just the ones that need judgment" },
-		skeleton: { type: "boolean", description: "also return a changelog skeleton (markdown): headings per section and one (#N) entry per PR, no prose", default: false },
+		prs: {
+			type: "array",
+			items: { type: "number" },
+			description:
+				"only these PRs get `detail`; every other shipping PR comes back at titles. Scan at titles first, then open just the ones that need judgment"
+		},
+		skeleton: {
+			type: "boolean",
+			description: "also return a changelog skeleton (markdown): headings per section and one (#N) entry per PR, no prose",
+			default: false
+		},
 		maxBodyChars: { type: "number", description: `per-PR body cap (default ${DEFAULT_MAX_BODY_CHARS})` },
 		maxFiles: { type: "number", description: `per-PR file-list cap (default ${DEFAULT_MAX_FILES}, hard cap ${HARD_MAX_FILES})` },
 		maxPatchChars: { type: "number", description: `per-file patch cap with detail diff (default ${DEFAULT_MAX_PATCH_CHARS})` },
-		maxDiffChars: { type: "number", description: `total patch characters across the report with detail diff (default ${DEFAULT_MAX_DIFF_CHARS})` },
-		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` }
+		maxDiffChars: {
+			type: "number",
+			description: `total patch characters across the report with detail diff (default ${DEFAULT_MAX_DIFF_CHARS})`
+		},
+		maxApiCalls: {
+			type: "number",
+			description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})`
+		}
 	}
 };

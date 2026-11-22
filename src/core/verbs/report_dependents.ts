@@ -104,7 +104,8 @@ export interface AbandonedDev {
 	defaultVersion: string;
 }
 
-export type DependentsTruncatedReason = "max-results" | "incomplete-search" | "max-repos" | "max-api-calls" | "rate-limited" | "github-timeout";
+export type DependentsTruncatedReason =
+	"max-results" | "incomplete-search" | "max-repos" | "max-api-calls" | "rate-limited" | "github-timeout";
 
 export interface ReportDependentsResult {
 	package: string;
@@ -302,7 +303,15 @@ function resolvePnpmLock(text: string, member: string, name: string): string | u
 type ReadResult = { text: string } | { skipped: "missing" | "too-large" };
 
 /** Reads a file at `ref`: JSON metadata first (carries `size`), raw media type only for files the API leaves out (over 1 MB). */
-async function readFile(octokit: Octokit, budget: CallBudget, owner: string, repo: string, path: string, ref: string, maxBytes: number): Promise<ReadResult> {
+async function readFile(
+	octokit: Octokit,
+	budget: CallBudget,
+	owner: string,
+	repo: string,
+	path: string,
+	ref: string,
+	maxBytes: number
+): Promise<ReadResult> {
 	let meta: RawFile;
 	try {
 		meta = await reqOne<RawFile>(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", { owner, repo, path, ref });
@@ -347,7 +356,13 @@ interface ScanContext {
 }
 
 /** Reads `paths` on `branch` and returns the repo's entry, or undefined when none of them declares the package. */
-async function scanBranch(ctx: ScanContext, repo: RepoRef, branch: string, paths: string[], unread: NonNullable<Dependent["unread"]> = []): Promise<Dependent | undefined> {
+async function scanBranch(
+	ctx: ScanContext,
+	repo: RepoRef,
+	branch: string,
+	paths: string[],
+	unread: NonNullable<Dependent["unread"]> = []
+): Promise<Dependent | undefined> {
 	const { octokit, budget, owner, name, maxBytes, latest } = ctx;
 	const declarations: Declaration[] = [];
 	for (const path of [...paths].sort()) {
@@ -374,7 +389,13 @@ async function scanBranch(ctx: ScanContext, repo: RepoRef, branch: string, paths
 	}
 	if (declarations.length === 0 && unread.length === 0) return undefined;
 
-	const entry: Dependent = { repo: `${owner}/${repo.name}`, private: repo.private, defaultBranch: repo.defaultBranch, branch, declarations };
+	const entry: Dependent = {
+		repo: `${owner}/${repo.name}`,
+		private: repo.private,
+		defaultBranch: repo.defaultBranch,
+		branch,
+		declarations
+	};
 	if (unread.length > 0) entry.unread = unread;
 	if (declarations.length === 0) return entry;
 
@@ -419,7 +440,10 @@ async function listDevBranches(
 	for (let page = 1; page <= DEV_LIST_MAX_PAGES; page++) {
 		let res: DevBranchesResponse;
 		try {
-			res = await reqOne<DevBranchesResponse>(octokit, budget, "POST /graphql", { query: DEV_BRANCHES_QUERY, variables: { owner, after, first } });
+			res = await reqOne<DevBranchesResponse>(octokit, budget, "POST /graphql", {
+				query: DEV_BRANCHES_QUERY,
+				variables: { owner, after, first }
+			});
 		} catch (err) {
 			if (!TIMEOUT_STATUSES.has((err as { status?: number }).status as number)) throw err;
 			if (first === DEV_LIST_MIN_PAGE_SIZE) return { repos, abandoned, complete: false, timedOut: true };
@@ -427,7 +451,10 @@ async function listDevBranches(
 			continue;
 		}
 		const conn = res.data?.repositoryOwner?.repositories;
-		if (!conn) throw new Error(`report_dependents: listing dev branches failed: ${res.errors?.map((e) => e.message).join("; ") ?? `no owner "${owner}"`}`);
+		if (!conn)
+			throw new Error(
+				`report_dependents: listing dev branches failed: ${res.errors?.map((e) => e.message).join("; ") ?? `no owner "${owner}"`}`
+			);
 		for (const r of conn.nodes) {
 			if (r.isArchived || r.isFork || !r.dev || !r.defaultBranchRef) continue;
 			if (r.dev.target.oid === r.defaultBranchRef.target.oid) continue;
@@ -445,7 +472,11 @@ async function listDevBranches(
 	return { repos, abandoned, complete: false };
 }
 
-export async function reportDependents(octokit: Octokit, input: ReportDependentsInput, deps: ReportDependentsDeps = {}): Promise<ReportDependentsResult> {
+export async function reportDependents(
+	octokit: Octokit,
+	input: ReportDependentsInput,
+	deps: ReportDependentsDeps = {}
+): Promise<ReportDependentsResult> {
 	if (!NAME_PATTERN.test(input.name)) throw new Error(`report_dependents: "${input.name}" is not a valid npm package name`);
 	const maxRepos = Math.min(input.maxRepos ?? DEFAULT_MAX_REPOS, HARD_MAX_REPOS);
 	const maxBytes = Math.min(input.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES, HARD_MAX_FILE_BYTES);
@@ -454,7 +485,14 @@ export async function reportDependents(octokit: Octokit, input: ReportDependents
 	const devBranches = input.devBranches !== false;
 
 	const dependents: Dependent[] = [];
-	const scanned: ReportDependentsResult["scanned"] = { candidates: 0, archived: 0, forks: 0, missing: 0, notDeclared: 0, ...(devBranches ? { devBranches: 0 } : {}) };
+	const scanned: ReportDependentsResult["scanned"] = {
+		candidates: 0,
+		archived: 0,
+		forks: 0,
+		missing: 0,
+		notDeclared: 0,
+		...(devBranches ? { devBranches: 0 } : {})
+	};
 	let truncatedReason: DependentsTruncatedReason | undefined;
 	let retryAfterSeconds: number | undefined;
 	const abandonedDev: AbandonedDev[] = [];
@@ -463,7 +501,11 @@ export async function reportDependents(octokit: Octokit, input: ReportDependents
 	let latestError: string | undefined;
 	if (input.latest) {
 		try {
-			latest = await latestVersion(name, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.registry ? { registry: deps.registry } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
+			latest = await latestVersion(name, {
+				...(deps.fetch ? { fetch: deps.fetch } : {}),
+				...(deps.registry ? { registry: deps.registry } : {}),
+				...(deps.signal ? { signal: deps.signal } : {})
+			});
 		} catch (err) {
 			latestError = (err as Error).message;
 		}
@@ -543,7 +585,12 @@ export async function reportDependents(octokit: Octokit, input: ReportDependents
 			const room = Math.max(0, maxRepos - Math.min(repoNames.length, maxRepos));
 			if (repos.length > room) truncatedReason ??= "max-repos";
 			for (const repo of repos.slice(0, room)) {
-				const tree = await reqOne<RawTree>(octokit, budget, "GET /repos/{owner}/{repo}/git/trees/{tree_sha}", { owner, repo: repo.name, tree_sha: DEV_BRANCH, recursive: "1" });
+				const tree = await reqOne<RawTree>(octokit, budget, "GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
+					owner,
+					repo: repo.name,
+					tree_sha: DEV_BRANCH,
+					recursive: "1"
+				});
 				const paths = tree.tree
 					.filter((t) => t.type === "blob" && t.path.split("/").pop() === "package.json" && !t.path.split("/").includes("node_modules"))
 					.map((t) => t.path);
@@ -589,16 +636,33 @@ export const REPORT_DEPENDENTS_SCHEMA = {
 	properties: {
 		owner: { type: "string", description: "repository owner (org/user login) — selects the read credential" },
 		name: { type: "string", description: "npm package name to look for, e.g. @cldmv/fix-headers" },
-		latest: { type: "boolean", description: "compare each resolved version with the latest published version and mark the ones that are behind", default: false },
-		classify: { type: "boolean", description: "add each dependent repo's flow tier (v4 / dev-trunk / non-v4) and signals; about 3 REST calls per repo (default true)", default: true },
+		latest: {
+			type: "boolean",
+			description: "compare each resolved version with the latest published version and mark the ones that are behind",
+			default: false
+		},
+		classify: {
+			type: "boolean",
+			description: "add each dependent repo's flow tier (v4 / dev-trunk / non-v4) and signals; about 3 REST calls per repo (default true)",
+			default: true
+		},
 		devBranches: {
 			type: "boolean",
 			description:
 				"also read every package.json on each repo's `dev` branch when it differs from the default branch, so dev-trunk repos are found; a dev whose root version is below the default branch's is skipped as abandoned (default true)",
 			default: true
 		},
-		maxRepos: { type: "number", description: `safety cap on candidate repos verified (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})` },
-		maxFileBytes: { type: "number", description: `largest package.json or lockfile that is read, in bytes; bigger ones are listed in unread (default ${DEFAULT_MAX_FILE_BYTES}, hard cap ${HARD_MAX_FILE_BYTES})` },
-		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` }
+		maxRepos: {
+			type: "number",
+			description: `safety cap on candidate repos verified (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})`
+		},
+		maxFileBytes: {
+			type: "number",
+			description: `largest package.json or lockfile that is read, in bytes; bigger ones are listed in unread (default ${DEFAULT_MAX_FILE_BYTES}, hard cap ${HARD_MAX_FILE_BYTES})`
+		},
+		maxApiCalls: {
+			type: "number",
+			description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})`
+		}
 	}
 };

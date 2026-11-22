@@ -61,7 +61,23 @@ export const DEFAULT_MAX_ARCHIVE_BYTES = 16 * 1024 ** 3;
 const TOP_KEYS = new Set(["dropDir", "protectReleaseTags", "maxArchiveBytes", "owners"]);
 const OWNER_KEYS = new Set(["username", "credential", "images"]);
 /** Directories that must never be a drop dir: system state, other users' homes, secrets. */
-const FORBIDDEN_ROOTS = ["/etc", "/proc", "/sys", "/dev", "/run", "/boot", "/root", "/home", "/tmp", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/var/tmp"];
+const FORBIDDEN_ROOTS = [
+	"/etc",
+	"/proc",
+	"/sys",
+	"/dev",
+	"/run",
+	"/boot",
+	"/root",
+	"/home",
+	"/tmp",
+	"/usr",
+	"/bin",
+	"/sbin",
+	"/lib",
+	"/lib64",
+	"/var/tmp"
+];
 /** One image-name glob: lowercase OCI path components, `*` allowed, `/` separates segments. */
 const IMAGE_GLOB = /^[a-z0-9*](?:[a-z0-9._*-]*[a-z0-9*])?(?:\/[a-z0-9*](?:[a-z0-9._*-]*[a-z0-9*])?)*$/;
 const OWNER_NAME = /^[a-z0-9](?:[a-z0-9-]{0,38})$/;
@@ -106,14 +122,17 @@ export function parseGhcrConfig(raw: unknown): GhcrConfig {
 		if (!isObject(v)) fail(`.owners.${name}: must be an object`);
 		const o = v as Record<string, unknown>;
 		strictKeys(o, OWNER_KEYS, `.owners.${name}`);
-		if (typeof o.username !== "string" || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(o.username)) fail(`.owners.${name}.username: must be the GitHub login that owns the PAT`);
+		if (typeof o.username !== "string" || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(o.username))
+			fail(`.owners.${name}.username: must be the GitHub login that owns the PAT`);
 		if (typeof o.credential !== "string" || !/^cred:[A-Za-z0-9._-]+$/.test(o.credential) || /^cred:\.\.?$/.test(o.credential)) {
 			fail(`.owners.${name}.credential: must be a "cred:<name>" ref`);
 		}
 		if (!Array.isArray(o.images) || o.images.length === 0) fail(`.owners.${name}.images: must be a non-empty list of image names or globs`);
 		for (const img of o.images as unknown[]) {
 			if (typeof img !== "string" || img.length > 255 || !IMAGE_GLOB.test(img)) {
-				fail(`.owners.${name}.images: "${String(img)}" is not a valid image name or glob (lowercase, [a-z0-9._-], "/" between segments, "*" within a segment)`);
+				fail(
+					`.owners.${name}.images: "${String(img)}" is not a valid image name or glob (lowercase, [a-z0-9._-], "/" between segments, "*" within a segment)`
+				);
 			}
 		}
 		owners[owner] = { username: o.username as string, credential: o.credential as string, images: [...(o.images as string[])] };

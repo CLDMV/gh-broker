@@ -118,13 +118,26 @@ export function mentionedPrs(changelog: string): Set<number> {
 	return out;
 }
 
-export function classifyOpenPr(pr: { number: number; title: string; html_url: string; draft?: boolean; head?: { ref?: string }; user?: { login?: string }; labels?: Array<{ name?: string }> }): OpenPr {
+export function classifyOpenPr(pr: {
+	number: number;
+	title: string;
+	html_url: string;
+	draft?: boolean;
+	head?: { ref?: string };
+	user?: { login?: string };
+	labels?: Array<{ name?: string }>;
+}): OpenPr {
 	const title = pr.title;
 	const labels = (pr.labels ?? []).map((l) => l.name ?? "");
 	let kind: OpenPrKind;
 	if (pr.draft) kind = "draft";
 	else if (/^docs?(\([^)]*\))?!?:/i.test(title) || (pr.head?.ref ?? "").startsWith("docs/")) kind = "doc";
-	else if (labels.includes("type: dependencies") || /^deps?(\([^)]*\))?!?:/i.test(title) || (pr.user?.login ?? "").toLowerCase().startsWith("dependabot")) kind = "dependency";
+	else if (
+		labels.includes("type: dependencies") ||
+		/^deps?(\([^)]*\))?!?:/i.test(title) ||
+		(pr.user?.login ?? "").toLowerCase().startsWith("dependabot")
+	)
+		kind = "dependency";
 	else kind = "feature";
 	const v = kind === "doc" ? /\bv?(\d+\.\d+\.\d+)\b/.exec(title) : null;
 	return { number: pr.number, title, url: pr.html_url, kind, ...(v ? { version: v[1]! } : {}) };
@@ -151,11 +164,23 @@ export function assessFreshness(version: string, changelog: string, commits: Rel
 }
 
 /** The release-docs decision table. */
-export function decideVerdict(args: { hasChangelog: boolean; unknownVersion: boolean; freshness?: Freshness; openPrs: OpenPr[]; version: string | null }): { verdict: ReleaseVerdict; reason: string; docVersionMismatch?: boolean } {
+export function decideVerdict(args: {
+	hasChangelog: boolean;
+	unknownVersion: boolean;
+	freshness?: Freshness;
+	openPrs: OpenPr[];
+	version: string | null;
+}): { verdict: ReleaseVerdict; reason: string; docVersionMismatch?: boolean } {
 	if (args.unknownVersion) return { verdict: "inspect", reason: "the release PR title has no `release: vX.Y.Z` version" };
 	const f = args.freshness;
 	if (args.hasChangelog && f && (f.status === "current" || f.status === "minor-gap")) {
-		return { verdict: "done", reason: f.status === "minor-gap" ? `changelog covers every user-facing change; ${f.missingInternal.length} internal PR(s) not mentioned` : "changelog is current" };
+		return {
+			verdict: "done",
+			reason:
+				f.status === "minor-gap"
+					? `changelog covers every user-facing change; ${f.missingInternal.length} internal PR(s) not mentioned`
+					: "changelog is current"
+		};
 	}
 	const docs = args.openPrs.filter((p) => p.kind === "doc");
 	const features = args.openPrs.filter((p) => p.kind === "feature");
@@ -163,9 +188,14 @@ export function decideVerdict(args: { hasChangelog: boolean; unknownVersion: boo
 	const need = args.hasChangelog ? `changelog is ${f?.status ?? "out of date"}` : "no changelog file";
 	if (docs.length > 0) {
 		const mismatch = args.version !== null && docs.some((d) => d.version !== undefined && d.version !== args.version);
-		return { verdict: "in-flight", reason: `${need}; doc PR #${docs[0]!.number} is open`, ...(mismatch ? { docVersionMismatch: true } : {}) };
+		return {
+			verdict: "in-flight",
+			reason: `${need}; doc PR #${docs[0]!.number} is open`,
+			...(mismatch ? { docVersionMismatch: true } : {})
+		};
 	}
-	if (features.length > 0) return { verdict: "wait", reason: `${need}; ${features.length} feature/fix PR(s) still open against the release branch` };
+	if (features.length > 0)
+		return { verdict: "wait", reason: `${need}; ${features.length} feature/fix PR(s) still open against the release branch` };
 	if (others.length > 0) return { verdict: "gray", reason: `${need}; only dependency PR(s) or drafts are open (${others.length})` };
 	return { verdict: args.hasChangelog ? "update" : "write", reason: `${need}; nothing is open against the release branch` };
 }
@@ -176,7 +206,14 @@ function decodeContent(data: unknown): string | undefined {
 	return d.encoding === "base64" ? Buffer.from(d.content, "base64").toString("utf8") : d.content;
 }
 
-async function getText(octokit: Octokit, budget: CallBudget, owner: string, repo: string, path: string, ref: string): Promise<string | undefined> {
+async function getText(
+	octokit: Octokit,
+	budget: CallBudget,
+	owner: string,
+	repo: string,
+	path: string,
+	ref: string
+): Promise<string | undefined> {
 	try {
 		return decodeContent(await reqOne(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", { owner, repo, path, ref }));
 	} catch (err) {
@@ -192,17 +229,35 @@ export async function analyzeRelease(
 	args: { owner: string; repo: string; pull: number; head: string; version: string | null; changelogPath?: string }
 ): Promise<ReleaseAnalysis> {
 	const { owner, repo } = args;
-	const open = await paginate<Parameters<typeof classifyOpenPr>[0]>(octokit, budget, "GET /repos/{owner}/{repo}/pulls", { owner, repo, state: "open", base: args.head }, 200);
+	const open = await paginate<Parameters<typeof classifyOpenPr>[0]>(
+		octokit,
+		budget,
+		"GET /repos/{owner}/{repo}/pulls",
+		{ owner, repo, state: "open", base: args.head },
+		200
+	);
 	const openPrs = open.map(classifyOpenPr);
 
 	let freshness: Freshness | undefined;
 	if (args.changelogPath && args.version) {
-		const commits = await paginate<{ commit?: { message?: string } }>(octokit, budget, "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", { owner, repo, pull_number: args.pull }, 300);
+		const commits = await paginate<{ commit?: { message?: string } }>(
+			octokit,
+			budget,
+			"GET /repos/{owner}/{repo}/pulls/{pull_number}/commits",
+			{ owner, repo, pull_number: args.pull },
+			300
+		);
 		const changelog = (await getText(octokit, budget, owner, repo, args.changelogPath, args.head)) ?? "";
 		const readme = await getText(octokit, budget, owner, repo, "README.md", args.head);
 		freshness = assessFreshness(args.version, changelog, releaseCommitPrs(commits.map((c) => c.commit?.message ?? "")), readme);
 	}
-	const decision = decideVerdict({ hasChangelog: Boolean(args.changelogPath), unknownVersion: args.version === null, freshness, openPrs, version: args.version });
+	const decision = decideVerdict({
+		hasChangelog: Boolean(args.changelogPath),
+		unknownVersion: args.version === null,
+		freshness,
+		openPrs,
+		version: args.version
+	});
 	return {
 		openPrs,
 		...(freshness ? { freshness } : {}),

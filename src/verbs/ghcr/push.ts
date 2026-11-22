@@ -111,7 +111,14 @@ export async function pushImage(
 	tag: string,
 	opts: { protectReleaseTags: boolean; onProgress?: (p: PushProgress) => void }
 ): Promise<PushResult> {
-	const progress: PushProgress = { phase: "preparing", layersTotal: plan.layers.length, blobsUploaded: 0, blobsSkipped: 0, bytesTotal: 0, bytesSent: 0 };
+	const progress: PushProgress = {
+		phase: "preparing",
+		layersTotal: plan.layers.length,
+		blobsUploaded: 0,
+		blobsSkipped: 0,
+		bytesTotal: 0,
+		bytesSent: 0
+	};
 	const report = () => opts.onProgress?.({ ...progress });
 	report();
 
@@ -129,7 +136,10 @@ export async function pushImage(
 	progress.phase = "uploading";
 	report();
 
-	const blobs: Array<{ desc: Descriptor; plan: BlobPlan }> = [{ desc: config, plan: plan.config }, ...layers.map((desc, i) => ({ desc, plan: plan.layers[i]! }))];
+	const blobs: Array<{ desc: Descriptor; plan: BlobPlan }> = [
+		{ desc: config, plan: plan.config },
+		...layers.map((desc, i) => ({ desc, plan: plan.layers[i]! }))
+	];
 	const seen = new Set<string>();
 	for (const { desc, plan: p } of blobs) {
 		if (seen.has(desc.digest) || (await registry.blobExists(desc.digest))) {
@@ -139,10 +149,15 @@ export async function pushImage(
 			continue;
 		}
 		seen.add(desc.digest);
-		await registry.uploadBlob(desc.digest, desc.size, () => (p.compress ? gzipStream(fd, p) : memberStream(fd, p)), (n) => {
-			progress.bytesSent += n;
-			report();
-		});
+		await registry.uploadBlob(
+			desc.digest,
+			desc.size,
+			() => (p.compress ? gzipStream(fd, p) : memberStream(fd, p)),
+			(n) => {
+				progress.bytesSent += n;
+				report();
+			}
+		);
 		progress.blobsUploaded++;
 		report();
 	}
@@ -168,12 +183,20 @@ export async function pushImage(
 		);
 	}
 	if (opts.protectReleaseTags && RELEASE_TAG.test(tag) && (await registry.manifestExists(tag))) {
-		throw new PushRefused(`ghcr_push: tag ${tag} already exists on ${registry.repository} and release tags are protected — push a new version instead`);
+		throw new PushRefused(
+			`ghcr_push: tag ${tag} already exists on ${registry.repository} and release tags are protected — push a new version instead`
+		);
 	}
 	await registry.putManifest(tag, mediaType, bytes);
 	progress.phase = "done";
 	report();
-	return { digest: sha256(bytes), mediaType, size: progress.bytesTotal, blobsUploaded: progress.blobsUploaded, blobsSkipped: progress.blobsSkipped };
+	return {
+		digest: sha256(bytes),
+		mediaType,
+		size: progress.bytesTotal,
+		blobsUploaded: progress.blobsUploaded,
+		blobsSkipped: progress.blobsSkipped
+	};
 }
 
 /** sha256 of a member streamed from the archive (docker-archive layers that are already compressed). */
