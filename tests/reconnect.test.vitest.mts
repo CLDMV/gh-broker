@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { busyPane, composerState, reconnect, safeKey, RECONNECT_HELP } from "../src/cli/reconnect.ts";
+import { composerState, reconnect, safeKey, undimmed, RECONNECT_HELP } from "../src/cli/reconnect.ts";
 import { brokerKeyOf, mcpEntry, SkippedFolder } from "../src/cli/mcp-config.ts";
 import { TmuxTimeout, type Pane, type TmuxServer } from "../src/cli/tmux.ts";
 import { makeDeps, config, GROUPS } from "./helpers/cli-deps.mjs";
@@ -9,7 +9,8 @@ const SOCK = "/tmp/tmux-1000/default";
 const claude = (u: string) => `/home/${u}/.claude.json`;
 const entry = JSON.stringify({ mcpServers: { github: mcpEntry("repo", DIR) } });
 
-// Captured from live Claude Code panes (tmux capture-pane -p -J, this machine, 2026-11-21),
+// Captured from live Claude Code panes (tmux capture-pane -p -J, this machine, 2026-11-21; the
+// SGR escapes `-e` now keeps are left out where they don't matter),
 // excerpted to the relevant region; rule lines shortened to 40 columns, trailing column padding
 // stripped. The current TUI keeps the empty input box ("❯") visible while it works, its working
 // indicator is a spinner-glyph line ("✻ Waiting for 1 background agent to finish") with no
@@ -66,12 +67,28 @@ ${RULE}
 ${RULE}
   ⏵⏵ accept edits on (shift+tab to cycle)`;
 // A working-indicator shape the glyph list doesn't know, sitting directly above the composer's
-// top rule: still busy.
+// top rule: the box is still empty, so it is sent to.
 const ABOVE_RULE = `⌛ Crunching the numbers
 ${RULE}
 ❯
 ${RULE}
   ⏵⏵ accept edits on (shift+tab to cycle)`;
+// The live box as \`capture-pane -e\` returns it (this machine, 2026-11-22): "❯" plus a no-break
+// space, with Claude Code's prompt suggestion in SGR 2 (dim). Above it, the user's earlier message
+// in the transcript ("❯" plus a plain space, its own colours) and the reply under it.
+const SUGGESTION = `\x1b[38;5;246m\x1b[48;5;237m❯ \x1b[38;5;231mServer upgrade is mine?\x1b[39m
+\x1b[39m● Yes. The upgrade needs root.
+
+\x1b[38;5;244m${RULE}\x1b[39m
+\x1b[39m❯\u00a0\x1b[2mcontinue\x1b[0m
+\x1b[38;5;244m${RULE}\x1b[39m
+\x1b[38;5;211m  ⏵⏵ bypass permissions on\x1b[38;5;246m (shift+tab to cycle)\x1b[39m
+\x1b[39m  ● main
+  ◯ general-purpose  Cleaning up helper worktrees    5h 6m 9s · ↓ 398.7k tokens`;
+// The same box with text typed into it: not dim.
+const TYPED_NBSP = `${RULE}
+\x1b[39m❯\u00a0rerun the tests\x1b[39m
+${RULE}`;
 // A draft whose continuation lines start with "?" or "●" — the footer detector must not stop on them.
 const DRAFT_QUESTION = `${RULE}
 ❯
@@ -80,46 +97,33 @@ const DRAFT_QUESTION = `${RULE}
 ${RULE}
   ⏵⏵ accept edits on (shift+tab to cycle)`;
 
-describe("busyPane (heuristic over Claude Code's screen)", () => {
-	it("sees the working indicator of the current TUI and of older ones", () => {
-		expect(busyPane(BUSY)).toBe(true);
-		expect(busyPane(WRAPPED_BUSY)).toBe(true);
-		expect(busyPane("✻ Thinking…")).toBe(true);
-		expect(busyPane("· Scanning the repo… (esc to interrupt)")).toBe(true);
-		expect(busyPane("  Working (ESC TO INTERRUPT · 4s)")).toBe(true);
-	});
-
-	it("leaves an idle, finished, dialog or typing pane alone", () => {
-		expect(busyPane(IDLE)).toBe(false);
-		expect(busyPane(DONE)).toBe(false);
-		expect(busyPane(BLANK_FIRST_DRAFT)).toBe(false);
-		expect(busyPane(PS2_SHELL)).toBe(false);
-	});
-
-	it("sees the * spinner frame and any working line directly above the composer's top rule", () => {
-		expect(busyPane(STAR_FRAME)).toBe(true);
-		expect(busyPane("* Waiting for 1 background agent to finish")).toBe(true);
-		expect(busyPane(ABOVE_RULE)).toBe(true);
-		// the finished-turn banner above the rule is not working
-		expect(busyPane(DONE)).toBe(false);
-	});
-
-	it("is not fooled by transcript lines and the task widget", () => {
-		expect(busyPane("  ⎿  Running tests…")).toBe(false);
-		expect(busyPane("● Bash(npm test…)")).toBe(false);
-		expect(busyPane("  - fix the thing that hangs…")).toBe(false);
-		expect(busyPane("  ● main")).toBe(false);
-		expect(busyPane("  ◯ general-purpose  Doing a thing    54s · ↓ 240.5k tokens")).toBe(false);
+describe("undimmed", () => {
+	it("drops dim text and every escape, keeping the rest", () => {
+		expect(undimmed("\x1b[39m❯\u00a0\x1b[2mcontinue\x1b[0m")).toBe("❯\u00a0");
+		expect(undimmed("a\x1b[2mb\x1b[22mc\x1b[2md\x1b[me")).toBe("ace");
+		expect(undimmed("\x1b[1;2mdim bold\x1b[0;1m bold")).toBe(" bold");
+		expect(undimmed("\x1b[38;5;246m\x1b[48;5;237m❯ \x1b[38;5;231mhi\x1b[39m")).toBe("❯ hi");
+		expect(undimmed("\x1b[2mnever reset")).toBe("");
+		expect(undimmed("x\x1b[2Ky")).toBe("xy");
+		expect(undimmed("plain")).toBe("plain");
 	});
 });
 
 describe("composerState (heuristic over Claude Code's screen)", () => {
 	it("reads the live input line", () => {
 		expect(composerState(IDLE)).toBe("empty");
-		expect(composerState(BUSY)).toBe("empty"); // the current TUI keeps the box visible while working; busyPane catches that pane
+		expect(composerState(BUSY)).toBe("empty"); // the current TUI keeps the box visible while working, and what is typed queues
+		expect(composerState(STAR_FRAME)).toBe("empty");
+		expect(composerState(ABOVE_RULE)).toBe("empty");
+		expect(composerState(WRAPPED_BUSY)).toBe("none");
 		expect(composerState(DONE)).toBe("empty");
 		expect(composerState(`❯ /mcp reconnect all`)).toBe("typing");
 		expect(composerState("> /mcp")).toBe("typing");
+	});
+
+	it("reads a dim prompt suggestion in the live box as empty, not the transcript message above it as typing", () => {
+		expect(composerState(SUGGESTION)).toBe("empty");
+		expect(composerState(TYPED_NBSP)).toBe("typing");
 	});
 
 	it("sees a draft whose first line is blank", () => {
@@ -196,14 +200,14 @@ describe("agent reconnect", () => {
 		expect(out[out.length - 1]).toBe('dry run: 1 pane(s) would get "/mcp reconnect"');
 	});
 
-	it("re-captures before sending: a pane gone, busy or typed into since the check is skipped", () => {
+	it("re-captures before sending: a pane gone or typed into since the check is skipped, one that started working is still sent to", () => {
 		const gone = withPanes([pane("%1", IDLE)], {}, {}, null);
 		expect(reconnect(["repo"], config, gone.d)).toBe(1);
 		expect(gone.out).toContain(`repo ${SOCK} %1 github skipped (gone since capture)`);
 		expect(gone.d.tmuxSend).not.toHaveBeenCalled();
 		const busy = withPanes([pane("%2", IDLE)], {}, {}, BUSY);
-		expect(reconnect(["repo"], config, busy.d)).toBe(1);
-		expect(busy.out).toContain(`repo ${SOCK} %2 github skipped (busy since capture)`);
+		expect(reconnect(["repo"], config, busy.d)).toBe(0);
+		expect(busy.out).toContain(`repo ${SOCK} %2 github sent`);
 		const typed = withPanes([pane("%3", IDLE)], {}, {}, "❯ rm -rf /\n");
 		expect(reconnect(["repo"], config, typed.d)).toBe(1);
 		expect(typed.out).toContain(`repo ${SOCK} %3 github skipped (changed since capture)`);
@@ -217,12 +221,20 @@ describe("agent reconnect", () => {
 		expect(d.tmuxSend).not.toHaveBeenCalled();
 	});
 
-	it("skips a busy pane, one with text in the composer, and one without a prompt, with the pane id", () => {
-		const { d, out } = withPanes([pane("%1", BUSY), pane("%2", "❯ fix the reconnect test"), pane("%3", "Do you want to proceed?\n1. Yes\n2. No (esc)")]);
+	it("sends to a working pane and one showing a prompt suggestion; skips one with text in the composer, a dialog, and one without a prompt", () => {
+		const { d, out } = withPanes([
+			pane("%1", BUSY),
+			pane("%2", "❯ fix the reconnect test"),
+			pane("%3", "Do you want to proceed?\n1. Yes\n2. No (esc)"),
+			pane("%4", SUGGESTION),
+			pane("%5", "Do you want to proceed?\n❯ 1. Yes\n  2. No (esc)")
+		]);
 		expect(reconnect(["repo"], config, d)).toBe(1);
-		expect(d.tmuxSend).not.toHaveBeenCalled();
-		expect(out).toContain(`repo ${SOCK} %1 github skipped (busy: Claude is working)`);
-		expect(out).toContain(`repo ${SOCK} %2 github skipped (composer not empty)`);
+		expect(d.tmuxSend).toHaveBeenCalledTimes(2);
+		expect(out).toContain(`repo ${SOCK} %1 github sent`);
+		expect(out).toContain(`repo ${SOCK} %4 github sent`);
+		expect(out).toContain(`repo ${SOCK} %2 github skipped (composer not empty, or a dialog is showing)`);
+		expect(out).toContain(`repo ${SOCK} %5 github skipped (composer not empty, or a dialog is showing)`);
 		expect(out).toContain(`repo ${SOCK} %3 github skipped (no Claude Code prompt on screen)`);
 	});
 

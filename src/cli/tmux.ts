@@ -65,7 +65,7 @@ export interface Pane {
 	id: string;
 	/** The pid of the claude process running in the pane. */
 	pid: number;
-	/** The pane's screen (`tmux capture-pane -p -J`), for the busy and composer checks. */
+	/** The pane's screen (`tmux capture-pane -p -e -J`: SGR attributes kept, so dim text can be told from typed text), for the composer check. */
 	text: string;
 	/** Whether that claude process is the pane tty's foreground job (not stopped, not background). */
 	foreground: boolean;
@@ -314,7 +314,7 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 		let text = "";
 		let timedOut: boolean | undefined;
 		try {
-			text = tmux(server, info, ["capture-pane", "-p", "-J", "-t", id], exec, hasCmd).stdout;
+			text = tmux(server, info, ["capture-pane", "-p", "-e", "-J", "-t", id], exec, hasCmd).stdout;
 		} catch (err) {
 			if (err instanceof TmuxTimeout) timedOut = true; // tmux didn't answer: skip this pane, judge the rest
 			// else the pane died or can't be captured: an empty screen reads as "no prompt", so it is skipped
@@ -337,7 +337,7 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 export function tmuxPaneText(server: TmuxServer, pane: string, info: UserInfo, opts: TmuxOptions = {}): string | undefined {
 	const { exec, hasCmd } = resolve(opts);
 	try {
-		return tmux(server, info, ["capture-pane", "-p", "-J", "-t", pane], exec, hasCmd).stdout;
+		return tmux(server, info, ["capture-pane", "-p", "-e", "-J", "-t", pane], exec, hasCmd).stdout;
 	} catch {
 		return undefined;
 	}

@@ -291,7 +291,7 @@ describe("tmuxPanes", () => {
 		};
 		const [p] = tmuxPanes(SERVER(), INFO, h);
 		expect(p).toEqual({ id: "%0", pid: 200, text: "❯ \n", foreground: true, inMode: false, synchronized: false, configDir: "/srv/glm/config", timedOut: undefined });
-		expect(calls[1]).toEqual([`--reuid=${INFO.uid}`, `--regid=${INFO.gid}`, "--init-groups", "--", SERVER().binary, "-S", SERVER().socket, "capture-pane", "-p", "-J", "-t", "%0"]);
+		expect(calls[1]).toEqual([`--reuid=${INFO.uid}`, `--regid=${INFO.gid}`, "--init-groups", "--", SERVER().binary, "-S", SERVER().socket, "capture-pane", "-p", "-e", "-J", "-t", "%0"]);
 	});
 
 	it("returns no panes for a socket that answers nothing, drops lines it can't parse, and survives an unreadable /proc", () => {

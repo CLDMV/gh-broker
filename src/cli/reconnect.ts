@@ -20,9 +20,10 @@
  * brokerKeyOf knows what one looks like wherever it is. The sessions are found as root through
  * every tmux server the agent user runs (src/cli/tmux.ts), but every tmux command runs AS THE
  * AGENT, so root never types into a server the agent itself couldn't reach. Nothing is typed into
- * a pane unless its composer is visibly empty, Claude is working in the foreground of it, the key
- * is one that can't carry a newline or shell metacharacter, and the screen is re-captured just
- * before sending; skipped panes are listed with their id and a reason so they can be retried.
+ * a pane unless its input box is on screen and empty (no dialog, nobody typing), Claude is the
+ * pane's foreground job, the key is one that can't carry a newline or shell metacharacter, and the
+ * screen is re-captured just before sending. Claude working doesn't block a send: Claude Code
+ * queues what is typed while it works; skipped panes are listed with their id and a reason so they can be retried.
  * Every effect is injected.
  */
 import { agentsDir, assertAgentName, registeredAgents, type Group, type UserInfo } from "./agents.ts";
@@ -36,8 +37,9 @@ Sends "/mcp reconnect <key>" to every running Claude Code session of a
 registered agent (or all of them): the sessions the broker restart drops.
 <key> is the agent's actual mcpServers entry for the broker, read back from
 its .claude.json files. A pane is skipped, with its id and the reason, when
-someone is typing in it, Claude is working in it, it is in copy mode, or its
-key is not one that is safe to type blind. --dry-run lists what it would
+someone is typing in it, a dialog (a permission prompt, a question, a menu)
+is showing, it is in copy mode, or its key is not one that is safe to type
+blind. Claude working in it is fine: what is typed is queued. --dry-run lists what it would
 send where.`;
 
 /** The effects `agent reconnect` (and `upgrade`'s last step) use. */
@@ -58,36 +60,36 @@ export interface ReconnectDeps {
 }
 
 /**
- * Heuristics over Claude Code's screen, from the captured pane text (real captures of the current
- * TUI are the test fixtures). The TUI changes between versions, so they err toward skipping a
- * pane: one is only sent to when its input line is visibly empty and nothing suggests Claude is
- * working. A skipped pane is listed with its id, so it can be retried.
+ * Heuristics over Claude Code's screen, from the captured pane text (`capture-pane -e`, so SGR
+ * attributes are kept; real captures of the current TUI are the test fixtures). The TUI changes
+ * between versions, so they err toward skipping a pane: one is only sent to when its input line is
+ * visibly empty. A skipped pane is listed with its id, so it can be retried.
  */
 
-/** Spinner glyphs Claude Code's working indicator uses (✻✽✳✶✷✸✹✢✦· — the installed build also rotates through * when TERM isn't xterm-ghostty, i.e. always inside tmux), starting a line of text. */
-const SPINNER = /^\s*[✻✽✳✶✷✸✹✢✦·*]\s*\S/;
-/** A finished turn's banner ("✻ Baked for 29s · done 9:55 AM") — a spinner glyph, but not working. */
-const DONE_BANNER = /· done\b/;
+/** Any CSI escape (SGR colours and attributes, cursor moves) — dropped before matching screen shapes. */
+const CSI = /\x1b\[[0-9;:?]*[ -/]*[@-~]/g;
 
 /**
- * Whether Claude Code is busy in the pane: a spinner-glyph line that isn't a finished-turn banner
- * (the current TUI's working line, "✻ Waiting for 1 background agent to finish", carries no
- * ellipsis and no "esc to interrupt"), or the "esc to interrupt" hint older versions show. With
- * -J the capture joins a wrapped indicator line; a glyph line's first fragment still matches even
- * unjoined, so a narrow pane reads as busy either way.
+ * One captured line as the user sees it, minus dim text: Claude Code draws its prompt suggestion
+ * ("❯ continue") and the empty box's placeholder in SGR 2 (dim), and neither is typed text. Text
+ * from an SGR 2 until an SGR 0 / 22 (or a bare reset) is dropped; every other escape is removed.
  */
-export function busyPane(text: string): boolean {
-	const lines = text.split("\n").map((l) => l.replace(/\s+$/, ""));
-	const topRule = (i: number): boolean => RULE.test(lines[i]!) && /^[❯>]/.test(lines[i + 1] ?? "");
-	return lines.some((l, i) => {
-		if (/esc to interrupt/i.test(l)) return true;
-		if (SPINNER.test(l) && !DONE_BANNER.test(l)) return true;
-		// Sturdier: whatever non-blank line sits directly above the composer's top rule is the
-		// working indicator unless it is the finished-turn banner — a future indicator shape
-		// stays caught. (A transcript line that touches the rule reads busy too: skipped, safe.)
-		if (topRule(i + 1) && l.trim() !== "" && !DONE_BANNER.test(l) && !RULE.test(l)) return true;
-		return false;
-	});
+export function undimmed(line: string): string {
+	let out = "";
+	let dim = false;
+	let last = 0;
+	for (const m of line.matchAll(/\x1b\[([0-9;:?]*)([ -/]*[@-~])/g)) {
+		if (!dim) out += line.slice(last, m.index);
+		last = m.index! + m[0].length;
+		if (m[2] !== "m") continue;
+		const params = m[1] === "" ? ["0"] : m[1]!.split(/[;:]/);
+		for (const p of params) {
+			if (p === "2") dim = true;
+			else if (p === "0" || p === "" || p === "22") dim = false;
+		}
+	}
+	if (!dim) out += line.slice(last);
+	return out.replace(CSI, "");
 }
 
 /** The composer box's rule line ("────"). */
@@ -96,7 +98,8 @@ const RULE = /^\s*─+\s*$/;
 const FOOTER = /^\s*(?:⏵|◯|\? for shortcuts|new task\?)/;
 
 /**
- * The state of Claude Code's input line in the pane: "empty" (a "❯"/"> " line with nothing typed),
+ * The state of Claude Code's input line in the pane: "empty" (a "❯"/"> " line with nothing typed —
+ * the live box puts a no-break space after the "❯", and a dim prompt suggestion there isn't typed),
  * "typing" (text in it, or any non-blank line between it and the box's closing rule — a draft can
  * start with a blank first line), or "none" (no input line on screen — a dialog, or bash/memory
  * input mode). The live box is the bottom-most prompt line: user messages in the transcript carry
@@ -105,9 +108,9 @@ const FOOTER = /^\s*(?:⏵|◯|\? for shortcuts|new task\?)/;
  * check catches that pane even when this reads "empty".
  */
 export function composerState(text: string): "empty" | "typing" | "none" {
-	const lines = text.split("\n").map((l) => l.replace(/\s+$/, ""));
+	const lines = text.split("\n").map((l) => undimmed(l).replace(/\s+$/, ""));
 	for (let i = lines.length - 1; i >= 0; i--) {
-		const m = /^[❯>](?: (.*))?$/.exec(lines[i]!);
+		const m = /^[❯>](?:[ \u00a0](.*))?$/.exec(lines[i]!);
 		if (!m) continue;
 		for (let j = i + 1; j < lines.length; j++) {
 			const below = lines[j]!;
@@ -250,13 +253,9 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 					skip(user, socket, pane.id, key, "claude is not the pane's foreground job");
 					continue;
 				}
-				if (busyPane(pane.text)) {
-					skip(user, socket, pane.id, key, "busy: Claude is working");
-					continue;
-				}
 				const composer = composerState(pane.text);
 				if (composer !== "empty") {
-					skip(user, socket, pane.id, key, composer === "typing" ? "composer not empty" : "no Claude Code prompt on screen");
+					skip(user, socket, pane.id, key, composer === "typing" ? "composer not empty, or a dialog is showing" : "no Claude Code prompt on screen");
 					continue;
 				}
 				if (dryRun) {
@@ -274,10 +273,6 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 					}
 					if (fresh === undefined) {
 						skip(user, socket, pane.id, key, "gone since capture");
-						continue;
-					}
-					if (busyPane(fresh)) {
-						skip(user, socket, pane.id, key, "busy since capture");
 						continue;
 					}
 					if (composerState(fresh) !== "empty") {
