@@ -21,7 +21,10 @@
  */
 
 const owner = { type: "string", description: "registry owner (org/user login) — must be configured in config.ghcr.owners" };
-const image = { type: "string", description: 'image name under ghcr.io/<owner>/, e.g. "hoot" — must match config.ghcr.owners.<owner>.images' };
+const image = {
+	type: "string",
+	description: 'image name under ghcr.io/<owner>/, e.g. "hoot" — must match config.ghcr.owners.<owner>.images'
+};
 
 export const GHCR_PUSH_DESCRIPTION =
 	"Push a container image to ghcr.io/<owner>/<image>:<tag> from a `docker save` archive in the broker's drop directory, without holding a registry token. The image must be on config.ghcr's allowlist; an existing release tag (1.2.3 / v1.2.3) is never overwritten while protectReleaseTags is on. Starts a background job and returns its id at once — poll ghcr_push_status. Runs on the owner's GHCR credential (classic PAT, write:packages).";
@@ -33,10 +36,11 @@ export const GHCR_PUSH_SCHEMA = {
 	properties: {
 		owner,
 		image,
-		tag: { type: "string", pattern: "^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$", description: "tag to push, e.g. \"1.4.0\" or \"latest\"" },
+		tag: { type: "string", pattern: "^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$", description: 'tag to push, e.g. "1.4.0" or "latest"' },
 		archive: {
 			type: "string",
-			description: "a `docker save` archive (docker-archive or OCI layout) inside the configured drop directory — absolute, or relative to it. Must be a regular, group-readable file; symlinks and hard links are refused."
+			description:
+				"a `docker save` archive (docker-archive or OCI layout) inside the configured drop directory — absolute, or relative to it. Must be a regular, group-readable file; symlinks and hard links are refused."
 		}
 	}
 };

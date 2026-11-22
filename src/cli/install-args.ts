@@ -67,7 +67,16 @@ export interface InstallArgs {
 }
 
 export function parseArgs(argv: string[]): InstallArgs {
-	const o: InstallArgs = { positional: [], nonInteractive: false, createAgentUser: false, noMcpConfig: false, npm: false, npmScopes: [], npmOrgs: [], cliSecrets: {} };
+	const o: InstallArgs = {
+		positional: [],
+		nonInteractive: false,
+		createAgentUser: false,
+		noMcpConfig: false,
+		npm: false,
+		npmScopes: [],
+		npmOrgs: [],
+		cliSecrets: {}
+	};
 	// Consume the value after a value-taking flag, failing if it's missing or is
 	// itself a flag — so `--agent-user --secrets-provider file` can't silently take
 	// "--secrets-provider" as the username and proceed with an unintended user.
@@ -113,7 +122,8 @@ export function parseArgs(argv: string[]): InstallArgs {
 			const eq = pair.indexOf("=");
 			const org = pair.slice(0, eq);
 			const id = pair.slice(eq + 1);
-			if (eq <= 0 || !GH_OWNER.test(org) || !/^[1-9][0-9]{0,14}$/.test(id)) throw new Error("--installation-id takes <owner>=<numeric id> (see --help)");
+			if (eq <= 0 || !GH_OWNER.test(org) || !/^[1-9][0-9]{0,14}$/.test(id))
+				throw new Error("--installation-id takes <owner>=<numeric id> (see --help)");
 			(o.installationIds ??= {})[org] = Number(id);
 		} else if (a === "--default-owner") {
 			const org = value(++i, a);
@@ -150,7 +160,8 @@ export function parseArgs(argv: string[]): InstallArgs {
 			o.ghcrUsername = login;
 		} else if (a === "--ghcr-image") {
 			const img = value(++i, a);
-			if (img.length > 255 || !IMAGE_GLOB.test(img)) throw new Error(`--ghcr-image must be a lowercase image name or glob like "app" or "app-*", got "${img}"`);
+			if (img.length > 255 || !IMAGE_GLOB.test(img))
+				throw new Error(`--ghcr-image must be a lowercase image name or glob like "app" or "app-*", got "${img}"`);
 			(o.ghcrImages ??= []).push(img);
 		} else if (a === "--ghcr-drop-dir") {
 			const dir = value(++i, a);
@@ -158,7 +169,8 @@ export function parseArgs(argv: string[]): InstallArgs {
 			o.ghcrDropDir = dir;
 		} else if (a === "--ghcr-max-archive-bytes") {
 			const n = value(++i, a);
-			if (!/^[1-9][0-9]{0,15}$/.test(n) || !Number.isSafeInteger(Number(n))) throw new Error("--ghcr-max-archive-bytes must be a positive whole number of bytes");
+			if (!/^[1-9][0-9]{0,15}$/.test(n) || !Number.isSafeInteger(Number(n)))
+				throw new Error("--ghcr-max-archive-bytes must be a positive whole number of bytes");
 			o.ghcrMaxArchiveBytes = Number(n);
 		} else if (a === "--claude-config") {
 			const pair = value(++i, a);

@@ -112,7 +112,10 @@ export class GhcrService {
 	private ownerConfig(verb: string, owner: string): GhcrOwnerConfig {
 		const o = this.config(verb).owners[owner.toLowerCase()];
 		if (!o) throw new Error(`${verb}: owner "${owner}" has no GHCR configuration (config.ghcr.owners)`);
-		if (!this.secrets.has(o.credential)) throw new Error(`${verb}: owner "${owner}"'s GHCR credential "${o.credential.replace(/^cred:/, "")}" is not stored (re-run the installer to add it)`);
+		if (!this.secrets.has(o.credential))
+			throw new Error(
+				`${verb}: owner "${owner}"'s GHCR credential "${o.credential.replace(/^cred:/, "")}" is not stored (re-run the installer to add it)`
+			);
 		return o;
 	}
 
@@ -122,13 +125,24 @@ export class GhcrService {
 		if (lower.startsWith("ghcr.io/") || lower.startsWith(`${owner}/`)) {
 			throw new Error(`${verb}: "image" is the name under ghcr.io/${owner}/ — pass e.g. "hoot", not "${raw}"`);
 		}
-		if (!IMAGE.test(raw) || raw.length + owner.length + 1 > 255) throw new Error(`${verb}: "image" "${raw}" is not a valid image name (lowercase [a-z0-9], separators . _ __ -, "/" between segments)`);
-		if (!imageAllowed(oc, raw)) throw new Error(`${verb}: ghcr.io/${owner}/${raw} is not on the allowlist (config.ghcr.owners.${owner}.images: ${oc.images.join(", ")})`);
+		if (!IMAGE.test(raw) || raw.length + owner.length + 1 > 255)
+			throw new Error(
+				`${verb}: "image" "${raw}" is not a valid image name (lowercase [a-z0-9], separators . _ __ -, "/" between segments)`
+			);
+		if (!imageAllowed(oc, raw))
+			throw new Error(
+				`${verb}: ghcr.io/${owner}/${raw} is not on the allowlist (config.ghcr.owners.${owner}.images: ${oc.images.join(", ")})`
+			);
 		return raw;
 	}
 
 	private registry(owner: string, oc: GhcrOwnerConfig, image: string): Registry {
-		return new Registry({ base: this.base, username: oc.username, password: this.secrets.resolve(oc.credential), repository: `${owner}/${image}` });
+		return new Registry({
+			base: this.base,
+			username: oc.username,
+			password: this.secrets.resolve(oc.credential),
+			repository: `${owner}/${image}`
+		});
 	}
 
 	async push(input: unknown): Promise<Omit<Job, "progress" | "result">> {
@@ -138,7 +152,8 @@ export class GhcrService {
 		const cfg = this.config(verb);
 		const oc = this.ownerConfig(verb, owner);
 		const image = this.image(verb, owner, oc, a.image);
-		if (typeof a.tag !== "string" || !TAG.test(a.tag)) throw new Error(`${verb}: "tag" must be a valid tag ([A-Za-z0-9_][A-Za-z0-9._-]{0,127})`);
+		if (typeof a.tag !== "string" || !TAG.test(a.tag))
+			throw new Error(`${verb}: "tag" must be a valid tag ([A-Za-z0-9_][A-Za-z0-9._-]{0,127})`);
 		const tag = a.tag;
 
 		const archive = openArchive(a.archive, cfg.dropDir, cfg.maxArchiveBytes);
@@ -181,11 +196,20 @@ export class GhcrService {
 				}
 			);
 			handedOff = true;
-			audit({ tool: verb, owner, mode: "write", repo: ref, decision: "custom", ok: true, detail: `job=${job.job} queued tag=${tag} archive=${archive.path} bytes=${archive.size} format=${plan.format} layers=${plan.layers.length}` });
+			audit({
+				tool: verb,
+				owner,
+				mode: "write",
+				repo: ref,
+				decision: "custom",
+				ok: true,
+				detail: `job=${job.job} queued tag=${tag} archive=${archive.path} bytes=${archive.size} format=${plan.format} layers=${plan.layers.length}`
+			});
 			return { ...job };
 		} catch (err) {
 			// Anything thrown before hand-off may come from the registry: scrub it like a job error.
 			if (!registry) throw err; // archive/plan errors carry no secret
+			// eslint-disable-next-line preserve-caught-error -- the registry's error can carry the token; only the scrubbed message goes on
 			throw new Error(registry.clean((err as Error)?.message ?? String(err)));
 		} finally {
 			if (!handedOff) archive.close();
@@ -201,7 +225,8 @@ export class GhcrService {
 		if (typeof a.job !== "string" || !JOB_ID.test(a.job)) throw new Error(`${verb}: "job" must be a job id returned by ghcr_push`);
 		const job = this.queue.get(a.job);
 		// A job of another owner reads as unknown: status never crosses owners.
-		if (!job || job.owner !== owner) throw new Error(`${verb}: no job ${a.job} for owner ${owner} (jobs are kept in memory; a broker restart forgets them)`);
+		if (!job || job.owner !== owner)
+			throw new Error(`${verb}: no job ${a.job} for owner ${owner} (jobs are kept in memory; a broker restart forgets them)`);
 		return job;
 	}
 
@@ -217,6 +242,7 @@ export class GhcrService {
 			const tags = await registry.listTags();
 			return { image: `${registry.host}/${owner}/${image}`, exists: tags !== undefined, tags: tags ?? [] };
 		} catch (err) {
+			// eslint-disable-next-line preserve-caught-error -- the registry's error can carry the token; only the scrubbed message goes on
 			throw new Error(registry.clean((err as Error)?.message ?? String(err)));
 		}
 	}
@@ -225,9 +251,5 @@ export class GhcrService {
 // The schemas + descriptions are pure data in ./ghcr/schemas.ts so the tool manifest can
 // declare these verbs without dragging this file's host imports into its graph; they are
 // re-exported here so the old import path keeps working.
-import {
-	GHCR_PUSH_SCHEMA,
-	GHCR_PUSH_STATUS_SCHEMA,
-	GHCR_TAGS_SCHEMA
-} from "./ghcr/schemas.ts";
+import { GHCR_PUSH_SCHEMA, GHCR_PUSH_STATUS_SCHEMA, GHCR_TAGS_SCHEMA } from "./ghcr/schemas.ts";
 export { GHCR_PUSH_SCHEMA, GHCR_PUSH_STATUS_SCHEMA, GHCR_TAGS_SCHEMA };

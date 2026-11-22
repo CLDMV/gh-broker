@@ -42,7 +42,10 @@ describe("parseState", () => {
 		["users as an array", { ...emptyState(), users: [] }],
 		["a user that isn't an object", bad(1)],
 		["an invalid user name", { ...emptyState(), users: { "Bad Name": emptyUser() } }],
-		["a __proto__ key", JSON.parse('{"version":1,"lastAcceptedStep":0,"users":{"__proto__":{"failures":0,"lockedUntil":null,"lockouts":[],"hardLock":null}}}')],
+		[
+			"a __proto__ key",
+			JSON.parse('{"version":1,"lastAcceptedStep":0,"users":{"__proto__":{"failures":0,"lockedUntil":null,"lockouts":[],"hardLock":null}}}')
+		],
 		["fractional failures", bad({ ...emptyUser(), failures: 1.5 })],
 		["non-ISO lockedUntil", bad({ ...emptyUser(), lockedUntil: "soon" })],
 		["missing lockedUntil", bad({ failures: 0, lockouts: [], hardLock: null })],

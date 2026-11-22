@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, symlinkSync, lstatSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	writeFileSync,
+	readFileSync,
+	readdirSync,
+	statSync,
+	existsSync,
+	symlinkSync,
+	lstatSync
+} from "node:fs";
 import { join } from "node:path";
 import * as otp from "../src/cli/otp.ts";
 
@@ -30,7 +41,9 @@ describe("base32 / seed", () => {
 	});
 
 	it("builds the otpauth URI", () => {
-		expect(otp.otpauthUri("ABC", "my host")).toBe("otpauth://totp/gh-broker:my%20host?secret=ABC&issuer=gh-broker&algorithm=SHA1&digits=6&period=30");
+		expect(otp.otpauthUri("ABC", "my host")).toBe(
+			"otpauth://totp/gh-broker:my%20host?secret=ABC&issuer=gh-broker&algorithm=SHA1&digits=6&period=30"
+		);
 	});
 });
 
@@ -105,12 +118,19 @@ describe("seed credential", () => {
 	it("replaces the .cred and rewrites the drop-in for systemd-creds (default backend)", () => {
 		const t = io(["b-read", "a-read"]);
 		expect(otp.storeSeed({ config: {}, name: "otp-seed", seed: "SEED", paths, io: t.io })).toBe("systemd-creds");
-		expect(t.calls).toEqual(["rm /c/creds/otp-seed.cred.new", "enc otp-seed SEED /c/creds/otp-seed.cred.new", "mv /c/creds/otp-seed.cred.new /c/creds/otp-seed.cred", "dropin a-read,b-read,otp-seed /c/creds"]);
+		expect(t.calls).toEqual([
+			"rm /c/creds/otp-seed.cred.new",
+			"enc otp-seed SEED /c/creds/otp-seed.cred.new",
+			"mv /c/creds/otp-seed.cred.new /c/creds/otp-seed.cred",
+			"dropin a-read,b-read,otp-seed /c/creds"
+		]);
 	});
 
 	it("keeps the old .cred when the encrypt fails", () => {
 		const t = io();
-		t.io.encrypt.mockImplementation(() => { throw new Error("tpm busy"); });
+		t.io.encrypt.mockImplementation(() => {
+			throw new Error("tpm busy");
+		});
 		expect(() => otp.storeSeed({ config: {}, name: "otp-seed", seed: "SEED", paths, io: t.io })).toThrow("tpm busy");
 		expect(t.calls).toEqual(["rm /c/creds/otp-seed.cred.new"]);
 		expect(t.io.rename).not.toHaveBeenCalled();
@@ -145,7 +165,11 @@ describe("state file", () => {
 		const one = otp.fileSignature(p);
 		writeFileSync(p, "abc");
 		expect(otp.fileSignature(p)).not.toBe(one);
-		expect(() => otp.fileSignature(p, () => { throw Object.assign(new Error("EACCES"), { code: "EACCES" }); })).toThrow("EACCES");
+		expect(() =>
+			otp.fileSignature(p, () => {
+				throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+			})
+		).toThrow("EACCES");
 	});
 
 	it("stateStore writes when the file is unchanged since its read, including a file that was missing", () => {
@@ -173,7 +197,9 @@ describe("state file", () => {
 		expect(otp.validState(ok)).toBe(true);
 		expect(otp.validState({ ...ok, lastAcceptedStep: -1 })).toBe(false);
 		expect(otp.validState({ ...ok, users: { repo: { ...otp.emptyUser(), failures: -2 } } })).toBe(false);
-		expect(otp.validState({ ...ok, users: { repo: { ...otp.emptyUser(), hardLock: { since: "2026-11-01T00:00:00Z", lockouts: -1 } } } })).toBe(false);
+		expect(
+			otp.validState({ ...ok, users: { repo: { ...otp.emptyUser(), hardLock: { since: "2026-11-01T00:00:00Z", lockouts: -1 } } } })
+		).toBe(false);
 		expect(otp.validState({ ...ok, users: { "Not A Name": otp.emptyUser() } })).toBe(false);
 		expect(otp.validState({ ...ok, users: { root: otp.emptyUser() } })).toBe(false);
 	});
@@ -215,7 +241,11 @@ describe("state file", () => {
 		expect(otp.readState(join(dir, "nope.json"))).toEqual({ status: "missing", state: otp.emptyState() });
 		expect(otp.readState(file("bad.json", "{not json")).status).toBe("corrupt");
 		expect(otp.readState(file("shape.json", '{"version":1}')).status).toBe("corrupt");
-		expect(otp.readState(file("old.json", JSON.stringify({ version: 1, lastAcceptedStep: 0, failures: 0, lockedUntil: null, lockouts: [], hardLock: null }))).status).toBe("corrupt");
+		expect(
+			otp.readState(
+				file("old.json", JSON.stringify({ version: 1, lastAcceptedStep: 0, failures: 0, lockedUntil: null, lockouts: [], hardLock: null }))
+			).status
+		).toBe("corrupt");
 		expect(() => otp.readState(dir)).toThrow(/EISDIR/);
 	});
 
@@ -269,7 +299,18 @@ describe("state file", () => {
 
 	it("removes the temp file and rethrows when the chown fails", () => {
 		const p = join(dir, "failed.json");
-		expect(() => otp.writeFileAtomic(p, "x", { uid: 1, gid: 1 }, { fchown: () => { throw new Error("EPERM"); } })).toThrow("EPERM");
+		expect(() =>
+			otp.writeFileAtomic(
+				p,
+				"x",
+				{ uid: 1, gid: 1 },
+				{
+					fchown: () => {
+						throw new Error("EPERM");
+					}
+				}
+			)
+		).toThrow("EPERM");
 		expect(existsSync(p)).toBe(false);
 		expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
 	});
@@ -292,9 +333,26 @@ describe("describeUsers / formatStatus", () => {
 
 	it("reports unlocked users, including registered ones with no entry", () => {
 		const d = otp.describeUsers({ status: "missing", state: otp.emptyState() }, ["repo"], {}, now);
-		expect(d).toEqual([expect.objectContaining({ user: "repo", locked: false, failures: 0, maxFailures: 5, maxLockouts: 3, lockoutsLast24h: 0, lockedUntil: null })]);
+		expect(d).toEqual([
+			expect.objectContaining({
+				user: "repo",
+				locked: false,
+				failures: 0,
+				maxFailures: 5,
+				maxLockouts: 3,
+				lockoutsLast24h: 0,
+				lockedUntil: null
+			})
+		]);
 		const lines = otp.formatStatus(d, { statePath: "/p", fileStatus: "missing", configured: true });
-		expect(lines).toEqual(["OTP configured: yes", "state file: /p (missing)", "repo:", "  bad codes so far: 0 of 5", "  short lockouts in the last 24 h: 0 of 3", "  not locked"]);
+		expect(lines).toEqual([
+			"OTP configured: yes",
+			"state file: /p (missing)",
+			"repo:",
+			"  bad codes so far: 0 of 5",
+			"  short lockouts in the last 24 h: 0 of 3",
+			"  not locked"
+		]);
 	});
 
 	it("lists registered agents together with users only the file mentions, sorted", () => {
@@ -304,8 +362,26 @@ describe("describeUsers / formatStatus", () => {
 	});
 
 	it("reports a short lockout, and ignores an expired one and old lockouts", () => {
-		const active = otp.describeUsers(state({ repo: { ...zero, failures: 1, lockedUntil: "2026-11-01T12:10:00.000Z", lockouts: ["2026-11-01T12:00:00.000Z", "2026-10-30T12:00:00.000Z"] } }), [], { maxFailures: 9, maxLockouts: 4 }, now);
-		expect(active[0]).toMatchObject({ locked: true, lockedUntil: "2026-11-01T12:10:00.000Z", lockoutsLast24h: 1, maxFailures: 9, maxLockouts: 4 });
+		const active = otp.describeUsers(
+			state({
+				repo: {
+					...zero,
+					failures: 1,
+					lockedUntil: "2026-11-01T12:10:00.000Z",
+					lockouts: ["2026-11-01T12:00:00.000Z", "2026-10-30T12:00:00.000Z"]
+				}
+			}),
+			[],
+			{ maxFailures: 9, maxLockouts: 4 },
+			now
+		);
+		expect(active[0]).toMatchObject({
+			locked: true,
+			lockedUntil: "2026-11-01T12:10:00.000Z",
+			lockoutsLast24h: 1,
+			maxFailures: 9,
+			maxLockouts: 4
+		});
 		const text = otp.formatStatus(active, { statePath: "/p", fileStatus: "ok", configured: false }).join("\n");
 		expect(text).toContain("short lockout until 2026-11-01T12:10:00.000Z");
 		expect(text).toContain("no (re-run the installer");
@@ -316,7 +392,9 @@ describe("describeUsers / formatStatus", () => {
 	it("reports a hard lock with the per-user unlock command", () => {
 		const d = otp.describeUsers(state({ repo: { ...zero, hardLock: { since: "2026-11-01T11:00:00.000Z", lockouts: 3 } } }), [], {}, now);
 		expect(d[0].locked).toBe(true);
-		expect(otp.formatStatus(d, { statePath: "/p", fileStatus: "ok", configured: true }).join("\n")).toContain("HARD LOCK since 2026-11-01T11:00:00.000Z after 3 lockouts. Clear it with: sudo gh-broker otp unlock repo");
+		expect(otp.formatStatus(d, { statePath: "/p", fileStatus: "ok", configured: true }).join("\n")).toContain(
+			"HARD LOCK since 2026-11-01T11:00:00.000Z after 3 lockouts. Clear it with: sudo gh-broker otp unlock repo"
+		);
 	});
 
 	it("reports a corrupt file as locking every user", () => {
@@ -326,7 +404,10 @@ describe("describeUsers / formatStatus", () => {
 		expect(text).toContain("LOCKED: the state file is unreadable");
 		expect(text).toContain("unlock --all");
 		expect(text).toContain("locked (state file unreadable)");
-		expect(otp.describeUsers({ status: "corrupt", state: otp.emptyState() }, ["repo"], {}, now)[0]).toMatchObject({ maxFailures: 5, maxLockouts: 3 });
+		expect(otp.describeUsers({ status: "corrupt", state: otp.emptyState() }, ["repo"], {}, now)[0]).toMatchObject({
+			maxFailures: 5,
+			maxLockouts: 3
+		});
 	});
 
 	it("uses Date.now when no clock is given", () => {

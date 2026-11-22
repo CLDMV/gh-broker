@@ -10,7 +10,17 @@ import { Registry, RegistryError } from "../src/verbs/ghcr/registry.ts";
 import { pushImage } from "../src/verbs/ghcr/push.ts";
 import { planImage, MEDIA } from "../src/verbs/ghcr/archive.ts";
 import { DEFAULT_MAX_ARCHIVE_BYTES, type GhcrConfig } from "../src/verbs/ghcr/config.ts";
-import { FakeRegistry, tar, ociArchive, dockerArchive, scratchDir, removeDir, join, sha, type FakeRegistryOptions } from "./helpers/ghcr-fixtures.mts";
+import {
+	FakeRegistry,
+	tar,
+	ociArchive,
+	dockerArchive,
+	scratchDir,
+	removeDir,
+	join,
+	sha,
+	type FakeRegistryOptions
+} from "./helpers/ghcr-fixtures.mts";
 
 /** A docker-archive whose single layer member is empty (0 bytes). */
 function dockerArchiveFromParts(config: Buffer, manifest: Buffer): Buffer {
@@ -61,10 +71,16 @@ async function service(opts: FakeRegistryOptions = {}, cfg: Record<string, unkno
 		dropDir: drop,
 		protectReleaseTags: true,
 		maxArchiveBytes: DEFAULT_MAX_ARCHIVE_BYTES,
-		owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot", "hoot-worker-*"] }, other: { username: "o", credential: "cred:other", images: ["x"] } },
+		owners: {
+			cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot", "hoot-worker-*"] },
+			other: { username: "o", credential: "cred:other", images: ["x"] }
+		},
 		...cfg
 	};
-	const secrets = { resolve: vi.fn((ref: string) => (ref === "cred:cldmv-packages" ? PAT : "ghp_otherPat000000000000000000000000")), has: vi.fn(() => true) };
+	const secrets = {
+		resolve: vi.fn((ref: string) => (ref === "cred:cldmv-packages" ? PAT : "ghp_otherPat000000000000000000000000")),
+		has: vi.fn(() => true)
+	};
 	return { svc: new GhcrService(ghcr, secrets, { base, ...(queue ? { queue } : {}) }), secrets };
 }
 
@@ -82,7 +98,13 @@ describe("ghcr_push (end to end against a fake registry)", () => {
 		const { svc } = await service();
 		const img = ociArchive();
 		const job = await svc.push({ owner: "CLDMV", image: "hoot", tag: "1.0.0", archive: put(img.archive) });
-		expect(job).toMatchObject({ state: "queued", owner: "cldmv", image: `${new URL(reg.base).host}/cldmv/hoot`, tag: "1.0.0", format: "oci-layout" });
+		expect(job).toMatchObject({
+			state: "queued",
+			owner: "cldmv",
+			image: `${new URL(reg.base).host}/cldmv/hoot`,
+			tag: "1.0.0",
+			format: "oci-layout"
+		});
 		await svc.queue.idle();
 		const done = svc.status({ owner: "cldmv", job: job.job }) as any;
 		expect(done.state).toBe("succeeded");
@@ -95,7 +117,9 @@ describe("ghcr_push (end to end against a fake registry)", () => {
 		const parsed = JSON.parse(man.bytes.toString());
 		expect(parsed.layers.map((l: any) => l.mediaType)).toEqual([MEDIA.ociLayerGzip, MEDIA.ociLayerGzip]);
 		// The pushed blobs really are the gzip of the archive's layers.
-		expect(parsed.layers.map((l: any) => gunzipSync(reg.blobs.get(l.digest)!).toString("hex"))).toEqual(img.layers.map((l) => l.toString("hex")));
+		expect(parsed.layers.map((l: any) => gunzipSync(reg.blobs.get(l.digest)!).toString("hex"))).toEqual(
+			img.layers.map((l) => l.toString("hex"))
+		);
 		expect(reg.blobs.get(sha(img.config))).toEqual(img.config);
 
 		const auditLines = logs.filter((l) => l.includes('"tool":"ghcr_push"'));
@@ -143,7 +167,12 @@ describe("ghcr_push (end to end against a fake registry)", () => {
 
 	it("maps docker media types to OCI ones when the manifest has to be rebuilt", async () => {
 		const { svc } = await service();
-		const img = ociArchive({ configMediaType: MEDIA.dockerConfig, manifestMediaType: MEDIA.dockerManifest, layerMediaType: MEDIA.dockerLayer, annotations: { k: "v" } });
+		const img = ociArchive({
+			configMediaType: MEDIA.dockerConfig,
+			manifestMediaType: MEDIA.dockerManifest,
+			layerMediaType: MEDIA.dockerLayer,
+			annotations: { k: "v" }
+		});
 		const job = await svc.push({ owner: "cldmv", image: "hoot", tag: "dm", archive: put(img.archive) });
 		await svc.queue.idle();
 		expect((svc.status({ owner: "cldmv", job: job.job }) as any).state).toBe("succeeded");
@@ -166,7 +195,9 @@ describe("ghcr_push (end to end against a fake registry)", () => {
 		const archive = put(ociArchive().archive);
 		await svc.push({ owner: "cldmv", image: "hoot", tag: "v2.0.0", archive });
 		await svc.queue.idle();
-		await expect(svc.push({ owner: "cldmv", image: "hoot", tag: "v2.0.0", archive })).rejects.toThrow(/tag v2.0.0 already exists .* release tags are protected/);
+		await expect(svc.push({ owner: "cldmv", image: "hoot", tag: "v2.0.0", archive })).rejects.toThrow(
+			/tag v2.0.0 already exists .* release tags are protected/
+		);
 
 		// Race: two queued pushes of the same new release tag — the second must fail at manifest time.
 		const one = await svc.push({ owner: "cldmv", image: "hoot", tag: "3.0.0", archive });
@@ -239,7 +270,10 @@ describe("ghcr_push (end to end against a fake registry)", () => {
 			[{ owner: "cldmv", image: "", tag: "t", archive: "a" }, /"image" must be a non-empty string/],
 			[{ owner: "cldmv", image: "hoot", tag: "-bad", archive: "a" }, /"tag" must be a valid tag/],
 			[{ owner: "cldmv", image: "hoot", tag: 5, archive: "a" }, /"tag" must be a valid tag/],
-			[{ owner: "cldmv", image: "hoot", tag: "t", archive: "/etc/gh-broker/secrets.json" }, /must be an existing file inside the drop directory/],
+			[
+				{ owner: "cldmv", image: "hoot", tag: "t", archive: "/etc/gh-broker/secrets.json" },
+				/must be an existing file inside the drop directory/
+			],
 			[{ owner: "cldmv", image: "hoot", tag: "t", archive: "../../x.tar" }, /must be an existing file inside the drop directory/]
 		])("%j", async (args, re) => {
 			const { svc } = await service();
@@ -254,7 +288,9 @@ describe("ghcr_push (end to end against a fake registry)", () => {
 
 		it("refuses a non-image archive before touching the registry, and closes it", async () => {
 			const { svc } = await service();
-			await expect(svc.push({ owner: "cldmv", image: "hoot", tag: "t", archive: put(Buffer.alloc(1024)) })).rejects.toThrow(/not an image archive/);
+			await expect(svc.push({ owner: "cldmv", image: "hoot", tag: "t", archive: put(Buffer.alloc(1024)) })).rejects.toThrow(
+				/not an image archive/
+			);
 			expect(reg.requests).toHaveLength(0);
 		});
 
@@ -319,7 +355,8 @@ describe("Registry edge cases", () => {
 		reg = new FakeRegistry();
 		await reg.start();
 	});
-	const client = (over: Partial<ConstructorParameters<typeof Registry>[0]> = {}) => new Registry({ base: reg.base, username: "Shinrai", password: PAT, repository: "cldmv/hoot", ...over });
+	const client = (over: Partial<ConstructorParameters<typeof Registry>[0]> = {}) =>
+		new Registry({ base: reg.base, username: "Shinrai", password: PAT, repository: "cldmv/hoot", ...over });
 
 	it("clean() redacts both secrets and token-shaped strings", async () => {
 		const r = client();
@@ -342,7 +379,9 @@ describe("Registry edge cases", () => {
 	it("logs in on demand, and reports unexpected statuses with the registry's error code", async () => {
 		const r = client();
 		expect(await r.blobExists(sha("nothing"))).toBe(false); // first call triggers a pull login
-		await expect(r.putManifest("t", MEDIA.ociManifest, Buffer.from('{"config":{"digest":"sha256:00"},"layers":[]}'))).rejects.toThrow(/MANIFEST_BLOB_UNKNOWN/);
+		await expect(r.putManifest("t", MEDIA.ociManifest, Buffer.from('{"config":{"digest":"sha256:00"},"layers":[]}'))).rejects.toThrow(
+			/MANIFEST_BLOB_UNKNOWN/
+		);
 		expect(await r.manifestExists("t")).toBe(false);
 	});
 
@@ -350,7 +389,9 @@ describe("Registry edge cases", () => {
 		const r = client();
 		await r.login("push,pull");
 		const body = Buffer.from("real bytes");
-		await expect(r.uploadBlob(sha("other bytes"), body.length, () => Readable.from([body]))).rejects.toThrow(/finishing blob .*HTTP 400 \(DIGEST_INVALID/);
+		await expect(r.uploadBlob(sha("other bytes"), body.length, () => Readable.from([body]))).rejects.toThrow(
+			/finishing blob .*HTTP 400 \(DIGEST_INVALID/
+		);
 	});
 
 	it("rolls progress back and retries a blob once when the token expires mid-upload", async () => {
@@ -361,7 +402,12 @@ describe("Registry edge cases", () => {
 		await r.login("push,pull");
 		const body = Buffer.from("retry me");
 		let progress = 0;
-		await r.uploadBlob(sha(body), body.length, () => Readable.from([body]), (d) => (progress += d));
+		await r.uploadBlob(
+			sha(body),
+			body.length,
+			() => Readable.from([body]),
+			(d) => (progress += d)
+		);
 		expect(progress).toBe(body.length);
 		expect(reg.blobs.get(sha(body))).toEqual(body);
 	});
@@ -396,7 +442,9 @@ describe("Registry edge cases", () => {
 			await r.login("push,pull");
 			await expect(r.manifestExists("t")).rejects.toThrow(/checking tag t failed: HTTP 500$/); // HEAD: no body
 			await expect(r.blobExists(sha("x"))).rejects.toThrow(/HTTP 500/);
-			await expect(r.uploadBlob(sha("x"), 1, () => Readable.from([Buffer.from("x")]))).rejects.toThrow(/starting a blob upload failed: HTTP 500 \(upstream exploded\)/);
+			await expect(r.uploadBlob(sha("x"), 1, () => Readable.from([Buffer.from("x")]))).rejects.toThrow(
+				/starting a blob upload failed: HTTP 500 \(upstream exploded\)/
+			);
 			await expect(r.listTags()).rejects.toThrow(/invalid JSON/);
 		} finally {
 			await new Promise<void>((r) => server.close(() => r()));
@@ -451,14 +499,16 @@ describe("errors that are not Error objects", () => {
 	it("scrubs a non-Error thrown before hand-off, from the tag listing, and from a queued job", async () => {
 		const { svc } = await service();
 		const login = vi.spyOn(Registry.prototype, "login").mockRejectedValue("plain failure");
-		await expect(svc.push({ owner: "cldmv", image: "hoot", tag: "x", archive: put(ociArchive().archive) })).rejects.toThrow("plain failure");
+		await expect(svc.push({ owner: "cldmv", image: "hoot", tag: "x", archive: put(ociArchive().archive) })).rejects.toThrow(
+			"plain failure"
+		);
 		await expect(svc.tags({ owner: "cldmv", image: "hoot" })).rejects.toThrow("plain failure");
 		login.mockRestore();
 
 		vi.spyOn(Registry.prototype, "blobExists").mockRejectedValue("job failure");
 		const job = await svc.push({ owner: "cldmv", image: "hoot", tag: "y", archive: put(ociArchive().archive) });
 		await svc.queue.idle();
-		expect((svc.status({ owner: "cldmv", job: job.job }) as any)).toMatchObject({ state: "failed", error: "job failure" });
+		expect(svc.status({ owner: "cldmv", job: job.job }) as any).toMatchObject({ state: "failed", error: "job failure" });
 	});
 });
 
@@ -474,7 +524,10 @@ describe("pushImage progress", () => {
 		const fd = openSync(p, "r");
 		const phases: string[] = [];
 		try {
-			const res = await pushImage(r, fd, planImage(fd, buf.length), "p", { protectReleaseTags: true, onProgress: (x) => phases.push(x.phase) });
+			const res = await pushImage(r, fd, planImage(fd, buf.length), "p", {
+				protectReleaseTags: true,
+				onProgress: (x) => phases.push(x.phase)
+			});
 			expect(res.size).toBeGreaterThan(0);
 		} finally {
 			closeSync(fd);

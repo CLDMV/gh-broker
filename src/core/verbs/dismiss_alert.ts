@@ -76,16 +76,25 @@ export async function dismissAlert(octokit: Octokit, input: DismissAlertInput): 
 	const { owner, repo, kind } = input;
 	if (typeof repo !== "string" || !repo) throw new Error("dismiss_alert: repo is required");
 	if (!ALERT_KINDS.includes(kind)) throw new Error(`dismiss_alert: kind must be one of ${ALERT_KINDS.join(", ")}`);
-	if (!Number.isSafeInteger(input.alertNumber) || input.alertNumber <= 0) throw new Error("dismiss_alert: alertNumber must be a positive integer");
+	if (!Number.isSafeInteger(input.alertNumber) || input.alertNumber <= 0)
+		throw new Error("dismiss_alert: alertNumber must be a positive integer");
 	if (input.comment !== undefined && typeof input.comment !== "string") throw new Error("dismiss_alert: comment must be a string");
 	const reopen = input.reopen === true;
 	if (reopen && input.reason !== undefined) throw new Error("dismiss_alert: a reopen takes no reason");
-	if (reopen && input.comment !== undefined && kind !== "secret_scanning") throw new Error(`dismiss_alert: GitHub stores no comment when a ${kind} alert is reopened; leave comment out`);
+	if (reopen && input.comment !== undefined && kind !== "secret_scanning")
+		throw new Error(`dismiss_alert: GitHub stores no comment when a ${kind} alert is reopened; leave comment out`);
 	if (!reopen && !DISMISS_REASONS[kind].includes(input.reason as string)) {
-		throw new Error(`dismiss_alert: reason is required for a ${kind} alert, one of: ${DISMISS_REASONS[kind].map((r) => `"${r}"`).join(", ")}`);
+		throw new Error(
+			`dismiss_alert: reason is required for a ${kind} alert, one of: ${DISMISS_REASONS[kind].map((r) => `"${r}"`).join(", ")}`
+		);
 	}
 
-	const res = await octokit.request(ROUTES[kind], { owner, repo, alert_number: input.alertNumber, ...bodyFor(kind, reopen, input.reason, input.comment) });
+	const res = await octokit.request(ROUTES[kind], {
+		owner,
+		repo,
+		alert_number: input.alertNumber,
+		...bodyFor(kind, reopen, input.reason, input.comment)
+	});
 	// Only these fields leave: a secret scanning alert also carries the secret.
 	const d = res.data as { number?: unknown; state?: unknown; dismissed_reason?: unknown; resolution?: unknown; html_url?: unknown };
 	const reason = kind === "secret_scanning" ? d.resolution : d.dismissed_reason;

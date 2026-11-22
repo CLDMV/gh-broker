@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { mergeConfig, layerConfig, overlayFromFlags, readOperatorConfig, buildConfig, secretsBlock, addClaudeConfigDirs, checkClaudeConfigDirs, DEFAULT_GHCR_DROP_DIR } from "../src/cli/config-merge.ts";
+import {
+	mergeConfig,
+	layerConfig,
+	overlayFromFlags,
+	readOperatorConfig,
+	buildConfig,
+	secretsBlock,
+	addClaudeConfigDirs,
+	checkClaudeConfigDirs,
+	DEFAULT_GHCR_DROP_DIR
+} from "../src/cli/config-merge.ts";
 
 const example = {
 	listen: "agents:/run/gh-broker/agents",
@@ -18,14 +28,29 @@ describe("mergeConfig", () => {
 	});
 
 	it("takes tools from the example so allowlist removals/tightenings apply", () => {
-		const current = { ...example, tools: [{ name: "get_me", mode: "read" }, { name: "removed_tool", mode: "write" }] };
+		const current = {
+			...example,
+			tools: [
+				{ name: "get_me", mode: "read" },
+				{ name: "removed_tool", mode: "write" }
+			]
+		};
 		const merged = mergeConfig(example, current);
 		expect(merged.tools).toEqual(example.tools);
 		expect(merged.tools.find((t: { name: string }) => t.name === "removed_tool")).toBeUndefined();
 	});
 
 	it("keeps the operator's per-tool otp override (either way), and nothing else from the deployed tools", () => {
-		const current = { ...example, tools: [{ name: "get_me", mode: "write", otp: true }, { name: "list_issues", mode: "read", otp: false }, { name: "removed_tool", mode: "write", otp: true }, { name: "bad", otp: "yes" }, null] };
+		const current = {
+			...example,
+			tools: [
+				{ name: "get_me", mode: "write", otp: true },
+				{ name: "list_issues", mode: "read", otp: false },
+				{ name: "removed_tool", mode: "write", otp: true },
+				{ name: "bad", otp: "yes" },
+				null
+			]
+		};
 		const merged = mergeConfig(example, current);
 		expect(merged.tools).toEqual([
 			{ name: "get_me", mode: "read", otp: true },
@@ -36,8 +61,20 @@ describe("mergeConfig", () => {
 	});
 
 	it("keeps the operator's per-tool enabled setting too, alongside otp", () => {
-		const ex = { ...example, tools: [{ name: "assign_copilot_to_issue", mode: "write" }, { name: "get_me", mode: "read" }] };
-		const current = { ...ex, tools: [{ name: "assign_copilot_to_issue", mode: "write", enabled: true, otp: false }, { name: "get_me", mode: "read", enabled: "no" }] };
+		const ex = {
+			...example,
+			tools: [
+				{ name: "assign_copilot_to_issue", mode: "write" },
+				{ name: "get_me", mode: "read" }
+			]
+		};
+		const current = {
+			...ex,
+			tools: [
+				{ name: "assign_copilot_to_issue", mode: "write", enabled: true, otp: false },
+				{ name: "get_me", mode: "read", enabled: "no" }
+			]
+		};
 		expect(mergeConfig(ex, current).tools).toEqual([
 			{ name: "assign_copilot_to_issue", mode: "write", otp: false, enabled: true },
 			{ name: "get_me", mode: "read" }
@@ -116,8 +153,16 @@ const ask = async () => {
 
 describe("layerConfig", () => {
 	it("replaces scalars and merges owners per owner and per field", () => {
-		const base = { listen: "agents:/a", upstream: "https://a", owners: { acme: { read: "cred:acme-read", write: "cred:acme-write", installationId: 7 } } };
-		const out = layerConfig(base, { listen: "agents:/b", defaultOwner: "acme", owners: { acme: { write: "cred:w2" }, beta: { read: "cred:r", write: "cred:w" } } });
+		const base = {
+			listen: "agents:/a",
+			upstream: "https://a",
+			owners: { acme: { read: "cred:acme-read", write: "cred:acme-write", installationId: 7 } }
+		};
+		const out = layerConfig(base, {
+			listen: "agents:/b",
+			defaultOwner: "acme",
+			owners: { acme: { write: "cred:w2" }, beta: { read: "cred:r", write: "cred:w" } }
+		});
 		expect(out.listen).toBe("agents:/b");
 		expect(out.upstream).toBe("https://a");
 		expect(out.defaultOwner).toBe("acme");
@@ -127,15 +172,26 @@ describe("layerConfig", () => {
 	});
 
 	it("merges app/secrets/npm per field and creates them when absent", () => {
-		const out = layerConfig({ npm: { token: "cred:t", scopes: ["@a"] } }, { npm: { registry: "https://r" }, secrets: { path: "/p" }, app: { appId: 1, privateKey: "cred:k" } });
+		const out = layerConfig(
+			{ npm: { token: "cred:t", scopes: ["@a"] } },
+			{ npm: { registry: "https://r" }, secrets: { path: "/p" }, app: { appId: 1, privateKey: "cred:k" } }
+		);
 		expect(out.npm).toEqual({ token: "cred:t", scopes: ["@a"], registry: "https://r" });
 		expect(out.secrets).toEqual({ path: "/p" });
 		expect(out.app).toEqual({ appId: 1, privateKey: "cred:k" });
 	});
 
 	it("merges ghcr scalars and ghcr owners per owner", () => {
-		const base = { owners: {}, ghcr: { dropDir: "/srv/a/b", owners: { acme: { username: "u", credential: "cred:acme-packages", images: ["x"] } } } };
-		const out = layerConfig(base, { ghcr: { protectReleaseTags: false, owners: { acme: { images: ["y"] }, beta: { username: "b", credential: "cred:beta-packages", images: ["z"] } } } });
+		const base = {
+			owners: {},
+			ghcr: { dropDir: "/srv/a/b", owners: { acme: { username: "u", credential: "cred:acme-packages", images: ["x"] } } }
+		};
+		const out = layerConfig(base, {
+			ghcr: {
+				protectReleaseTags: false,
+				owners: { acme: { images: ["y"] }, beta: { username: "b", credential: "cred:beta-packages", images: ["z"] } }
+			}
+		});
 		expect(out.ghcr.dropDir).toBe("/srv/a/b");
 		expect(out.ghcr.protectReleaseTags).toBe(false);
 		expect(out.ghcr.owners.acme).toEqual({ username: "u", credential: "cred:acme-packages", images: ["y"] });
@@ -226,7 +282,9 @@ describe("readOperatorConfig", () => {
 		["an npm token", { npm: { token: "npm_" + "b".repeat(36), scopes: [] } }, "npm.token"],
 		["a token as a list entry", { npm: { scopes: ["ok", "ghs_" + "c".repeat(30)] } }, "npm.scopes[1]"]
 	])("refuses %s", (_name, cfg, where) => {
-		expect(() => readOperatorConfig("/c.json", read(JSON.stringify(cfg)))).toThrow(new RegExp(`--config: ${where.replace(/[[\]]/g, "\\$&")} looks like a token`));
+		expect(() => readOperatorConfig("/c.json", read(JSON.stringify(cfg)))).toThrow(
+			new RegExp(`--config: ${where.replace(/[[\]]/g, "\\$&")} looks like a token`)
+		);
 	});
 
 	it("accepts cred refs, numbers and booleans alongside strings", () => {
@@ -237,7 +295,8 @@ describe("readOperatorConfig", () => {
 
 describe("buildConfig", () => {
 	const acme = { read: "cred:acme-read", write: "cred:acme-write" };
-	const build = (o: Record<string, unknown>) => buildConfig({ example: shipped, current: null, file: undefined, opts: noOpts, nonInteractive: true, ask, ...o } as never);
+	const build = (o: Record<string, unknown>) =>
+		buildConfig({ example: shipped, current: null, file: undefined, opts: noOpts, nonInteractive: true, ask, ...o } as never);
 
 	it("a first install takes owners from flags, defaults defaultOwner and sets ghcr.dropDir", async () => {
 		const { config, notes } = await build({
@@ -246,7 +305,10 @@ describe("buildConfig", () => {
 		expect(config.tools).toEqual(shipped.tools);
 		expect(config.owners).toEqual({ acme });
 		expect(config.defaultOwner).toBe("acme");
-		expect(config.ghcr).toEqual({ dropDir: DEFAULT_GHCR_DROP_DIR, owners: { acme: { username: "me", credential: "cred:acme-packages", images: ["app"] } } });
+		expect(config.ghcr).toEqual({
+			dropDir: DEFAULT_GHCR_DROP_DIR,
+			owners: { acme: { username: "me", credential: "cred:acme-packages", images: ["app"] } }
+		});
 		expect(notes).toHaveLength(2);
 	});
 
@@ -269,7 +331,12 @@ describe("buildConfig", () => {
 	});
 
 	it("keeps the deployed owners, ghcr and tools on an upgrade with no flags", async () => {
-		const ghcr = { dropDir: "/srv/old/drop", protectReleaseTags: false, maxArchiveBytes: 5, owners: { acme: { username: "me", credential: "cred:acme-packages", images: ["x"] } } };
+		const ghcr = {
+			dropDir: "/srv/old/drop",
+			protectReleaseTags: false,
+			maxArchiveBytes: 5,
+			owners: { acme: { username: "me", credential: "cred:acme-packages", images: ["x"] } }
+		};
 		const current = { ...shipped, tools: [{ name: "gone", mode: "write" }], owners: { acme: { ...acme, installationId: 3 } }, ghcr };
 		const { config, notes } = await build({ current });
 		expect(config.owners).toEqual({ acme: { ...acme, installationId: 3 } });
@@ -280,13 +347,20 @@ describe("buildConfig", () => {
 	});
 
 	it("adds an owner on top of a deployed one without losing it", async () => {
-		const { config } = await build({ current: { ...shipped, owners: { acme: { ...acme, installationId: 3 } } }, opts: { owners: ["acme", "beta"] } });
+		const { config } = await build({
+			current: { ...shipped, owners: { acme: { ...acme, installationId: 3 } } },
+			opts: { owners: ["acme", "beta"] }
+		});
 		expect(config.owners.acme.installationId).toBe(3);
 		expect(config.owners.beta).toEqual({ read: "cred:beta-read", write: "cred:beta-write" });
 	});
 
 	it("takes owners, ghcr and defaultOwner from a --config file", async () => {
-		const file = { owners: { acme }, defaultOwner: "acme", ghcr: { dropDir: "/srv/f/drop", owners: { acme: { username: "me", credential: "cred:acme-packages", images: ["a"] } } } };
+		const file = {
+			owners: { acme },
+			defaultOwner: "acme",
+			ghcr: { dropDir: "/srv/f/drop", owners: { acme: { username: "me", credential: "cred:acme-packages", images: ["a"] } } }
+		};
 		const { config } = await build({ file });
 		expect(config.owners).toEqual({ acme });
 		expect(config.ghcr.dropDir).toBe("/srv/f/drop");
@@ -322,11 +396,15 @@ describe("buildConfig", () => {
 	});
 
 	it("refuses an owner that has no credentials (e.g. --installation-id for an unknown owner)", async () => {
-		await expect(build({ opts: { owners: ["acme"], installationIds: { gamma: 9 } } })).rejects.toThrow(/owner "gamma" has no credentials.*--owner gamma/);
+		await expect(build({ opts: { owners: ["acme"], installationIds: { gamma: 9 } } })).rejects.toThrow(
+			/owner "gamma" has no credentials.*--owner gamma/
+		);
 	});
 
 	it("keeps an explicit ghcr.dropDir instead of the default", async () => {
-		const { config, notes } = await build({ opts: { owners: ["acme"], ghcrOwner: "acme", ghcrUsername: "me", ghcrImages: ["a"], ghcrDropDir: "/srv/mine/drop" } });
+		const { config, notes } = await build({
+			opts: { owners: ["acme"], ghcrOwner: "acme", ghcrUsername: "me", ghcrImages: ["a"], ghcrDropDir: "/srv/mine/drop" }
+		});
 		expect(config.ghcr.dropDir).toBe("/srv/mine/drop");
 		expect(notes.some((n: string) => n.includes("dropDir"))).toBe(false);
 	});
@@ -355,7 +433,10 @@ describe("otp block (#143)", () => {
 	it("lets the deployed otp block win per field and keeps new example defaults", () => {
 		const current = { ...example, otp: { seed: "cred:mine", maxFailures: 9 } };
 		expect(mergeConfig(exampleOtp, current).otp).toEqual({ seed: "cred:mine", maxFailures: 9 });
-		expect(mergeConfig(exampleOtp, { ...example, otp: { statePath: "/x.json" } }).otp).toEqual({ seed: "cred:otp-seed", statePath: "/x.json" });
+		expect(mergeConfig(exampleOtp, { ...example, otp: { statePath: "/x.json" } }).otp).toEqual({
+			seed: "cred:otp-seed",
+			statePath: "/x.json"
+		});
 		expect(mergeConfig(example, { ...example, otp: { seed: "cred:mine" } }).otp).toEqual({ seed: "cred:mine" });
 	});
 
@@ -374,20 +455,45 @@ describe("otp block (#143)", () => {
 
 	it("buildConfig keeps the example's otp on a first install and a user's override on upgrade", async () => {
 		const flags = { owners: [], installationIds: {}, ghcrImages: [] };
-		const first = await buildConfig({ example: exampleOtp, current: null, file: undefined, opts: flags, nonInteractive: true, ask: async () => "" });
+		const first = await buildConfig({
+			example: exampleOtp,
+			current: null,
+			file: undefined,
+			opts: flags,
+			nonInteractive: true,
+			ask: async () => ""
+		});
 		expect(first.config.otp).toEqual({ seed: "cred:otp-seed" });
-		const up = await buildConfig({ example: exampleOtp, current: { ...example, otp: { seed: "cred:otp-seed", maxFailures: 3 } }, file: undefined, opts: flags, nonInteractive: true, ask: async () => "" });
+		const up = await buildConfig({
+			example: exampleOtp,
+			current: { ...example, otp: { seed: "cred:otp-seed", maxFailures: 3 } },
+			file: undefined,
+			opts: flags,
+			nonInteractive: true,
+			ask: async () => ""
+		});
 		expect(up.config.otp).toEqual({ seed: "cred:otp-seed", maxFailures: 3 });
 	});
 });
 
 describe("per-agent listen (#143)", () => {
 	const flags = { owners: [], installationIds: {}, ghcrImages: [] };
-	const build = (current: unknown, ex: unknown = example, file?: unknown) => buildConfig({ example: ex as any, current: current as any, file: file as any, opts: flags as any, nonInteractive: true, ask: async () => "" });
+	const build = (current: unknown, ex: unknown = example, file?: unknown) =>
+		buildConfig({
+			example: ex as any,
+			current: current as any,
+			file: file as any,
+			opts: flags as any,
+			nonInteractive: true,
+			ask: async () => ""
+		});
 
 	it("does not carry a deployed unix: listen over; the new default replaces it", async () => {
 		expect(mergeConfig(example, { ...example, listen: "unix:/run/gh-broker/gh-broker.sock" }).listen).toBe(example.listen);
-		const r = await build({ ...example, listen: "unix:/run/gh-broker/gh-broker.sock" }, { ...example, listen: "unix:/run/gh-broker/gh-broker.sock" });
+		const r = await build(
+			{ ...example, listen: "unix:/run/gh-broker/gh-broker.sock" },
+			{ ...example, listen: "unix:/run/gh-broker/gh-broker.sock" }
+		);
 		expect(r.config.listen).toBe("agents:/run/gh-broker/agents");
 		expect(r.notes.join("\n")).toContain("one socket per agent");
 	});
@@ -410,7 +516,13 @@ describe("claudeConfigDirs (#163)", () => {
 		const deployed = { ...ex, claudeConfigDirs: { glmtest: ["/a"] } };
 		expect(mergeConfig(ex, deployed).claudeConfigDirs).toEqual({ glmtest: ["/a"] });
 		expect(mergeConfig(ex, { ...ex }).claudeConfigDirs).toBeUndefined();
-		const flags = overlayFromFlags({ claudeConfigs: [{ user: "glmtest", dir: "/b" }, { user: "glmtest", dir: "/a" }, { user: "repo", dir: "/c" }] });
+		const flags = overlayFromFlags({
+			claudeConfigs: [
+				{ user: "glmtest", dir: "/b" },
+				{ user: "glmtest", dir: "/a" },
+				{ user: "repo", dir: "/c" }
+			]
+		});
 		expect(flags).toEqual({ claudeConfigDirs: { glmtest: ["/b", "/a"], repo: ["/c"] } });
 		expect(layerConfig(mergeConfig(ex, deployed), flags).claudeConfigDirs).toEqual({ glmtest: ["/a", "/b"], repo: ["/c"] });
 		expect(layerConfig({ ...ex }, { claudeConfigDirs: { repo: ["/c"] } }).claudeConfigDirs).toEqual({ repo: ["/c"] });
@@ -427,9 +539,15 @@ describe("claudeConfigDirs (#163)", () => {
 
 	it("a --config file may set it, in the right shape only", () => {
 		const read = (t: string) => () => t;
-		expect(readOperatorConfig("/c.json", read(JSON.stringify({ claudeConfigDirs: { repo: ["/srv/x"] } })))).toEqual({ claudeConfigDirs: { repo: ["/srv/x"] } });
-		expect(() => readOperatorConfig("/c.json", read('{"claudeConfigDirs":[]}'))).toThrow("--config: claudeConfigDirs must be an object of agent user -> list of folders");
-		expect(() => readOperatorConfig("/c.json", read('{"claudeConfigDirs":{"repo":["rel"]}}'))).toThrow("--config: claudeConfigDirs.repo must be a list of absolute paths");
+		expect(readOperatorConfig("/c.json", read(JSON.stringify({ claudeConfigDirs: { repo: ["/srv/x"] } })))).toEqual({
+			claudeConfigDirs: { repo: ["/srv/x"] }
+		});
+		expect(() => readOperatorConfig("/c.json", read('{"claudeConfigDirs":[]}'))).toThrow(
+			"--config: claudeConfigDirs must be an object of agent user -> list of folders"
+		);
+		expect(() => readOperatorConfig("/c.json", read('{"claudeConfigDirs":{"repo":["rel"]}}'))).toThrow(
+			"--config: claudeConfigDirs.repo must be a list of absolute paths"
+		);
 		expect(() => readOperatorConfig("/c.json", read('{"claudeConfigDirs":{"repo":"/x"}}'))).toThrow(/must be a list of absolute paths/);
 		expect(() => checkClaudeConfigDirs({ "Bad Name": ["/x"] }, "x")).toThrow(/not a valid agent user name/);
 	});

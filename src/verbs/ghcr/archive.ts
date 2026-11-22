@@ -90,7 +90,8 @@ export interface OpenedArchive {
 
 /** Securely open `input` (absolute, or relative to dropDir) — see the file comment for the checks. */
 export function openArchive(input: unknown, dropDir: string, maxBytes: number): OpenedArchive {
-	if (typeof input !== "string" || !input || input.length > 4096 || input.includes("\0")) fail('"archive" must be a file path inside the drop directory');
+	if (typeof input !== "string" || !input || input.length > 4096 || input.includes("\0"))
+		fail('"archive" must be a file path inside the drop directory');
 	const candidate = normalize(isAbsolute(input as string) ? (input as string) : join(dropDir, input as string));
 	// One answer for every path that can't be confirmed to be in the drop dir (outside it,
 	// behind a symlinked or missing subdirectory), so none of them reveals anything.
@@ -215,10 +216,14 @@ function readBlobJson(fd: number, index: TarIndex, d: Descriptor, what: string):
 function images(manifests: unknown, index: TarIndex): Descriptor[] {
 	if (!Array.isArray(manifests)) return fail("index has no manifests list");
 	const list = (manifests as Descriptor[]).filter(
-		(d) => d?.annotations?.["vnd.docker.reference.type"] !== "attestation-manifest" && !(d?.platform?.os === "unknown" && d?.platform?.architecture === "unknown")
+		(d) =>
+			d?.annotations?.["vnd.docker.reference.type"] !== "attestation-manifest" &&
+			!(d?.platform?.os === "unknown" && d?.platform?.architecture === "unknown")
 	);
 	if (list.length <= 1) return list;
-	return list.filter((d) => typeof d?.digest === "string" && DIGEST.test(d.digest) && index.files.has(`blobs/sha256/${d.digest.slice("sha256:".length)}`));
+	return list.filter(
+		(d) => typeof d?.digest === "string" && DIGEST.test(d.digest) && index.files.has(`blobs/sha256/${d.digest.slice("sha256:".length)}`)
+	);
 }
 
 function sniff(fd: number, m: TarMember): "gzip" | "zstd" | "none" {
@@ -230,7 +235,8 @@ function sniff(fd: number, m: TarMember): "gzip" | "zstd" | "none" {
 
 /** Decide how a layer is pushed: verbatim when already compressed, gzipped on the fly otherwise. */
 function layerPlan(fd: number, m: TarMember, declared: string | undefined, sourceDigest: string | undefined): BlobPlan {
-	if (declared !== undefined && !LAYER_TYPES.has(declared)) fail(`layer media type "${declared}" is not supported (non-distributable and foreign layers are refused)`);
+	if (declared !== undefined && !LAYER_TYPES.has(declared))
+		fail(`layer media type "${declared}" is not supported (non-distributable and foreign layers are refused)`);
 	const kind = sniff(fd, m);
 	if (kind === "gzip") {
 		const mediaType = declared === MEDIA.ociLayerGzip || declared === MEDIA.dockerLayerGzip ? declared : MEDIA.ociLayerGzip;
@@ -283,7 +289,14 @@ function planOciLayout(fd: number, index: TarIndex, top: TarMember): ImagePlan {
 	});
 	return {
 		format: "oci-layout",
-		config: { member: cfgMember, mediaType: cfg.mediaType!, digest: cfg.digest!, sourceDigest: cfg.digest, sourceSize: cfgMember.size, compress: false },
+		config: {
+			member: cfgMember,
+			mediaType: cfg.mediaType!,
+			digest: cfg.digest!,
+			sourceDigest: cfg.digest,
+			sourceSize: cfgMember.size,
+			compress: false
+		},
 		layers,
 		...(changed ? {} : { verbatimManifest: { bytes, mediaType: d.mediaType!, digest: d.digest! } }),
 		...(man.annotations ? { annotations: man.annotations } : {})
@@ -292,10 +305,12 @@ function planOciLayout(fd: number, index: TarIndex, top: TarMember): ImagePlan {
 
 function planDockerArchive(fd: number, index: TarIndex, legacy: TarMember): ImagePlan {
 	const list = parseJson(readMember(fd, legacy, MAX_JSON, "manifest.json"), "manifest.json");
-	if (!Array.isArray(list) || list.length !== 1) fail(`archive holds ${Array.isArray(list) ? list.length : 0} images — save exactly one image per archive`);
+	if (!Array.isArray(list) || list.length !== 1)
+		fail(`archive holds ${Array.isArray(list) ? list.length : 0} images — save exactly one image per archive`);
 	const entry = (list as Array<{ Config?: unknown; Layers?: unknown }>)[0]!;
 	if (typeof entry.Config !== "string" || !Array.isArray(entry.Layers)) fail("manifest.json entry has no Config or Layers");
-	if ((entry.Layers as unknown[]).length > MAX_LAYERS) fail(`image has ${(entry.Layers as unknown[]).length} layers — at most ${MAX_LAYERS}`);
+	if ((entry.Layers as unknown[]).length > MAX_LAYERS)
+		fail(`image has ${(entry.Layers as unknown[]).length} layers — at most ${MAX_LAYERS}`);
 
 	const member = (name: unknown, what: string): TarMember => {
 		const m = typeof name === "string" ? index.files.get(name.replace(/^\.?\//, "")) : undefined;

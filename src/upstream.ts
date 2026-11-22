@@ -53,12 +53,20 @@ export class UpstreamPool implements Upstream {
 		return pending;
 	}
 
-	async forward(tool: string, args: Record<string, unknown>, token: string, signal?: AbortSignal, timeoutMs?: number): Promise<CallToolResult> {
+	async forward(
+		tool: string,
+		args: Record<string, unknown>,
+		token: string,
+		signal?: AbortSignal,
+		___timeoutMs?: number // part of the Upstream signature; the daemon's pooled client has no per-call timeout
+	): Promise<CallToolResult> {
 		// The signal (design #175 §2b) reaches the MCP request when a caller passes one; the
 		// daemon never does (no timeout, no ctx signal on its path), so its calls are
 		// byte-identical to before — one argument, pinned by tests/upstream.test.vitest.mts.
 		return this.withReconnect(token, (client) =>
-			signal ? (client.callTool({ name: tool, arguments: args }, undefined, { signal }) as Promise<CallToolResult>) : (client.callTool({ name: tool, arguments: args }) as Promise<CallToolResult>)
+			signal
+				? (client.callTool({ name: tool, arguments: args }, undefined, { signal }) as Promise<CallToolResult>)
+				: (client.callTool({ name: tool, arguments: args }) as Promise<CallToolResult>)
 		);
 	}
 

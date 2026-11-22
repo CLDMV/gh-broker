@@ -6,7 +6,15 @@ function octokitWith(handler: (route: string, params: any) => Promise<{ data: un
 }
 
 describe("403 classification", () => {
-	const call = (err: unknown) => req(octokitWith(async () => { throw err; }), new CallBudget(5), "GET /x", {});
+	const call = (err: unknown) =>
+		req(
+			octokitWith(async () => {
+				throw err;
+			}),
+			new CallBudget(5),
+			"GET /x",
+			{}
+		);
 
 	it("treats a 403 with Retry-After as a rate limit and carries the delay", async () => {
 		const err = Object.assign(new Error("Forbidden"), { status: 403, response: { headers: { "retry-after": "42" } } });
@@ -21,7 +29,9 @@ describe("403 classification", () => {
 
 	it("treats a 403 whose message mentions a rate limit or abuse detection as a rate limit", async () => {
 		await expect(call(Object.assign(new Error("API rate limit exceeded"), { status: 403 }))).rejects.toBeInstanceOf(RateLimited);
-		await expect(call(Object.assign(new Error("You have exceeded a secondary rate limit"), { status: 403 }))).rejects.toBeInstanceOf(RateLimited);
+		await expect(call(Object.assign(new Error("You have exceeded a secondary rate limit"), { status: 403 }))).rejects.toBeInstanceOf(
+			RateLimited
+		);
 		await expect(call(Object.assign(new Error("abuse detection mechanism"), { status: 403 }))).rejects.toBeInstanceOf(RateLimited);
 	});
 
@@ -44,7 +54,8 @@ describe("403 classification", () => {
 });
 
 describe("paginateAfter (Link-header cursor pagination)", () => {
-	const link = (cursor: string) => `<https://api.github.com/x?per_page=100&after=${cursor}>; rel="next", <https://api.github.com/x?per_page=100>; rel="first"`;
+	const link = (cursor: string) =>
+		`<https://api.github.com/x?per_page=100&after=${cursor}>; rel="next", <https://api.github.com/x?per_page=100>; rel="first"`;
 
 	it("follows the rel=next cursor across pages and stops when there is no next link", async () => {
 		const octokit = octokitWith(async (_route, params) => {
@@ -77,8 +88,24 @@ describe("paginateAfter (Link-header cursor pagination)", () => {
 	});
 
 	it("stops on an empty page and on a non-array body", async () => {
-		expect(await paginateAfter(octokitWith(async () => ({ data: [], headers: { link: link("X") } })), new CallBudget(5), "GET /x", {}, 10)).toEqual([]);
-		expect(await paginateAfter(octokitWith(async () => ({ data: { message: "nope" }, headers: {} })), new CallBudget(5), "GET /x", {}, 10)).toEqual([]);
+		expect(
+			await paginateAfter(
+				octokitWith(async () => ({ data: [], headers: { link: link("X") } })),
+				new CallBudget(5),
+				"GET /x",
+				{},
+				10
+			)
+		).toEqual([]);
+		expect(
+			await paginateAfter(
+				octokitWith(async () => ({ data: { message: "nope" }, headers: {} })),
+				new CallBudget(5),
+				"GET /x",
+				{},
+				10
+			)
+		).toEqual([]);
 	});
 
 	it("charges the call budget per page and throws once it is spent", async () => {
@@ -102,14 +129,25 @@ describe("listOwnerRepos", () => {
 	});
 
 	it("does not fall back on a rate limit or budget exhaustion", async () => {
-		const limited = octokitWith(async () => { throw Object.assign(new Error("x"), { status: 429 }); });
+		const limited = octokitWith(async () => {
+			throw Object.assign(new Error("x"), { status: 429 });
+		});
 		await expect(listOwnerRepos(limited, new CallBudget(5), "cldmv", 50)).rejects.toBeInstanceOf(RateLimited);
 		expect(limited.request).toHaveBeenCalledTimes(1);
-		await expect(listOwnerRepos(octokitWith(async () => ({ data: [], headers: {} })), new CallBudget(0), "cldmv", 50)).rejects.toBeInstanceOf(CallBudgetExhausted);
+		await expect(
+			listOwnerRepos(
+				octokitWith(async () => ({ data: [], headers: {} })),
+				new CallBudget(0),
+				"cldmv",
+				50
+			)
+		).rejects.toBeInstanceOf(CallBudgetExhausted);
 	});
 
 	it("propagates a non-404 error", async () => {
-		const octokit = octokitWith(async () => { throw Object.assign(new Error("boom"), { status: 500 }); });
+		const octokit = octokitWith(async () => {
+			throw Object.assign(new Error("boom"), { status: 500 });
+		});
 		await expect(listOwnerRepos(octokit, new CallBudget(5), "cldmv", 50)).rejects.toThrow("boom");
 	});
 });

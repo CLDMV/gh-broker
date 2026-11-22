@@ -52,7 +52,12 @@ describe("Registry construction and errors", () => {
 		const failing = createServer((_req, res) => json(res, 500, { errors: [{}, { code: "X" }, { message: "m" }] }));
 		servers.push(failing);
 		await new Promise<void>((r) => failing.listen(0, "127.0.0.1", r));
-		const bad = new Registry({ base: `http://127.0.0.1:${(failing.address() as { port: number }).port}`, username: "u", password: "pppp", repository: "o/i" });
+		const bad = new Registry({
+			base: `http://127.0.0.1:${(failing.address() as { port: number }).port}`,
+			username: "u",
+			password: "pppp",
+			repository: "o/i"
+		});
 		await expect(bad.login("pull")).rejects.toThrow(/HTTP 500 \(: ; X: ; : m\)/);
 	});
 
@@ -66,7 +71,12 @@ describe("Registry construction and errors", () => {
 		});
 		servers.push(big);
 		await new Promise<void>((r) => big.listen(0, "127.0.0.1", r));
-		const reg = new Registry({ base: `http://127.0.0.1:${(big.address() as { port: number }).port}`, username: "u", password: "pppp", repository: "o/i" });
+		const reg = new Registry({
+			base: `http://127.0.0.1:${(big.address() as { port: number }).port}`,
+			username: "u",
+			password: "pppp",
+			repository: "o/i"
+		});
 		const err = await reg.login("pull").catch((e: Error) => e);
 		expect(err).toBeInstanceOf(RegistryError);
 		expect((err as Error).message).toMatch(/HTTP 500/);
@@ -121,7 +131,6 @@ describe("Registry transport (fake http.request)", () => {
 	it("streams a function body without a byte counter", async () => {
 		const sent: Buffer[] = [];
 		hook.request = (_u: unknown, _o: unknown, cb: (res: any) => void) => {
-			
 			const req: any = new Writable({
 				write(chunk, _e, done) {
 					sent.push(chunk);
@@ -163,7 +172,11 @@ describe("Registry upload and listing edge cases", () => {
 			res.end();
 		});
 		await reg.uploadBlob("sha256:abc", 3, () => Readable.from([Buffer.from("abc")]));
-		expect(seen).toEqual(["POST /v2/o/i/blobs/uploads/", "PATCH /v2/o/i/blobs/uploads/u1", "PUT /v2/o/i/blobs/uploads/u1?digest=sha256%3Aabc"]);
+		expect(seen).toEqual([
+			"POST /v2/o/i/blobs/uploads/",
+			"PATCH /v2/o/i/blobs/uploads/u1",
+			"PUT /v2/o/i/blobs/uploads/u1?digest=sha256%3Aabc"
+		]);
 	});
 
 	it("reports a PATCH the registry refuses", async () => {
@@ -174,7 +187,9 @@ describe("Registry upload and listing edge cases", () => {
 			}
 			json(res, 500, { errors: [{ code: "UNKNOWN", message: "storage down" }] });
 		});
-		await expect(reg.uploadBlob("sha256:abc", 3, () => Readable.from([Buffer.from("abc")]))).rejects.toThrow(/uploading blob sha256:abc failed: HTTP 500 \(UNKNOWN: storage down\)/);
+		await expect(reg.uploadBlob("sha256:abc", 3, () => Readable.from([Buffer.from("abc")]))).rejects.toThrow(
+			/uploading blob sha256:abc failed: HTTP 500 \(UNKNOWN: storage down\)/
+		);
 	});
 
 	it("aborts the upload when the source stream errors", async () => {

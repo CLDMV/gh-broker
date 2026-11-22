@@ -67,7 +67,7 @@ const DEFAULT_PATH = "package.json";
 /** A repo-relative path to a file named package.json: plain segments, no "..", no leading "/". */
 const PACKAGE_JSON_PATH = /^(?:[A-Za-z0-9_@-][A-Za-z0-9._@-]*\/)*package\.json$/;
 /** A branch name: git's ref-name rules, narrowed to the characters CLDMV branches use. */
-const BRANCH_NAME = /^[A-Za-z0-9_][A-Za-z0-9._\/-]*$/;
+const BRANCH_NAME = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/;
 const PACKAGE_NAME = /^@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*$/;
 
 export interface NpmScaffoldInput {
@@ -94,10 +94,22 @@ export const NPM_SCAFFOLD_SCHEMA = {
 		owner: { type: "string", description: "Repository owner (a configured owner)." },
 		repo: { type: "string", description: "Repository whose package.json names the package." },
 		package: { type: "string", description: 'Scoped package name, e.g. "@cldmv/new-thing". Must be under a scope in config.npm.scopes.' },
-		npm_otp: { type: "string", description: "npm one-time password the user read from their authenticator. Ask the user for it right before calling; codes expire in about 30 seconds." },
+		npm_otp: {
+			type: "string",
+			description:
+				"npm one-time password the user read from their authenticator. Ask the user for it right before calling; codes expire in about 30 seconds."
+		},
 		workflow: { type: "string", description: 'The repo\'s publish workflow file in .github/workflows. Default "publish.yml".' },
-		path: { type: "string", description: 'Repo-relative path of the package.json that names the package, for a package that lives in a subfolder, e.g. "packaging/thing/package.json". Default "package.json".' },
-		ref: { type: "string", description: "Branch to read that package.json and the workflow file from, e.g. \"next\" for a package not released to the default branch yet. Must be an existing branch. Default: the repo's default branch." }
+		path: {
+			type: "string",
+			description:
+				'Repo-relative path of the package.json that names the package, for a package that lives in a subfolder, e.g. "packaging/thing/package.json". Default "package.json".'
+		},
+		ref: {
+			type: "string",
+			description:
+				'Branch to read that package.json and the workflow file from, e.g. "next" for a package not released to the default branch yet. Must be an existing branch. Default: the repo\'s default branch.'
+		}
 	},
 	required: ["owner", "repo", "package", "npm_otp"],
 	additionalProperties: false
@@ -150,7 +162,8 @@ const LIVE_POLL_MS = 5_000;
 const PENDING_MESSAGE =
 	"npm accepted the placeholder publish, but the package isn't on the registry yet (npm stages a new package's first version and shows it on its own shortly after; nothing needs approving). Wait a minute, then call again with a fresh npm code to add the trusted publisher.";
 /** The package exists on the registry once it shows our placeholder or npm's staging placeholder. */
-const exists = (p: { versions?: Record<string, unknown> } | undefined) => Boolean(p?.versions?.[PLACEHOLDER_VERSION] || p?.versions?.[NPM_STAGE_PLACEHOLDER]);
+const exists = (p: { versions?: Record<string, unknown> } | undefined) =>
+	Boolean(p?.versions?.[PLACEHOLDER_VERSION] || p?.versions?.[NPM_STAGE_PLACEHOLDER]);
 
 /**
  * npm expires a trusted publisher that has not published anything within 2 days of being
@@ -198,16 +211,34 @@ function validate(input: unknown): ValidInput {
 	if (unknown.length) fail(`unknown argument(s): ${unknown.join(", ")} — expected ${[...INPUT_KEYS].join(", ")}`);
 	if (typeof a.owner !== "string" || !/^[A-Za-z0-9-]+$/.test(a.owner)) fail('"owner" must be a GitHub owner name');
 	if (typeof a.repo !== "string" || !/^[A-Za-z0-9._-]+$/.test(a.repo)) fail('"repo" must be a repository name');
-	if (typeof a.package !== "string" || a.package.length > 214 || !PACKAGE_NAME.test(a.package)) fail('"package" must be a lowercase scoped npm package name, e.g. "@cldmv/new-thing"');
+	if (typeof a.package !== "string" || a.package.length > 214 || !PACKAGE_NAME.test(a.package))
+		fail('"package" must be a lowercase scoped npm package name, e.g. "@cldmv/new-thing"');
 	// Never echo the value: it is a live credential.
-	if (typeof a.npm_otp !== "string" || !/^[0-9]{6,8}$/.test(a.npm_otp)) fail('"npm_otp" must be the 6-8 digit npm code from the authenticator');
+	if (typeof a.npm_otp !== "string" || !/^[0-9]{6,8}$/.test(a.npm_otp))
+		fail('"npm_otp" must be the 6-8 digit npm code from the authenticator');
 	if (a.workflow !== undefined && (typeof a.workflow !== "string" || !/^[A-Za-z0-9._-]+\.ya?ml$/.test(a.workflow))) {
 		fail('"workflow" must be a workflow file name in .github/workflows, e.g. "publish.yml"');
 	}
-	if (a.path !== undefined && (typeof a.path !== "string" || a.path.length > 512 || !PACKAGE_JSON_PATH.test(a.path) || a.path.split("/").some((seg) => seg === ".." || seg === "."))) {
+	if (
+		a.path !== undefined &&
+		(typeof a.path !== "string" ||
+			a.path.length > 512 ||
+			!PACKAGE_JSON_PATH.test(a.path) ||
+			a.path.split("/").some((seg) => seg === ".." || seg === "."))
+	) {
 		fail('"path" must be a repo-relative path to a package.json, e.g. "packaging/thing/package.json" (no leading "/", no "..")');
 	}
-	if (a.ref !== undefined && (typeof a.ref !== "string" || a.ref.length > 255 || !BRANCH_NAME.test(a.ref) || a.ref.includes("..") || a.ref.includes("//") || a.ref.endsWith("/") || a.ref.endsWith(".lock") || a.ref.endsWith("."))) {
+	if (
+		a.ref !== undefined &&
+		(typeof a.ref !== "string" ||
+			a.ref.length > 255 ||
+			!BRANCH_NAME.test(a.ref) ||
+			a.ref.includes("..") ||
+			a.ref.includes("//") ||
+			a.ref.endsWith("/") ||
+			a.ref.endsWith(".lock") ||
+			a.ref.endsWith("."))
+	) {
 		fail('"ref" must be a branch name, e.g. "next"');
 	}
 	return {
@@ -266,7 +297,8 @@ async function checkRepo(octokit: Octokit, args: ValidInput): Promise<RepoFacts 
 	const repository = info.full_name ?? asked;
 	// GitHub answers a renamed or transferred repo with a redirect, which the client follows.
 	// The trusted publisher must name the repo that was routed and checked, so refuse that.
-	if (repository.toLowerCase() !== asked.toLowerCase()) fail(`${asked} redirects to ${repository} (renamed or transferred) — call with the repository's current owner and name`);
+	if (repository.toLowerCase() !== asked.toLowerCase())
+		fail(`${asked} redirects to ${repository} (renamed or transferred) — call with the repository's current owner and name`);
 	if (info.archived) fail(`repository ${repository} is archived`);
 	let ref = info.default_branch ?? "HEAD";
 	if (args.ref !== undefined) {
@@ -354,10 +386,20 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 	if (!existing) {
 		let answer: { status: number; detail: string };
 		try {
-			answer = await deps.registry.publish(placeholderDocument(args.package, facts, access, deps.registry.registry), args.package, args.npm_otp);
+			answer = await deps.registry.publish(
+				placeholderDocument(args.package, facts, access, deps.registry.registry),
+				args.package,
+				args.npm_otp
+			);
 		} catch (err) {
 			if (err instanceof NpmOtpRequired) {
-				return { ...base, status: "needs_otp", done: [], remaining: ["publish", "trust"], message: "npm refused the one-time password before publishing; nothing was written. Call again with a fresh code." };
+				return {
+					...base,
+					status: "needs_otp",
+					done: [],
+					remaining: ["publish", "trust"],
+					message: "npm refused the one-time password before publishing; nothing was written. Call again with a fresh code."
+				};
 			}
 			throw err;
 		}
@@ -376,7 +418,13 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 		if (!exists(live)) {
 			// The publish was accepted (2xx) and the code is spent, so this is not an error: a
 			// later call finds the placeholder and goes on to the trusted publisher.
-			return { ...base, status: "pending", done: ["publish"], remaining: ["trust"], message: `${PENDING_MESSAGE} (npm answered HTTP ${answer.status}${answer.detail ? `: ${answer.detail}` : ""}.)` };
+			return {
+				...base,
+				status: "pending",
+				done: ["publish"],
+				remaining: ["trust"],
+				message: `${PENDING_MESSAGE} (npm answered HTTP ${answer.status}${answer.detail ? `: ${answer.detail}` : ""}.)`
+			};
 		}
 		// That code is spent: every npm write needs its own one-time password, so don't
 		// send it again (a guaranteed refusal that counts as a failed 2FA attempt).
@@ -385,7 +433,8 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 			status: "needs_otp",
 			done: ["publish"],
 			remaining: ["trust"],
-			message: "The placeholder is published. Each npm write needs its own one-time password: call again with the next code (wait for the authenticator to change) to add the trusted publisher."
+			message:
+				"The placeholder is published. Each npm write needs its own one-time password: call again with the next code (wait for the authenticator to change) to add the trusted publisher."
 		};
 	}
 
@@ -398,18 +447,29 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 	const entries = Object.entries(existing.versions ?? {});
 	const placeholders = entries.filter(([v, doc]) => OUR_PLACEHOLDER.test(v) && doc?.scaffoldedBy === SCAFFOLD_MARKER).map(([, doc]) => doc);
 	const ours = entries.length > 0 && entries.length === placeholders.length + (existing.versions?.[NPM_STAGE_PLACEHOLDER] ? 1 : 0);
-	if (!ours) fail(`${args.package} already exists on the registry (${entries.length} version(s)) and was not created by npm_scaffold — set up its trusted publisher on npmjs.com instead`);
+	if (!ours)
+		fail(
+			`${args.package} already exists on the registry (${entries.length} version(s)) and was not created by npm_scaffold — set up its trusted publisher on npmjs.com instead`
+		);
 	// Each placeholder records the repo it was made for; the trusted publisher may only go there.
 	for (const placeholder of placeholders) {
 		const madeFor = (placeholder.repository as { url?: unknown } | undefined)?.url;
 		if (typeof madeFor !== "string" || madeFor.toLowerCase() !== `git+https://github.com/${facts.repository}.git`.toLowerCase()) {
-			fail(`${args.package}'s placeholder was published for ${typeof madeFor === "string" ? madeFor : "an unrecorded repository"}, not ${facts.repository}`);
+			fail(
+				`${args.package}'s placeholder was published for ${typeof madeFor === "string" ? madeFor : "an unrecorded repository"}, not ${facts.repository}`
+			);
 		}
 	}
 
 	// A resumed call reports the placeholder version(s) actually on the registry (e.g.
 	// "0.0.0-stage, 0.0.1-stage"), not this release's PLACEHOLDER_VERSION constant.
-	const resumed = { ...base, version: entries.map(([v]) => v).sort().join(", ") };
+	const resumed = {
+		...base,
+		version: entries
+			.map(([v]) => v)
+			.sort()
+			.join(", ")
+	};
 
 	let out: Awaited<ReturnType<NpmRegistry["addGithubTrust"]>>;
 	try {
@@ -422,7 +482,8 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 				done: [],
 				remaining: ["trust"],
 				skipped: ["publish"],
-				message: "The placeholder is published, but npm refused the one-time password for the trusted publisher (expired or already used). Call again with a new code to finish."
+				message:
+					"The placeholder is published, but npm refused the one-time password for the trusted publisher (expired or already used). Call again with a new code to finish."
 			};
 		}
 		throw err;
@@ -437,16 +498,26 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 		try {
 			configs = await deps.registry.listTrust(args.package);
 		} catch (err) {
-			if (err instanceof NpmOtpRequired) fail(`${args.package} already has a trusted publisher, and npm needs another one-time password to show which; check it at ${access}`);
+			if (err instanceof NpmOtpRequired)
+				fail(
+					`${args.package} already has a trusted publisher, and npm needs another one-time password to show which; check it at ${access}`
+				);
 			throw err;
 		}
 		const claimsOf = (c: Record<string, unknown>) => (c.claims ?? {}) as { repository?: unknown; workflow_ref?: { file?: unknown } };
 		const matches = configs.find((c) => {
 			const cl = claimsOf(c);
-			return c.type === "github" && typeof cl.repository === "string" && cl.repository.toLowerCase() === facts.repository.toLowerCase() && cl.workflow_ref?.file === args.workflow;
+			return (
+				c.type === "github" &&
+				typeof cl.repository === "string" &&
+				cl.repository.toLowerCase() === facts.repository.toLowerCase() &&
+				cl.workflow_ref?.file === args.workflow
+			);
 		});
 		if (!matches) {
-			const existingList = configs.map((c) => `${String(c.type)} ${String(claimsOf(c).repository)} (${String(claimsOf(c).workflow_ref?.file)})`).join("; ") || "unreadable";
+			const existingList =
+				configs.map((c) => `${String(c.type)} ${String(claimsOf(c).repository)} (${String(claimsOf(c).workflow_ref?.file)})`).join("; ") ||
+				"unreadable";
 			fail(`${args.package} already has a different trusted publisher: ${existingList}. Change it at ${access}`);
 		}
 		// fail() above never returns, so matches is set here.

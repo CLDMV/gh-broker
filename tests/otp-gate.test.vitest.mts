@@ -57,12 +57,15 @@ function refusal(fn: () => unknown): OtpRefusal {
 	throw new Error("expected a refusal");
 }
 
-const REFUSED = /^OTP required for merge_pull_request: ask the user for a current code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
-const SPENT = /^OTP code for merge_pull_request is spent \(it, or a newer code, was already used\): ask the user for the next code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
+const REFUSED =
+	/^OTP required for merge_pull_request: ask the user for a current code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
+const SPENT =
+	/^OTP code for merge_pull_request is spent \(it, or a newer code, was already used\): ask the user for the next code from their authenticator app and pass it as "otp"\. Nothing was run\.$/;
 /** The refusal for the `n`th bad code of `max`, before a lockout of `lockout`. */
 const rejected = (n: number, max = 5, lockout = "10 minutes") =>
 	`OTP code for merge_pull_request was not accepted (${n} of ${max} bad codes before a lockout of ${lockout}): ask the user for a fresh code from their authenticator app and pass it as "otp". Nothing was run.`;
-const LOCKED_NOW = /^OTP code for merge_pull_request was not accepted, and that was too many bad codes: OTP is locked for \d+ (minutes?|seconds)\. Nothing was run\.$/;
+const LOCKED_NOW =
+	/^OTP code for merge_pull_request was not accepted, and that was too many bad codes: OTP is locked for \d+ (minutes?|seconds)\. Nothing was run\.$/;
 
 beforeEach(() => {
 	vi.spyOn(console, "error").mockImplementation(() => {});
@@ -104,7 +107,11 @@ describe("policy", () => {
 
 	it("fills in defaults", () => {
 		expect(otpSettings({} as any)).toEqual(OTP_DEFAULTS);
-		expect(otpSettings({ otp: { seed: "cred:s", windowSeconds: 60, maxFailures: 2, lockoutSeconds: 30, maxLockouts: 9, statePath: "/s.json" } } as any)).toEqual({
+		expect(
+			otpSettings({
+				otp: { seed: "cred:s", windowSeconds: 60, maxFailures: 2, lockoutSeconds: 30, maxLockouts: 9, statePath: "/s.json" }
+			} as any)
+		).toEqual({
 			windowSeconds: 60,
 			maxFailures: 2,
 			lockoutSeconds: 30,
@@ -258,7 +265,10 @@ describe("OtpGate windows", () => {
 		expect(r.message).toBe("OTP could not be checked: the broker could not save its OTP state. Nothing was run.");
 		mkdirSync(missing);
 		expect(() => h.auth("000000")).toThrow(LOCKED_NOW); // the saved count is 1, so this is the 2nd bad code
-		expect(JSON.parse(readFileSync(join(missing, "state.json"), "utf8")).users.repo).toMatchObject({ failures: 0, lockouts: [expect.any(String)] });
+		expect(JSON.parse(readFileSync(join(missing, "state.json"), "utf8")).users.repo).toMatchObject({
+			failures: 0,
+			lockouts: [expect.any(String)]
+		});
 		expect(refusal(() => h.auth(h.code())).audit.otp).toBe("locked");
 	});
 });
@@ -278,7 +288,8 @@ describe("OtpGate code types", () => {
 
 	it("refuses other non-strings, and out-of-range numbers, without counting a bad code", () => {
 		const h = harness();
-		for (const bad of [true, { code: "123456" }, ["123456"], 1.5, -1, 1_000_000]) expect(refusal(() => h.auth(bad as unknown as string)).message).toMatch(REFUSED);
+		for (const bad of [true, { code: "123456" }, ["123456"], 1.5, -1, 1_000_000])
+			expect(refusal(() => h.auth(bad as unknown as string)).message).toMatch(REFUSED);
 		expect(h.gate.status("repo")).toMatchObject({ failures: 0 });
 	});
 });
@@ -294,8 +305,22 @@ describe("OtpGate lockouts", () => {
 		expect(refusal(() => h.auth("000000")).message).toBe(
 			"OTP code for merge_pull_request was not accepted, and that was too many bad codes: OTP is locked for 10 minutes. Nothing was run."
 		);
-		expect(h.readState().users.repo).toEqual({ failures: 0, lockedUntil: new Date(T0 + 10 * MIN).toISOString(), lockouts: [new Date(T0).toISOString()], hardLock: null });
-		expect(auditLines()).toEqual([expect.objectContaining({ tool: "merge_pull_request", user: "repo", decision: "deny", otp: "lockout", until: new Date(T0 + 10 * MIN).toISOString(), detail: "5 bad codes" })]);
+		expect(h.readState().users.repo).toEqual({
+			failures: 0,
+			lockedUntil: new Date(T0 + 10 * MIN).toISOString(),
+			lockouts: [new Date(T0).toISOString()],
+			hardLock: null
+		});
+		expect(auditLines()).toEqual([
+			expect.objectContaining({
+				tool: "merge_pull_request",
+				user: "repo",
+				decision: "deny",
+				otp: "lockout",
+				until: new Date(T0 + 10 * MIN).toISOString(),
+				detail: "5 bad codes"
+			})
+		]);
 
 		const r = refusal(() => h.auth(h.code()));
 		expect(r.message).toBe("OTP is locked for 10 more minute(s) after too many bad codes. Nothing was run.");
@@ -326,10 +351,17 @@ describe("OtpGate lockouts", () => {
 		);
 		const since = new Date(T0 + 4 * MIN).toISOString();
 		expect(h.readState().users.repo.hardLock).toEqual({ since, lockouts: 3 });
-		expect(auditLines().at(-1)).toMatchObject({ user: "repo", decision: "deny", otp: "hard-lock", detail: '3 lockouts in 24 h; every tool except otp_status is refused until "sudo gh-broker otp unlock repo"' });
+		expect(auditLines().at(-1)).toMatchObject({
+			user: "repo",
+			decision: "deny",
+			otp: "hard-lock",
+			detail: '3 lockouts in 24 h; every tool except otp_status is refused until "sudo gh-broker otp unlock repo"'
+		});
 
 		const r = h.gate.hardLockRefusal("repo")!;
-		expect(r.message).toBe(`gh-broker is locked for repo after repeated bad OTP codes (since ${since}). Ask the user to run "sudo gh-broker otp unlock repo" on box. Nothing was run.`);
+		expect(r.message).toBe(
+			`gh-broker is locked for repo after repeated bad OTP codes (since ${since}). Ask the user to run "sudo gh-broker otp unlock repo" on box. Nothing was run.`
+		);
 		expect(r.audit).toEqual({ otp: "hard-locked" });
 		expect(h.gate.hardLockRefusal("glmtest")).toBeUndefined();
 		h.clock.t = T0 + 60 * MIN;
@@ -355,7 +387,13 @@ describe("OtpGate lockouts", () => {
 	it("prunes other users' expired entries on write", () => {
 		const h = harness();
 		const old = new Date(T0 - 25 * 60 * MIN).toISOString();
-		writeFileSync(h.statePath, JSON.stringify({ ...emptyState(), users: { stale: { ...emptyUser(), lockedUntil: old, lockouts: [old] }, kept: { ...emptyUser(), failures: 2 } } }));
+		writeFileSync(
+			h.statePath,
+			JSON.stringify({
+				...emptyState(),
+				users: { stale: { ...emptyUser(), lockedUntil: old, lockouts: [old] }, kept: { ...emptyUser(), failures: 2 } }
+			})
+		);
 		fail(h, 1);
 		expect(h.readState().users).toEqual({ kept: { ...emptyUser(), failures: 2 }, repo: { ...emptyUser(), failures: 1 } });
 	});
@@ -401,7 +439,10 @@ describe("OtpGate fail-closed state", () => {
 
 	it("round 1's flat shape is corrupt now (no users object)", () => {
 		const h = harness();
-		writeFileSync(h.statePath, JSON.stringify({ version: 1, lastAcceptedStep: 0, failures: 0, lockedUntil: null, lockouts: [], hardLock: null }));
+		writeFileSync(
+			h.statePath,
+			JSON.stringify({ version: 1, lastAcceptedStep: 0, failures: 0, lockedUntil: null, lockouts: [], hardLock: null })
+		);
 		expect(h.gate.hardLockRefusal("repo")).toBeDefined();
 	});
 });

@@ -5,8 +5,43 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({ spawnSync: vi.fn() }));
 vi.mock("node:child_process", () => ({ spawnSync: h.spawnSync }));
 vi.mock("node:fs", () => {
-	const fns = ["writeFileSync", "chmodSync", "chownSync", "readFileSync", "existsSync", "statSync", "rmSync", "openSync", "writeSync", "fsyncSync", "closeSync", "renameSync", "fchmodSync", "fchownSync", "mkdirSync", "cpSync", "symlinkSync", "realpathSync", "lstatSync", "readdirSync", "readlinkSync", "fstatSync", "readSync"];
-	const mock: Record<string, unknown> = { constants: { O_RDONLY: 0, O_WRONLY: 1, O_CREAT: 64, O_EXCL: 128, O_TRUNC: 512, O_NONBLOCK: 2048, O_DIRECTORY: 65536, O_NOFOLLOW: 131072 } };
+	const fns = [
+		"writeFileSync",
+		"chmodSync",
+		"chownSync",
+		"readFileSync",
+		"existsSync",
+		"statSync",
+		"rmSync",
+		"openSync",
+		"writeSync",
+		"fsyncSync",
+		"closeSync",
+		"renameSync",
+		"fchmodSync",
+		"fchownSync",
+		"mkdirSync",
+		"cpSync",
+		"symlinkSync",
+		"realpathSync",
+		"lstatSync",
+		"readdirSync",
+		"readlinkSync",
+		"fstatSync",
+		"readSync"
+	];
+	const mock: Record<string, unknown> = {
+		constants: {
+			O_RDONLY: 0,
+			O_WRONLY: 1,
+			O_CREAT: 64,
+			O_EXCL: 128,
+			O_TRUNC: 512,
+			O_NONBLOCK: 2048,
+			O_DIRECTORY: 65536,
+			O_NOFOLLOW: 131072
+		}
+	};
 	for (const fn of fns) mock[fn] = vi.fn();
 	return mock;
 });
@@ -26,7 +61,9 @@ describe("installedVersion / deployedVersion", () => {
 	it("reads the global npm package's version, and undefined when there is none", () => {
 		f.readFileSync.mockReturnValue(JSON.stringify({ version: "0.13.0" }));
 		expect(realDeps().installedVersion()).toBe("0.13.0");
-		f.readFileSync.mockImplementation(() => { throw Object.assign(new Error("nope"), { code: "ENOENT" }); });
+		f.readFileSync.mockImplementation(() => {
+			throw Object.assign(new Error("nope"), { code: "ENOENT" });
+		});
 		expect(realDeps().installedVersion()).toBeUndefined();
 		f.readFileSync.mockReturnValue(JSON.stringify({ version: 3 }));
 		expect(realDeps().installedVersion()).toBeUndefined();
@@ -43,7 +80,9 @@ describe("installedVersion / deployedVersion", () => {
 			return Math.min(s.length, len);
 		});
 		expect(realDeps().deployedVersion()).toBe("0.12.0");
-		f.openSync.mockImplementation(() => { throw Object.assign(new Error("nope"), { code: "ENOENT" }); });
+		f.openSync.mockImplementation(() => {
+			throw Object.assign(new Error("nope"), { code: "ENOENT" });
+		});
 		expect(realDeps().deployedVersion()).toBeUndefined();
 	});
 });
@@ -79,7 +118,16 @@ describe("npmInstall", () => {
 		realDeps().npmInstall("0.13.0");
 		const [cmd, args, opts] = h.spawnSync.mock.calls[0]!;
 		expect(cmd).toBe("npm");
-		expect(args).toEqual(["install", "-g", "--prefix", "/usr/local", "--ignore-scripts", "--registry", "https://registry.npmjs.org", "@cldmv/gh-broker@0.13.0"]);
+		expect(args).toEqual([
+			"install",
+			"-g",
+			"--prefix",
+			"/usr/local",
+			"--ignore-scripts",
+			"--registry",
+			"https://registry.npmjs.org",
+			"@cldmv/gh-broker@0.13.0"
+		]);
 		expect(opts).toEqual({ stdio: "inherit", cwd: "/" });
 	});
 

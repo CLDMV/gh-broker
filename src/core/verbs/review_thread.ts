@@ -92,10 +92,7 @@ export async function resolveReviewThread(
 }
 
 /** Post a reply inside a review thread. Returns the new comment's node id + html url. */
-export async function replyReviewThread(
-	octokit: Octokit,
-	input: ReplyReviewThreadInput
-): Promise<{ commentId: string; url: string }> {
+export async function replyReviewThread(octokit: Octokit, input: ReplyReviewThreadInput): Promise<{ commentId: string; url: string }> {
 	if (!input.body || !input.body.trim()) throw new Error("reply_review_thread: body is required");
 	const data = await octokit.graphql<{
 		addPullRequestReviewThreadReply: { comment: { id: string; url: string } };

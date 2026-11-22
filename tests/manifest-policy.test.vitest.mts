@@ -71,16 +71,35 @@ describe("the tool manifest", () => {
 	});
 
 	it("names the owner mechanism per tool: creationOwner only on the repo-creating tools, none only on otp_status", () => {
-		expect(Object.entries(MANIFEST).filter(([, d]) => d.owner === "creationOwner").map(([n]) => n).sort()).toEqual(["create_repository", "fork_repository"]);
-		expect(Object.entries(MANIFEST).filter(([, d]) => d.owner === "none").map(([n]) => n)).toEqual(["otp_status"]);
+		expect(
+			Object.entries(MANIFEST)
+				.filter(([, d]) => d.owner === "creationOwner")
+				.map(([n]) => n)
+				.sort()
+		).toEqual(["create_repository", "fork_repository"]);
+		expect(
+			Object.entries(MANIFEST)
+				.filter(([, d]) => d.owner === "none")
+				.map(([n]) => n)
+		).toEqual(["otp_status"]);
 		for (const [name, decl] of Object.entries(MANIFEST)) {
 			if (name !== "otp_status" && decl.owner !== "creationOwner") expect(decl.owner, name).toBe("extractOwner");
 		}
 	});
 
 	it("marks only the two augmented proxies as augmentable, and only the ghcr verbs as host-only default: off", () => {
-		expect(Object.entries(MANIFEST).filter(([, d]) => d.kind === "forwarded" && d.augment).map(([n]) => n).sort()).toEqual(["list_pull_requests", "pull_request_read"]);
-		expect(Object.entries(MANIFEST).filter(([, d]) => d.kind === "verb" && d.default === "off").map(([n]) => n).sort()).toEqual(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
+		expect(
+			Object.entries(MANIFEST)
+				.filter(([, d]) => d.kind === "forwarded" && d.augment)
+				.map(([n]) => n)
+				.sort()
+		).toEqual(["list_pull_requests", "pull_request_read"]);
+		expect(
+			Object.entries(MANIFEST)
+				.filter(([, d]) => d.kind === "verb" && d.default === "off")
+				.map(([n]) => n)
+				.sort()
+		).toEqual(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
 	});
 });
 
@@ -102,7 +121,10 @@ describe("the permissive policy (the daemon's pick)", () => {
 	it("collects one warning per offending rule, in config order", () => {
 		// No manifest tool is both read and gated (every DEFAULT_GATED tool is a write), so
 		// the two warning cases always land on different rules.
-		const { warnings } = permissivePolicy([rule("merge_pull_request", { mode: "write", otp: false }), rule("report_unlabeled", { mode: "write", custom: true })]);
+		const { warnings } = permissivePolicy([
+			rule("merge_pull_request", { mode: "write", otp: false }),
+			rule("report_unlabeled", { mode: "write", custom: true })
+		]);
 		expect(warnings).toHaveLength(2);
 		expect(warnings[0]).toMatch(/turns off its OTP gate/);
 		expect(warnings[1]).toMatch(/widens its mode/);
@@ -141,7 +163,10 @@ describe("the strict policy (the library's default)", () => {
 	});
 
 	it("adds OTP gating but never removes it", () => {
-		const { tools } = strictPolicy([rule("minimize_comment", { mode: "write", otp: true }), rule("merge_pull_request", { mode: "write", otp: false })]);
+		const { tools } = strictPolicy([
+			rule("minimize_comment", { mode: "write", otp: true }),
+			rule("merge_pull_request", { mode: "write", otp: false })
+		]);
 		expect(tools.map((t) => [t.name, t.otp])).toEqual([
 			["minimize_comment", true], // added
 			["merge_pull_request", true] // manifest gate stands despite otp: false
@@ -149,7 +174,11 @@ describe("the strict policy (the library's default)", () => {
 	});
 
 	it("drops tools that are not in the manifest, and the host-only default:off tools", () => {
-		const { tools } = strictPolicy([rule("get_me"), rule("ghcr_push", { mode: "write", custom: true }), rule("report_unlabeled", { custom: true })]);
+		const { tools } = strictPolicy([
+			rule("get_me"),
+			rule("ghcr_push", { mode: "write", custom: true }),
+			rule("report_unlabeled", { custom: true })
+		]);
 		expect(tools.map((t) => t.name)).toEqual(["report_unlabeled"]);
 	});
 });
@@ -164,14 +193,16 @@ describe("config.example.json against the manifest (the shipped config pin)", ()
 		expect(tools).toHaveLength(raw.tools.length);
 	});
 
-	it("keeps the daemon-side enabled facts out of the policy: the ghcr entries carry no enabled flag and survive permissive (their default: \"off\" is ignored there)", () => {
+	it('keeps the daemon-side enabled facts out of the policy: the ghcr entries carry no enabled flag and survive permissive (their default: "off" is ignored there)', () => {
 		for (const entry of raw.tools.filter((t) => String(t.name).startsWith("ghcr_"))) expect(entry.enabled).toBeUndefined();
 		const kept = permissivePolicy(raw.tools as any).tools.map((t) => t.name);
 		for (const ghcr of ["ghcr_push", "ghcr_push_status", "ghcr_tags"]) expect(kept).toContain(ghcr);
 	});
 
 	it("under the strict policy, exactly the config-only and default-off tools vanish — the pinned delta", () => {
-		const survivors = strictPolicy(raw.tools as any).tools.map((t) => t.name).sort();
+		const survivors = strictPolicy(raw.tools as any)
+			.tools.map((t) => t.name)
+			.sort();
 		// Everything the manifest declares, minus the host-only ghcr verbs and the copilot
 		// trio (default: "off" — strict is never looser than the daemon, which keeps them
 		// off via availability until a rule says enabled: true).

@@ -176,7 +176,11 @@ function stepDurationMs(step: RawStep): number {
 
 function truncationFrom(err: unknown): Truncation | undefined {
 	if (err instanceof RateLimited) {
-		return { truncated: true, truncatedReason: "rate-limited", ...(err.retryAfterSeconds !== undefined ? { retryAfterSeconds: err.retryAfterSeconds } : {}) };
+		return {
+			truncated: true,
+			truncatedReason: "rate-limited",
+			...(err.retryAfterSeconds !== undefined ? { retryAfterSeconds: err.retryAfterSeconds } : {})
+		};
 	}
 	if (err instanceof CallBudgetExhausted) return { truncated: true, truncatedReason: "max-api-calls" };
 	return undefined;
@@ -227,7 +231,13 @@ async function computeForPull(
 				const logsByJobId = verbosity >= 3 && fetchFailedJobLogs ? await fetchFailedJobLogs(run.id, logLines) : undefined;
 				for (const job of jobs) {
 					if (classify(job.status, job.conclusion) !== "failed") continue;
-					const failure: CiFailure = { workflow: run.name, job: job.name, runId: run.id, runUrl: run.html_url, conclusion: job.conclusion ?? "unknown" };
+					const failure: CiFailure = {
+						workflow: run.name,
+						job: job.name,
+						runId: run.id,
+						runUrl: run.html_url,
+						conclusion: job.conclusion ?? "unknown"
+					};
 					if (verbosity >= 2) {
 						failure.steps = (job.steps ?? [])
 							.filter((s) => classify(s.status, s.conclusion) === "failed")
@@ -314,9 +324,23 @@ export async function ciStatusForHeads(
 			continue;
 		}
 		const detailed = i < maxDetail;
-		const r = await computeForPull(octokit, budget, owner, repo, head.number, head.sha, detailed ? verbosity : 0, logLines, opts.fetchFailedJobLogs);
+		const r = await computeForPull(
+			octokit,
+			budget,
+			owner,
+			repo,
+			head.number,
+			head.sha,
+			detailed ? verbosity : 0,
+			logLines,
+			opts.fetchFailedJobLogs
+		);
 		if (r.truncated) {
-			stopped = { truncated: true, truncatedReason: r.truncatedReason as TruncatedReason, ...(r.retryAfterSeconds !== undefined ? { retryAfterSeconds: r.retryAfterSeconds } : {}) };
+			stopped = {
+				truncated: true,
+				truncatedReason: r.truncatedReason as TruncatedReason,
+				...(r.retryAfterSeconds !== undefined ? { retryAfterSeconds: r.retryAfterSeconds } : {})
+			};
 			results.push(r);
 		} else if (!detailed && verbosity >= 1) {
 			results.push({ ...r, truncated: true, truncatedReason: "max-detail" });
@@ -345,7 +369,17 @@ export async function reportCiStatus(
 				repo: input.repo,
 				pull_number: pullNumber
 			});
-			return await computeForPull(octokit, budget, input.owner, input.repo, pullNumber, pr.head.sha, verbosity, logLines, fetchFailedJobLogs);
+			return await computeForPull(
+				octokit,
+				budget,
+				input.owner,
+				input.repo,
+				pullNumber,
+				pr.head.sha,
+				verbosity,
+				logLines,
+				fetchFailedJobLogs
+			);
 		} catch (err) {
 			const t = truncationFrom(err);
 			if (t) return { pull: pullNumber, summary: { passed: 0, failed: 0, pending: 0 }, ...t };
@@ -356,7 +390,13 @@ export async function reportCiStatus(
 	const maxPulls = Math.min(input.maxPulls ?? DEFAULT_MAX_PULLS, HARD_MAX_PULLS);
 	let pulls: Array<{ number: number; head: { sha: string } }>;
 	try {
-		pulls = await paginate(octokit, budget, "GET /repos/{owner}/{repo}/pulls", { owner: input.owner, repo: input.repo, state: "open" }, maxPulls);
+		pulls = await paginate(
+			octokit,
+			budget,
+			"GET /repos/{owner}/{repo}/pulls",
+			{ owner: input.owner, repo: input.repo, state: "open" },
+			maxPulls
+		);
 	} catch (err) {
 		const t = truncationFrom(err);
 		if (t) return { scanned: { pulls: 0 }, results: [], ...t };
@@ -372,7 +412,11 @@ export async function reportCiStatus(
 			// Didn't finish evaluating this PR — don't count it as scanned, but surface
 			// it (and stop entirely: the budget/rate limit is gone for the next PR too).
 			results.push(r);
-			aggregateTruncation = { truncated: true, truncatedReason: r.truncatedReason as TruncatedReason, ...(r.retryAfterSeconds !== undefined ? { retryAfterSeconds: r.retryAfterSeconds } : {}) };
+			aggregateTruncation = {
+				truncated: true,
+				truncatedReason: r.truncatedReason as TruncatedReason,
+				...(r.retryAfterSeconds !== undefined ? { retryAfterSeconds: r.retryAfterSeconds } : {})
+			};
 			break;
 		}
 		scanned++;
@@ -391,15 +435,28 @@ export const REPORT_CI_STATUS_SCHEMA = {
 	properties: {
 		owner: { type: "string", description: "repository owner (org/user login) — selects the read credential" },
 		repo: { type: "string", description: "repository name" },
-		pull: { type: "number", description: "PR number; omit to scan every open PR in the repo (only PRs with a failure are included in the result)" },
+		pull: {
+			type: "number",
+			description: "PR number; omit to scan every open PR in the repo (only PRs with a failure are included in the result)"
+		},
 		verbosity: {
 			type: "number",
 			enum: [0, 1, 2, 3],
 			default: 0,
-			description: "0: pass/fail/pending counts only. 1: + which run/job failed (workflow, job, runId, runUrl). 2: + which step in that job failed. 3: + a tail of the failing job's log."
+			description:
+				"0: pass/fail/pending counts only. 1: + which run/job failed (workflow, job, runId, runUrl). 2: + which step in that job failed. 3: + a tail of the failing job's log."
 		},
-		logLines: { type: "number", description: `tier-3 only: tail lines of the failing job's log (default ${DEFAULT_LOG_LINES}, hard cap ${HARD_LOG_LINES})` },
-		maxPulls: { type: "number", description: `safety cap on open PRs scanned when pull is omitted (default ${DEFAULT_MAX_PULLS}, hard cap ${HARD_MAX_PULLS})` },
-		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` }
+		logLines: {
+			type: "number",
+			description: `tier-3 only: tail lines of the failing job's log (default ${DEFAULT_LOG_LINES}, hard cap ${HARD_LOG_LINES})`
+		},
+		maxPulls: {
+			type: "number",
+			description: `safety cap on open PRs scanned when pull is omitted (default ${DEFAULT_MAX_PULLS}, hard cap ${HARD_MAX_PULLS})`
+		},
+		maxApiCalls: {
+			type: "number",
+			description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})`
+		}
 	}
 };

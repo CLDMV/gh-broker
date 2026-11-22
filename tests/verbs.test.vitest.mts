@@ -33,17 +33,13 @@ describe("linkIssue", () => {
 
 	it("throws when the PR is not found", async () => {
 		graphql.mockResolvedValueOnce({ repository: { pullRequest: null, issue: { id: "I_1" } } });
-		await expect(linkIssue(octokit, { owner: "cldmv", repo: "r", pull: 9, issue: 1 })).rejects.toThrow(
-			/PR #9 not found in cldmv\/r/
-		);
+		await expect(linkIssue(octokit, { owner: "cldmv", repo: "r", pull: 9, issue: 1 })).rejects.toThrow(/PR #9 not found in cldmv\/r/);
 		expect(graphql).toHaveBeenCalledTimes(1); // never reaches the mutation
 	});
 
 	it("throws when the issue is not found", async () => {
 		graphql.mockResolvedValueOnce({ repository: { pullRequest: { id: "PR_1" }, issue: null } });
-		await expect(linkIssue(octokit, { owner: "cldmv", repo: "r", pull: 1, issue: 42 })).rejects.toThrow(
-			/issue #42 not found in cldmv\/r/
-		);
+		await expect(linkIssue(octokit, { owner: "cldmv", repo: "r", pull: 1, issue: 42 })).rejects.toThrow(/issue #42 not found in cldmv\/r/);
 	});
 
 	it("advertises a valid schema", () => {
@@ -79,9 +75,7 @@ describe("resolveReviewThread", () => {
 
 	it("throws when no thread is returned", async () => {
 		graphql.mockResolvedValue({});
-		await expect(resolveReviewThread(octokit, { owner: "cldmv", threadId: "PRRT_x" })).rejects.toThrow(
-			/no thread returned for "PRRT_x"/
-		);
+		await expect(resolveReviewThread(octokit, { owner: "cldmv", threadId: "PRRT_x" })).rejects.toThrow(/no thread returned for "PRRT_x"/);
 	});
 });
 
@@ -102,9 +96,7 @@ describe("replyReviewThread", () => {
 	});
 
 	it("rejects an empty body without calling the API", async () => {
-		await expect(replyReviewThread(octokit, { owner: "cldmv", threadId: "PRRT_1", body: "   " })).rejects.toThrow(
-			/body is required/
-		);
+		await expect(replyReviewThread(octokit, { owner: "cldmv", threadId: "PRRT_1", body: "   " })).rejects.toThrow(/body is required/);
 		expect(graphql).not.toHaveBeenCalled();
 	});
 
@@ -307,7 +299,8 @@ describe("reportUnlabeled", () => {
 	it("advances to a second page when a page comes back exactly full", async () => {
 		const fullPage = Array.from({ length: 100 }, (_, i) => ({ name: `repo${i}` }));
 		const octokit = octokitWith(async (route, params) => {
-			if (route === "GET /orgs/{owner}/repos") return params.page === 2 ? { data: [{ name: "last" }], headers: {} } : { data: fullPage, headers: {} };
+			if (route === "GET /orgs/{owner}/repos")
+				return params.page === 2 ? { data: [{ name: "last" }], headers: {} } : { data: fullPage, headers: {} };
 			if (route === "GET /repos/{owner}/{repo}/issues") return { data: [], headers: {} };
 			throw new Error(`unexpected route ${route}`);
 		});
@@ -344,7 +337,9 @@ describe("reportCiStatus", () => {
 		html_url: "https://gh/run/1",
 		...over
 	});
-	const job = (over: Partial<{ id: number; name: string; status: string; conclusion: string | null; html_url: string; steps: unknown[] }> = {}) => ({
+	const job = (
+		over: Partial<{ id: number; name: string; status: string; conclusion: string | null; html_url: string; steps: unknown[] }> = {}
+	) => ({
 		id: 100,
 		name: "test",
 		status: "completed",
@@ -353,7 +348,16 @@ describe("reportCiStatus", () => {
 		steps: [],
 		...over
 	});
-	const step = (over: Partial<{ name: string; status: string; conclusion: string | null; number: number; started_at: string | null; completed_at: string | null }> = {}) => ({
+	const step = (
+		over: Partial<{
+			name: string;
+			status: string;
+			conclusion: string | null;
+			number: number;
+			started_at: string | null;
+			completed_at: string | null;
+		}> = {}
+	) => ({
 		name: "npm test",
 		status: "completed",
 		conclusion: "success",
@@ -367,7 +371,11 @@ describe("reportCiStatus", () => {
 		const octokit = octokitWith(async (route) => {
 			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
 			if (route === "GET /repos/{owner}/{repo}/actions/runs") {
-				return runs([run({ id: 1, conclusion: "success" }), run({ id: 2, conclusion: "failure" }), run({ id: 3, status: "in_progress", conclusion: null })]);
+				return runs([
+					run({ id: 1, conclusion: "success" }),
+					run({ id: 2, conclusion: "failure" }),
+					run({ id: 3, status: "in_progress", conclusion: null })
+				]);
 			}
 			throw new Error(`unexpected route ${route}`);
 		});
@@ -399,7 +407,16 @@ describe("reportCiStatus", () => {
 				return jobs([
 					job({
 						conclusion: "failure",
-						steps: [step({ name: "setup", conclusion: "success" }), step({ name: "npm run coverage", number: 4, conclusion: "failure", started_at: "2026-01-01T00:00:00Z", completed_at: "2026-01-01T00:00:08.213Z" })]
+						steps: [
+							step({ name: "setup", conclusion: "success" }),
+							step({
+								name: "npm run coverage",
+								number: 4,
+								conclusion: "failure",
+								started_at: "2026-01-01T00:00:00Z",
+								completed_at: "2026-01-01T00:00:08.213Z"
+							})
+						]
 					})
 				]);
 			}
@@ -413,7 +430,8 @@ describe("reportCiStatus", () => {
 		const octokit = octokitWith(async (route) => {
 			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
 			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ id: 9, conclusion: "failure" })]);
-			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") return jobs([job({ id: 555, conclusion: "failure" }), job({ id: 556, conclusion: "success" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs")
+				return jobs([job({ id: 555, conclusion: "failure" }), job({ id: 556, conclusion: "success" })]);
 			throw new Error(`unexpected route ${route}`);
 		});
 		const fetchFailedJobLogs = vi.fn(async (runId: number, tailLines: number) => {
@@ -450,7 +468,14 @@ describe("reportCiStatus", () => {
 
 	it("scans every open PR when pull is omitted, including only PRs with a failure", async () => {
 		const octokit = octokitWith(async (route, params) => {
-			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [{ number: 1, head: { sha: "a" } }, { number: 2, head: { sha: "b" } }], headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/pulls")
+				return {
+					data: [
+						{ number: 1, head: { sha: "a" } },
+						{ number: 2, head: { sha: "b" } }
+					],
+					headers: {}
+				};
 			if (route === "GET /repos/{owner}/{repo}/actions/runs") {
 				return runs(params.head_sha === "a" ? [run({ conclusion: "success" })] : [run({ conclusion: "failure" })]);
 			}
@@ -462,7 +487,14 @@ describe("reportCiStatus", () => {
 
 	it("flags truncated:max-pulls when the open-PR list is exactly at the cap", async () => {
 		const octokit = octokitWith(async (route) => {
-			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [{ number: 1, head: { sha: "a" } }, { number: 2, head: { sha: "b" } }], headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/pulls")
+				return {
+					data: [
+						{ number: 1, head: { sha: "a" } },
+						{ number: 2, head: { sha: "b" } }
+					],
+					headers: {}
+				};
 			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "success" })]);
 			throw new Error(`unexpected route ${route}`);
 		});
@@ -474,7 +506,8 @@ describe("reportCiStatus", () => {
 	it("stops mid-scan on a rate limit with no failures collected yet, single-pull mode", async () => {
 		const octokit = octokitWith(async (route) => {
 			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
-			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ id: 1, conclusion: "failure" }), run({ id: 2, conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs")
+				return runs([run({ id: 1, conclusion: "failure" }), run({ id: 2, conclusion: "failure" })]);
 			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") {
 				throw Object.assign(new Error("rate limited"), { status: 403 });
 			}
@@ -490,7 +523,8 @@ describe("reportCiStatus", () => {
 	it("stops mid-scan on a rate limit but preserves failures already collected from an earlier run", async () => {
 		const octokit = octokitWith(async (route, params) => {
 			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return pr("sha1");
-			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ id: 1, conclusion: "failure" }), run({ id: 2, conclusion: "failure" })]);
+			if (route === "GET /repos/{owner}/{repo}/actions/runs")
+				return runs([run({ id: 1, conclusion: "failure" }), run({ id: 2, conclusion: "failure" })]);
 			if (route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs") {
 				if (params.run_id === 1) return jobs([job({ id: 201, name: "test", conclusion: "failure" })]);
 				throw Object.assign(new Error("rate limited"), { status: 403 });
@@ -531,7 +565,8 @@ describe("reportCiStatus", () => {
 
 	it("surfaces retryAfterSeconds on a single-pull rate limit that includes a Retry-After header", async () => {
 		const octokit = octokitWith(async (route) => {
-			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") throw Object.assign(new Error("nope"), { status: 429, response: { headers: { "retry-after": "45" } } });
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}")
+				throw Object.assign(new Error("nope"), { status: 429, response: { headers: { "retry-after": "45" } } });
 			throw new Error(`unexpected route ${route}`);
 		});
 		const out = (await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5 })) as any;
@@ -541,7 +576,8 @@ describe("reportCiStatus", () => {
 	it("surfaces retryAfterSeconds on a multi-pull rate limit that includes a Retry-After header", async () => {
 		const octokit = octokitWith(async (route) => {
 			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [{ number: 1, head: { sha: "a" } }], headers: {} };
-			if (route === "GET /repos/{owner}/{repo}/actions/runs") throw Object.assign(new Error("nope"), { status: 429, response: { headers: { "retry-after": "12" } } });
+			if (route === "GET /repos/{owner}/{repo}/actions/runs")
+				throw Object.assign(new Error("nope"), { status: 429, response: { headers: { "retry-after": "12" } } });
 			throw new Error(`unexpected route ${route}`);
 		});
 		const out = (await reportCiStatus(octokit, { owner: "cldmv", repo: "r" })) as any;
@@ -550,7 +586,14 @@ describe("reportCiStatus", () => {
 
 	it("stops the whole multi-pull scan (not just one PR) when a PR's scan hits the call budget", async () => {
 		const octokit = octokitWith(async (route) => {
-			if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [{ number: 1, head: { sha: "a" } }, { number: 2, head: { sha: "b" } }], headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/pulls")
+				return {
+					data: [
+						{ number: 1, head: { sha: "a" } },
+						{ number: 2, head: { sha: "b" } }
+					],
+					headers: {}
+				};
 			if (route === "GET /repos/{owner}/{repo}/actions/runs") return runs([run({ conclusion: "success" })]);
 			throw new Error(`unexpected route ${route}`);
 		});
@@ -613,7 +656,11 @@ describe("reportCiStatus", () => {
 			throw new Error(`unexpected route ${route}`);
 		});
 		// verbosity: 99 clamps to 3 (not silently dropped to 0) — proven by the log fetch actually happening.
-		const out = await reportCiStatus(octokit, { owner: "cldmv", repo: "r", pull: 5, verbosity: 99 as any }, async () => new Map([[555, "log"]]));
+		const out = await reportCiStatus(
+			octokit,
+			{ owner: "cldmv", repo: "r", pull: 5, verbosity: 99 as any },
+			async () => new Map([[555, "log"]])
+		);
 		expect(out.failures?.[0]?.logTail).toBe("log");
 	});
 
@@ -702,7 +749,10 @@ describe("ciStatusForHeads", () => {
 	});
 
 	it("stops when the remaining-requests header falls under the floor", async () => {
-		const octokit = octokitWith(async () => ({ data: { workflow_runs: [] }, headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "50" } }));
+		const octokit = octokitWith(async () => ({
+			data: { workflow_runs: [] },
+			headers: { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "50" }
+		}));
 		const out = await ciStatusForHeads(octokit, "cldmv", "r", heads);
 		expect(out.map((r) => r.truncatedReason)).toEqual(["rate-limited", "rate-limited", "rate-limited"]);
 		expect(octokit.request).toHaveBeenCalledTimes(1);

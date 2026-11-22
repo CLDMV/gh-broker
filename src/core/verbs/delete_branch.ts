@@ -75,7 +75,9 @@ export async function deleteBranch(octokit: Octokit, input: DeleteBranchInput): 
 		const prs = open.data as Array<{ number: number }>;
 		if (prs.length > 0) {
 			const ref = where.owner === owner && where.repo === repo ? "" : `${where.owner}/${where.repo}`;
-			throw new Error(`delete_branch: refusing to delete "${branch}": it is the ${side} of open PR ${prs.map((p) => `${ref}#${p.number}`).join(", ")}, which deleting it would close`);
+			throw new Error(
+				`delete_branch: refusing to delete "${branch}": it is the ${side} of open PR ${prs.map((p) => `${ref}#${p.number}`).join(", ")}, which deleting it would close`
+			);
 		}
 	}
 

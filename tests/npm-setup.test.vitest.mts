@@ -20,7 +20,13 @@ function fakeNpm(script: { login?: Reply; polls?: Reply[]; tokens?: Reply[]; log
 	const fetch = vi.fn(async (url: string, init: any) => {
 		calls.push({ method: init.method, url, headers: init.headers, ...(init.body ? { body: JSON.parse(init.body) } : {}) });
 		const path = new URL(url).pathname;
-		if (path === "/-/v1/login") return reply(script.login ?? { status: 200, body: { loginUrl: "https://www.npmjs.com/login?next=/login/cli/abc", doneUrl: "https://registry.npmjs.org/-/v1/done?authId=abc" } });
+		if (path === "/-/v1/login")
+			return reply(
+				script.login ?? {
+					status: 200,
+					body: { loginUrl: "https://www.npmjs.com/login?next=/login/cli/abc", doneUrl: "https://registry.npmjs.org/-/v1/done?authId=abc" }
+				}
+			);
 		if (path === "/-/v1/done") return reply(polls.shift() ?? { status: 500 });
 		if (path === "/-/npm/v1/tokens") return reply(tokens.shift() ?? { status: 500 });
 		if (path.startsWith("/-/user/token/")) {
@@ -39,7 +45,14 @@ function prompts(answers: string[]) {
 
 const run = (npm: ReturnType<typeof fakeNpm>, p = prompts([PASSWORD, "111111"]), extra: Record<string, unknown> = {}) => {
 	const logs: string[] = [];
-	const done = createNpmToken({ scopes: ["@cldmv"], tokenName: "gh-broker test", fetch: npm.fetch as any, log: (m: string) => logs.push(m), ...p, ...extra });
+	const done = createNpmToken({
+		scopes: ["@cldmv"],
+		tokenName: "gh-broker test",
+		fetch: npm.fetch as any,
+		log: (m: string) => logs.push(m),
+		...p,
+		...extra
+	});
 	return { done, logs, p };
 };
 
@@ -53,7 +66,13 @@ describe("createNpmToken", () => {
 		const create = npm.calls.find((c) => c.url.endsWith("/-/npm/v1/tokens"))!;
 		expect(create.headers.authorization).toBe(`Bearer ${SESSION}`);
 		expect(create.headers["npm-otp"]).toBe("111111");
-		expect(create.body).toEqual({ name: "gh-broker test", scopes: ["@cldmv"], packages_and_scopes_permission: "read-write", expires: 90, password: PASSWORD });
+		expect(create.body).toEqual({
+			name: "gh-broker test",
+			scopes: ["@cldmv"],
+			packages_and_scopes_permission: "read-write",
+			expires: 90,
+			password: PASSWORD
+		});
 		expect(create.body).not.toHaveProperty("bypass_2fa");
 
 		const logout = npm.calls.at(-1)!;
@@ -65,7 +84,9 @@ describe("createNpmToken", () => {
 	it("waits while the login is pending, honouring retry-after", async () => {
 		vi.useFakeTimers();
 		try {
-			const npm = fakeNpm({ polls: [{ status: 202, headers: { "retry-after": "2" } }, { status: 202 }, { status: 200, body: { token: SESSION } }] });
+			const npm = fakeNpm({
+				polls: [{ status: 202, headers: { "retry-after": "2" } }, { status: 202 }, { status: 200, body: { token: SESSION } }]
+			});
 			const { done } = run(npm);
 			await vi.advanceTimersByTimeAsync(3000);
 			await expect(done).resolves.toMatchObject({ token: NEW_TOKEN });
@@ -81,7 +102,12 @@ describe("createNpmToken", () => {
 	});
 
 	it("re-prompts for the OTP when npm rejects it", async () => {
-		const npm = fakeNpm({ tokens: [{ status: 401, headers: { "www-authenticate": "OTP" } }, { status: 201, body: { token: NEW_TOKEN } }] });
+		const npm = fakeNpm({
+			tokens: [
+				{ status: 401, headers: { "www-authenticate": "OTP" } },
+				{ status: 201, body: { token: NEW_TOKEN } }
+			]
+		});
 		const p = prompts([PASSWORD, "111111", "222222"]);
 		await expect(run(npm, p).done).resolves.toEqual({ token: NEW_TOKEN });
 		const creates = npm.calls.filter((c) => c.url.endsWith("/-/npm/v1/tokens"));
@@ -91,7 +117,12 @@ describe("createNpmToken", () => {
 	});
 
 	it("re-prompts for the password (and a new OTP) when npm rejects it", async () => {
-		const npm = fakeNpm({ tokens: [{ status: 401, body: { error: "invalid password" } }, { status: 201, body: { token: NEW_TOKEN } }] });
+		const npm = fakeNpm({
+			tokens: [
+				{ status: 401, body: { error: "invalid password" } },
+				{ status: 201, body: { token: NEW_TOKEN } }
+			]
+		});
 		const p = prompts([PASSWORD, "111111", "right-password", "222222"]);
 		await expect(run(npm, p).done).resolves.toEqual({ token: NEW_TOKEN });
 		expect(npm.calls.filter((c) => c.url.endsWith("/-/npm/v1/tokens")).map((c) => c.body.password)).toEqual([PASSWORD, "right-password"]);
@@ -151,7 +182,11 @@ describe("createNpmToken", () => {
 	it("adds org read-write only when orgs are given", async () => {
 		const npm = fakeNpm({});
 		await run(npm, undefined, { orgs: ["cldmv"] }).done;
-		expect(npm.calls.find((c) => c.url.endsWith("/tokens"))!.body).toMatchObject({ scopes: ["@cldmv"], orgs: ["cldmv"], orgs_permission: "read-write" });
+		expect(npm.calls.find((c) => c.url.endsWith("/tokens"))!.body).toMatchObject({
+			scopes: ["@cldmv"],
+			orgs: ["cldmv"],
+			orgs_permission: "read-write"
+		});
 	});
 
 	it("rejects a login URL that does not parse", async () => {
@@ -170,14 +205,18 @@ describe("createNpmToken", () => {
 		vi.stubGlobal("fetch", npm.fetch);
 		try {
 			const logs: string[] = [];
-			await expect(createNpmToken({ scopes: ["@cldmv"], tokenName: "t", log: (m: string) => logs.push(m), ...prompts([PASSWORD, "111111"]) })).resolves.toMatchObject({ token: NEW_TOKEN });
+			await expect(
+				createNpmToken({ scopes: ["@cldmv"], tokenName: "t", log: (m: string) => logs.push(m), ...prompts([PASSWORD, "111111"]) })
+			).resolves.toMatchObject({ token: NEW_TOKEN });
 		} finally {
 			vi.unstubAllGlobals();
 		}
 	});
 
 	it("uses a custom registry and token lifetime", async () => {
-		const npm = fakeNpm({ login: { status: 200, body: { loginUrl: "https://npm.example.test/login", doneUrl: "https://npm.example.test/-/v1/done?x" } } });
+		const npm = fakeNpm({
+			login: { status: 200, body: { loginUrl: "https://npm.example.test/login", doneUrl: "https://npm.example.test/-/v1/done?x" } }
+		});
 		await run(npm, undefined, { registry: "https://npm.example.test/", days: 30 }).done;
 		expect(npm.calls[0]!.url).toBe("https://npm.example.test/-/v1/login");
 		expect(npm.calls.find((c) => c.url.endsWith("/tokens"))!.body.expires).toBe(30);

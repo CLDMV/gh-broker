@@ -32,7 +32,19 @@ import { newSeed, otpauthUri as libOtpauthUri } from "@cldmv/lib-otp";
 // The QR renderer is on its own subpath so the daemon, which bundles the main entry, never
 // pulls in qrcode (CommonJS, require("fs")) — see #208. Only this CLI imports it.
 import { renderQr as libRenderQr, type RenderQrOpts } from "@cldmv/lib-otp/qr";
-import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync, fchmodSync, fchownSync, statSync, constants } from "node:fs";
+import {
+	readFileSync,
+	openSync,
+	writeSync,
+	fsyncSync,
+	closeSync,
+	renameSync,
+	rmSync,
+	fchmodSync,
+	fchownSync,
+	statSync,
+	constants
+} from "node:fs";
 import { dirname, join, basename } from "node:path";
 
 export {
@@ -76,10 +88,15 @@ export function otpauthUri(seed: string, host: string): string {
 }
 
 /** The URI as a terminal QR code. `toString` defaults to the qrcode library's (through lib-otp), injectable for tests. */
-export async function renderQr(uri: string, toString?: (text: string, options: { type: "terminal"; small: boolean }) => Promise<string>): Promise<string> {
+export async function renderQr(
+	uri: string,
+	toString?: (text: string, options: { type: "terminal"; small: boolean }) => Promise<string>
+): Promise<string> {
 	// No options object at all when nothing is injected: a plain {} inherits toString(), which
 	// type-checks as a clash with RenderQrOpts.toString (lib-otp reads own properties only).
-	const opts: RenderQrOpts | undefined = toString ? { toString: toString as (text: string, options: Record<string, unknown>) => Promise<string> } : undefined;
+	const opts: RenderQrOpts | undefined = toString
+		? { toString: toString as (text: string, options: Record<string, unknown>) => Promise<string> }
+		: undefined;
 	return (await libRenderQr(uri, opts)) as string;
 }
 
@@ -116,7 +133,15 @@ export function seedCredName(config: { otp?: Partial<OtpConfig> } | undefined): 
 }
 
 /** Whether a stored seed already exists in the active backend (an existing one is never overwritten on install). */
-export function seedExists({ name, existingFile, credFileExists }: { name: string; existingFile: Record<string, string>; credFileExists: (name: string) => boolean }): boolean {
+export function seedExists({
+	name,
+	existingFile,
+	credFileExists
+}: {
+	name: string;
+	existingFile: Record<string, string>;
+	credFileExists: (name: string) => boolean;
+}): boolean {
 	return Boolean(existingFile[name]) || credFileExists(name);
 }
 
@@ -266,7 +291,10 @@ export function stateStore(
 		read = readFileSync,
 		stat = statSync,
 		...io
-	}: { read?: (path: string, encoding: "utf8") => string; stat?: (path: string) => Pick<Stats, "ino" | "mtimeMs" | "size"> } & AtomicWriteIo = {}
+	}: {
+		read?: (path: string, encoding: "utf8") => string;
+		stat?: (path: string) => Pick<Stats, "ino" | "mtimeMs" | "size">;
+	} & AtomicWriteIo = {}
 ): StateStore {
 	const seen = new Map<string, string>();
 	return {
@@ -277,11 +305,11 @@ export function stateStore(
 		write(path: string, state: OtpState): void {
 			const expected = seen.get(path);
 			const beforeRename = (): void => {
-				if (fileSignature(path, stat) !== expected) throw new Error(`${path} changed while this command ran (the broker wrote to it); nothing was changed, run the command again`);
+				if (fileSignature(path, stat) !== expected)
+					throw new Error(`${path} changed while this command ran (the broker wrote to it); nothing was changed, run the command again`);
 			};
 			writeStateAtomic(path, state, owner, { ...io, beforeRename });
 			seen.set(path, fileSignature(path, stat));
 		}
 	};
 }
-

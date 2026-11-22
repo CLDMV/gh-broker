@@ -73,14 +73,20 @@ describe("parseConfigLib — same accepted values as loadConfig", () => {
 		const raw = {
 			...baseConfig(),
 			npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "https://registry.npmjs.org", tokenOrgs: ["cldmv"] },
-			ghcr: { dropDir: "/srv/gh-broker/ghcr-drop", owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot"] } } }
+			ghcr: {
+				dropDir: "/srv/gh-broker/ghcr-drop",
+				owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot"] } }
+			}
 		};
 		const loaded = loadConfig(writeConfig(raw));
 		expect(parseConfigLib(raw)).toEqual(libOf(loaded));
 	});
 
 	it("over config.example.json with an owner added, deep-equals the lib fields loadConfig returns", () => {
-		const raw = { ...JSON.parse(readFileSync(join(process.cwd(), "config.example.json"), "utf8")), owners: { acme: { read: "cred:acme-read", write: "cred:acme-write" } } };
+		const raw = {
+			...JSON.parse(readFileSync(join(process.cwd(), "config.example.json"), "utf8")),
+			owners: { acme: { read: "cred:acme-read", write: "cred:acme-write" } }
+		};
 		const loaded = loadConfig(writeConfig(raw));
 		expect(parseConfigLib(raw)).toEqual(libOf(loaded));
 	});
@@ -94,7 +100,14 @@ describe("parseConfigLib — same accepted values as loadConfig", () => {
 	});
 
 	it("carries the per-tool otp gating flags through exactly as loadConfig does", () => {
-		const raw = { ...baseConfig(), tools: [{ name: "get_me", mode: "read" }, { name: "a", mode: "write", otp: true }, { name: "b", mode: "write", otp: false }] };
+		const raw = {
+			...baseConfig(),
+			tools: [
+				{ name: "get_me", mode: "read" },
+				{ name: "a", mode: "write", otp: true },
+				{ name: "b", mode: "write", otp: false }
+			]
+		};
 		const loaded = loadConfig(writeConfig(raw));
 		expect(parseConfigLib(raw).tools).toEqual(loaded.tools);
 	});
@@ -130,26 +143,102 @@ describe("parseConfigLib — same error texts as loadConfig", () => {
 		["tools empty", { tools: [], owners: { c: { read: "cred:r", write: "cred:w" } } }],
 		["tool with no name", { tools: [{ mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } } }],
 		["bad tool mode", { tools: [{ name: "get_me", mode: "admin" }], owners: { c: { read: "cred:r", write: "cred:w" } } }],
-		["duplicate tool", { tools: [{ name: "get_me", mode: "read" }, { name: "get_me", mode: "write" }], owners: { c: { read: "cred:r", write: "cred:w" } } }],
+		[
+			"duplicate tool",
+			{
+				tools: [
+					{ name: "get_me", mode: "read" },
+					{ name: "get_me", mode: "write" }
+				],
+				owners: { c: { read: "cred:r", write: "cred:w" } }
+			}
+		],
 		["denylisted tool", { tools: [{ name: "push_files", mode: "write", otp: true }], owners: { c: { read: "cred:r", write: "cred:w" } } }],
-		["custom and augment", { tools: [{ name: "weird", mode: "read", custom: true, augment: true }], owners: { c: { read: "cred:r", write: "cred:w" } } }],
+		[
+			"custom and augment",
+			{ tools: [{ name: "weird", mode: "read", custom: true, augment: true }], owners: { c: { read: "cred:r", write: "cred:w" } } }
+		],
 		["non-boolean otp flag", { tools: [{ name: "a", mode: "write", otp: "yes" }], owners: { c: { read: "cred:r", write: "cred:w" } } }],
-		["gated otp_status", { tools: [{ name: "otp_status", mode: "read", custom: true, otp: true }], owners: { c: { read: "cred:r", write: "cred:w" } } }],
+		[
+			"gated otp_status",
+			{ tools: [{ name: "otp_status", mode: "read", custom: true, otp: true }], owners: { c: { read: "cred:r", write: "cred:w" } } }
+		],
 		["owners not an object", { tools: [{ name: "get_me", mode: "read" }], owners: "cldmv" }],
 		["owner missing write", { tools: [{ name: "get_me", mode: "read" }], owners: { cldmv: { read: "cred:x" } } }],
-		["bad installationId", { tools: [{ name: "get_me", mode: "read" }], owners: { cldmv: { read: "cred:r", write: "cred:w", installationId: "42" } } }],
+		[
+			"bad installationId",
+			{ tools: [{ name: "get_me", mode: "read" }], owners: { cldmv: { read: "cred:r", write: "cred:w", installationId: "42" } } }
+		],
 		["empty owners", { tools: [{ name: "get_me", mode: "read" }], owners: {} }],
-		["empty defaultOwner", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, defaultOwner: "" }],
-		["unknown defaultOwner", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, defaultOwner: "nobody" }],
-		["bad appId", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, app: { appId: "1", privateKey: "cred:app" } }],
-		["bad privateKey", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, app: { appId: 1, privateKey: 5 } }],
+		[
+			"empty defaultOwner",
+			{ tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, defaultOwner: "" }
+		],
+		[
+			"unknown defaultOwner",
+			{ tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, defaultOwner: "nobody" }
+		],
+		[
+			"bad appId",
+			{
+				tools: [{ name: "get_me", mode: "read" }],
+				owners: { c: { read: "cred:r", write: "cred:w" } },
+				app: { appId: "1", privateKey: "cred:app" }
+			}
+		],
+		[
+			"bad privateKey",
+			{ tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, app: { appId: 1, privateKey: 5 } }
+		],
 		["npm not an object", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, npm: [] }],
-		["npm inline token", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, npm: { token: "npm_inline_secret", scopes: ["@cldmv"] } }],
-		["npm empty scopes", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, npm: { token: "cred:npm-token", scopes: [] } }],
-		["npm uppercase scope", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, npm: { token: "cred:npm-token", scopes: ["@CLDMV"] } }],
-		["npm http registry", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "http://registry.npmjs.org" } }],
-		["npm bad tokenOrgs", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, npm: { token: "cred:npm-token", scopes: ["@cldmv"], tokenOrgs: ["@cldmv"] } }],
-		["ghcr dropDir under /etc", { tools: [{ name: "get_me", mode: "read" }], owners: { c: { read: "cred:r", write: "cred:w" } }, ghcr: { dropDir: "/etc/x/y", owners: { c: { username: "u", credential: "cred:c", images: ["i"] } } } }]
+		[
+			"npm inline token",
+			{
+				tools: [{ name: "get_me", mode: "read" }],
+				owners: { c: { read: "cred:r", write: "cred:w" } },
+				npm: { token: "npm_inline_secret", scopes: ["@cldmv"] }
+			}
+		],
+		[
+			"npm empty scopes",
+			{
+				tools: [{ name: "get_me", mode: "read" }],
+				owners: { c: { read: "cred:r", write: "cred:w" } },
+				npm: { token: "cred:npm-token", scopes: [] }
+			}
+		],
+		[
+			"npm uppercase scope",
+			{
+				tools: [{ name: "get_me", mode: "read" }],
+				owners: { c: { read: "cred:r", write: "cred:w" } },
+				npm: { token: "cred:npm-token", scopes: ["@CLDMV"] }
+			}
+		],
+		[
+			"npm http registry",
+			{
+				tools: [{ name: "get_me", mode: "read" }],
+				owners: { c: { read: "cred:r", write: "cred:w" } },
+				npm: { token: "cred:npm-token", scopes: ["@cldmv"], registry: "http://registry.npmjs.org" }
+			}
+		],
+		[
+			"npm bad tokenOrgs",
+			{
+				tools: [{ name: "get_me", mode: "read" }],
+				owners: { c: { read: "cred:r", write: "cred:w" } },
+				npm: { token: "cred:npm-token", scopes: ["@cldmv"], tokenOrgs: ["@cldmv"] }
+			}
+		],
+		[
+			"ghcr dropDir under /etc",
+			{
+				tools: [{ name: "get_me", mode: "read" }],
+				owners: { c: { read: "cred:r", write: "cred:w" } },
+				ghcr: { dropDir: "/etc/x/y", owners: { c: { username: "u", credential: "cred:c", images: ["i"] } } }
+			}
+		]
 	])("parses like loadConfig: %s", (_name, patch) => {
 		const raw = { ...baseConfig(), ...patch };
 		expect(libError(raw)).toBe(loadError(raw));

@@ -72,7 +72,13 @@ function looksRateLimited(err: Error, headers: Record<string, string> | undefine
 }
 
 /** Runs one octokit.request call, charging the budget and enforcing the rate-limit floor. */
-async function doRequest(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>, ignoreRateFloor = false): Promise<{ data: unknown }> {
+async function doRequest(
+	octokit: Octokit,
+	budget: CallBudget,
+	route: string,
+	params: Record<string, unknown>,
+	ignoreRateFloor = false
+): Promise<{ data: unknown }> {
 	budget.spend();
 	try {
 		const res = await octokit.request(route, params);
@@ -81,7 +87,9 @@ async function doRequest(octokit: Octokit, budget: CallBudget, route: string, pa
 		if (remainingHeader !== undefined && !ignoreRateFloor) {
 			const remaining = Number(remainingHeader);
 			const limit = Number(headers?.["x-ratelimit-limit"]);
-			const floor = Number.isFinite(limit) ? Math.max(RATE_LIMIT_FLOOR_MIN, Math.ceil(limit * RATE_LIMIT_FLOOR_RATIO)) : RATE_LIMIT_FLOOR_MIN;
+			const floor = Number.isFinite(limit)
+				? Math.max(RATE_LIMIT_FLOOR_MIN, Math.ceil(limit * RATE_LIMIT_FLOOR_RATIO))
+				: RATE_LIMIT_FLOOR_MIN;
 			if (remaining <= floor) throw new RateLimited();
 		}
 		return res;
@@ -157,7 +165,13 @@ export async function paginate<T>(
  * Dependabot's alert endpoints. Follows the `rel="next"` cursor in the Link header and
  * stops at the last page or once `limit` items are collected.
  */
-export async function paginateAfter<T>(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>, limit: number): Promise<T[]> {
+export async function paginateAfter<T>(
+	octokit: Octokit,
+	budget: CallBudget,
+	route: string,
+	params: Record<string, unknown>,
+	limit: number
+): Promise<T[]> {
 	const out: T[] = [];
 	let after: string | undefined;
 	while (out.length < limit) {

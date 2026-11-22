@@ -113,21 +113,21 @@ Settings are layered, lowest precedence first:
 
 A scalar is replaced by a higher layer. `owners` and `ghcr.owners` are merged per owner, so adding an owner never drops the deployed ones. `tools` always comes from the example: the allowlist is a security control, so a `--config` file that contains `tools` is refused. The `--config` file is JSON in the deployed config's shape, holds only `cred:` references (a value shaped like a token is refused), and the merged result is validated by the real loader before anything is deployed. An upgrade run with no config flags keeps the deployed owners, `ghcr` and everything else as they are.
 
-| Flag | Sets |
-|---|---|
-| `--config <file>` | JSON config file merged on top of the deployed config |
-| `--owner <org>` (repeatable) | `owners.<org>` = `cred:<org>-read` / `cred:<org>-write` |
-| `--installation-id <org>=<id>` (repeatable) | `owners.<org>.installationId` |
-| `--default-owner <org>` | `defaultOwner` (a first install with a single owner defaults to it) |
-| `--listen <unix:path>` | `listen` |
-| `--upstream <url>` | `upstream` |
-| `--app-id <n>`, `--app-private-key <cred-name>` | `app.appId`, `app.privateKey` (`cred:gh-app-key` unless named) |
-| `--secrets-provider <p>`, `--secrets-path <path>` | `secrets.provider`, `secrets.path` (path is for the `file` provider) |
-| `--npm`, `--npm-scope`, `--npm-org`, `--npm-registry <url>`, `--npm-token-days` | the `npm` block, see [npm integration](#npm-integration-npm_scaffold) |
-| `--ghcr-owner <org>`, `--ghcr-username <login>`, `--ghcr-image <glob>` (repeatable) | `ghcr.owners.<org>`; the credential is `cred:<org>-packages` |
-| `--ghcr-drop-dir <path>` | `ghcr.dropDir` (default `/srv/gh-broker/ghcr-drop`) |
-| `--ghcr-max-archive-bytes <n>` | `ghcr.maxArchiveBytes` |
-| `--protect-release-tags`, `--no-protect-release-tags` | `ghcr.protectReleaseTags` |
+| Flag                                                                                | Sets                                                                  |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `--config <file>`                                                                   | JSON config file merged on top of the deployed config                 |
+| `--owner <org>` (repeatable)                                                        | `owners.<org>` = `cred:<org>-read` / `cred:<org>-write`               |
+| `--installation-id <org>=<id>` (repeatable)                                         | `owners.<org>.installationId`                                         |
+| `--default-owner <org>`                                                             | `defaultOwner` (a first install with a single owner defaults to it)   |
+| `--listen <unix:path>`                                                              | `listen`                                                              |
+| `--upstream <url>`                                                                  | `upstream`                                                            |
+| `--app-id <n>`, `--app-private-key <cred-name>`                                     | `app.appId`, `app.privateKey` (`cred:gh-app-key` unless named)        |
+| `--secrets-provider <p>`, `--secrets-path <path>`                                   | `secrets.provider`, `secrets.path` (path is for the `file` provider)  |
+| `--npm`, `--npm-scope`, `--npm-org`, `--npm-registry <url>`, `--npm-token-days`     | the `npm` block, see [npm integration](#npm-integration-npm_scaffold) |
+| `--ghcr-owner <org>`, `--ghcr-username <login>`, `--ghcr-image <glob>` (repeatable) | `ghcr.owners.<org>`; the credential is `cred:<org>-packages`          |
+| `--ghcr-drop-dir <path>`                                                            | `ghcr.dropDir` (default `/srv/gh-broker/ghcr-drop`)                   |
+| `--ghcr-max-archive-bytes <n>`                                                      | `ghcr.maxArchiveBytes`                                                |
+| `--protect-release-tags`, `--no-protect-release-tags`                               | `ghcr.protectReleaseTags`                                             |
 
 Flags that build a single GHCR owner do so for one owner per run; use `--config` for several, or for a credential name other than the derived one.
 

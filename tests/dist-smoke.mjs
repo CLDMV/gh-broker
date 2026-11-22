@@ -40,12 +40,14 @@ try {
 	// esbuild only emits its "Dynamic require of ... is not supported" shim when the bundle
 	// still holds a require() it couldn't resolve, which throws in an ES module. qrcode was
 	// one (#208); the daemon has no business carrying any.
-	if (readFileSync(join(root, "dist", "index.mjs"), "utf8").includes("Dynamic require of")) throw new Error("dist/index.mjs still contains a dynamic require() of a CommonJS dependency");
+	if (readFileSync(join(root, "dist", "index.mjs"), "utf8").includes("Dynamic require of"))
+		throw new Error("dist/index.mjs still contains a dynamic require() of a CommonJS dependency");
 	rmSync(isolated, { recursive: true, force: true });
 	mkdirSync(isolated, { recursive: true });
 	cpSync(join(root, "dist"), join(isolated, "dist"), { recursive: true });
 	const paths = JSON.parse(run(join(isolated, "dist", "index.mjs"), ["--print-paths"]));
-	if (typeof paths.config !== "string" || typeof paths.secrets !== "string") throw new Error(`dist/index.mjs --print-paths printed ${JSON.stringify(paths)}`);
+	if (typeof paths.config !== "string" || typeof paths.secrets !== "string")
+		throw new Error(`dist/index.mjs --print-paths printed ${JSON.stringify(paths)}`);
 	run(join(root, "bin", "gh-broker.mjs"), ["--help"]);
 	// The library subpath (§6): dist/core/index.mjs keeps the package's dependencies
 	// external, so it only loads from the package root (the isolated copy above has no
@@ -57,10 +59,18 @@ try {
 		if (typeof core[name] !== "function") throw new Error(`dist/core/index.mjs is missing its public ${name} export`);
 	}
 	const broker = core.createBroker({ tools: [], owners: {} });
-	if (typeof broker.invoke !== "function" || typeof broker.run !== "function") throw new Error("createBroker did not return its invoke/run entry");
+	if (typeof broker.invoke !== "function" || typeof broker.run !== "function")
+		throw new Error("createBroker did not return its invoke/run entry");
 	// A CJS consumer's require() of the core entry reaches the same ESM module via
 	// require(esm) — the core has no top-level await, so the sync require works.
-	execFileSync(process.execPath, ["-e", `const m = require(${JSON.stringify(join(root, "dist", "core", "index.mjs"))}); if (typeof m.createBroker !== "function" || typeof m.InvokeError !== "function" || typeof m.perCallUpstream !== "function") throw new Error("require(esm) of dist/core/index.mjs is missing the public entry surface")`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	execFileSync(
+		process.execPath,
+		[
+			"-e",
+			`const m = require(${JSON.stringify(join(root, "dist", "core", "index.mjs"))}); if (typeof m.createBroker !== "function" || typeof m.InvokeError !== "function" || typeof m.perCallUpstream !== "function") throw new Error("require(esm) of dist/core/index.mjs is missing the public entry surface")`
+		],
+		{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+	);
 } catch (err) {
 	console.error(`dist smoke test failed: ${err.stderr || err.message}`);
 	process.exitCode = 1;

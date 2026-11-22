@@ -18,12 +18,22 @@ interface FakeRepo {
 	/** A workflow file exists, so the repo classifies as v4. */
 	v4?: boolean;
 	/** A `dev` branch: its files (read with ref `dev`), and the root versions the GraphQL listing returns. */
-	dev?: { files?: Record<string, unknown>; same?: boolean; truncated?: boolean; version?: string; defaultVersion?: string; manifestText?: string | null };
+	dev?: {
+		files?: Record<string, unknown>;
+		same?: boolean;
+		truncated?: boolean;
+		version?: string;
+		defaultVersion?: string;
+		manifestText?: string | null;
+	};
 	/** Listed by GraphQL but archived / a fork / without a default branch. */
 	gql?: Record<string, unknown>;
 }
 
-const blob = (version: string | undefined, text?: string | null) => ({ oid: "x", file: text !== undefined ? { object: { text } } : version === undefined ? null : { object: { text: JSON.stringify({ version }) } } });
+const blob = (version: string | undefined, text?: string | null) => ({
+	oid: "x",
+	file: text !== undefined ? { object: { text } } : version === undefined ? null : { object: { text: JSON.stringify({ version }) } }
+});
 
 /** The GraphQL dev-branch listing for `repos`, split into pages of `pageSize`. */
 function devNodes(repos: Record<string, FakeRepo>) {
@@ -45,15 +55,26 @@ function fakeGithub(hits: [string, string][], repos: Record<string, FakeRepo>, s
 	const request = vi.fn(async (route: string, p: any) => {
 		if (route === "GET /search/code") {
 			const items = hits.map(([repo, path]) => ({ path, repository: { name: repo, owner: { login: "CLDMV" } } }));
-			return { data: { total_count: items.length, incomplete_results: false, items, ...search }, headers: { "x-ratelimit-limit": "10", "x-ratelimit-remaining": "9" } };
+			return {
+				data: { total_count: items.length, incomplete_results: false, items, ...search },
+				headers: { "x-ratelimit-limit": "10", "x-ratelimit-remaining": "9" }
+			};
 		}
 		if (route === "POST /graphql") {
-			return { data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: devNodes(repos) } } } }, headers: {} };
+			return {
+				data: {
+					data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: devNodes(repos) } } }
+				},
+				headers: {}
+			};
 		}
 		const r = repos[p.repo];
 		if (!r || r.info === "gone") throw status(404);
 		if (route === "GET /repos/{owner}/{repo}/git/trees/{tree_sha}") {
-			const tree = [...Object.keys(r.dev?.files ?? {}), "node_modules/x/package.json", "src"].map((path) => ({ path, type: path === "src" ? "tree" : "blob" }));
+			const tree = [...Object.keys(r.dev?.files ?? {}), "node_modules/x/package.json", "src"].map((path) => ({
+				path,
+				type: path === "src" ? "tree" : "blob"
+			}));
 			return { data: { truncated: r.dev?.truncated ?? false, tree }, headers: {} };
 		}
 		if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "master", private: false, ...r.info }, headers: {} };
@@ -67,7 +88,8 @@ function fakeGithub(hits: [string, string][], repos: Record<string, FakeRepo>, s
 				throw status(404);
 			}
 			if (r.huge?.includes(p.path)) return { data: { size: 99_000_000 }, headers: {} };
-			if (r.big && p.path in r.big) return p.headers ? { data: r.big[p.path], headers: {} } : { data: { size: 2_000_000, content: "" }, headers: {} };
+			if (r.big && p.path in r.big)
+				return p.headers ? { data: r.big[p.path], headers: {} } : { data: { size: 2_000_000, content: "" }, headers: {} };
 			if (r.files && p.path in r.files) return file(r.files[p.path]);
 			throw status(404);
 		}
@@ -99,7 +121,10 @@ describe("reportDependents — discovery and verification", () => {
 			}
 		);
 		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME });
-		expect(gh.request.mock.calls[0]).toEqual(["GET /search/code", { q: `"${NAME}" org:CLDMV filename:package.json`, per_page: 100, page: 1 }]);
+		expect(gh.request.mock.calls[0]).toEqual([
+			"GET /search/code",
+			{ q: `"${NAME}" org:CLDMV filename:package.json`, per_page: 100, page: 1 }
+		]);
 		expect(out.scanned).toEqual({ candidates: 3, archived: 0, forks: 0, missing: 0, notDeclared: 1, devBranches: 0 });
 		expect(out.discovery).toMatchObject({ source: "code-search", devBranches: true });
 		expect(out.discovery.note).toMatch(/lags/);
@@ -172,7 +197,9 @@ describe("reportDependents — discovery and verification", () => {
 	});
 
 	it("treats a repo with no info.private flag as public", async () => {
-		const gh = fakeGithub([["p", "package.json"]], { p: { info: { private: undefined }, files: { "package.json": manifest({ dependencies: { [NAME]: "1" } }) } } });
+		const gh = fakeGithub([["p", "package.json"]], {
+			p: { info: { private: undefined }, files: { "package.json": manifest({ dependencies: { [NAME]: "1" } }) } }
+		});
 		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME, classify: false });
 		expect(out.dependents[0]!.private).toBe(false);
 	});
@@ -206,7 +233,16 @@ describe("reportDependents — discovery and verification", () => {
 	});
 
 	it("rethrows an unexpected error from reading the repo or a file", async () => {
-		const bad = { request: vi.fn(async (route: string) => (route === "GET /search/code" ? { data: { total_count: 1, incomplete_results: false, items: [{ path: "package.json", repository: { name: "a" } }] }, headers: {} } : Promise.reject(status(500)))) } as any;
+		const bad = {
+			request: vi.fn(async (route: string) =>
+				route === "GET /search/code"
+					? {
+							data: { total_count: 1, incomplete_results: false, items: [{ path: "package.json", repository: { name: "a" } }] },
+							headers: {}
+						}
+					: Promise.reject(status(500))
+			)
+		} as any;
 		await expect(reportDependents(bad, { owner: "CLDMV", name: NAME })).rejects.toMatchObject({ status: 500 });
 		const bad2 = fakeGithub([["a", "package.json"]], { a: { files: {} } });
 		const orig = bad2.request.getMockImplementation()!;
@@ -262,7 +298,12 @@ describe("reportDependents — lockfile resolution", () => {
 				["none", "package.json"]
 			],
 			{
-				v1: { files: { "package.json": manifest({ dependencies: { [NAME]: "1" } }), "package-lock.json": { dependencies: { [NAME]: { version: "1.1.1" } } } } },
+				v1: {
+					files: {
+						"package.json": manifest({ dependencies: { [NAME]: "1" } }),
+						"package-lock.json": { dependencies: { [NAME]: { version: "1.1.1" } } }
+					}
+				},
 				none: { files: { "package.json": manifest({ dependencies: { [NAME]: "1" } }), "package-lock.json": { packages: {} } } }
 			}
 		);
@@ -329,7 +370,12 @@ packages:
 		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME, classify: false });
 		const p = out.dependents[0]!;
 		expect(p.lockfile).toBe("pnpm-lock.yaml");
-		expect(p.declarations.map((d) => [d.path, d.resolved])).toEqual([["package.json", "1.4.2"], ["packages/app/package.json", "1.2.3"], ["packages/linked/package.json", undefined], ["packages/missing/package.json", undefined]]);
+		expect(p.declarations.map((d) => [d.path, d.resolved])).toEqual([
+			["package.json", "1.4.2"],
+			["packages/app/package.json", "1.2.3"],
+			["packages/linked/package.json", undefined],
+			["packages/missing/package.json", undefined]
+		]);
 	});
 
 	it("reads a lockfile the contents API leaves out (over 1 MB) through the raw media type", async () => {
@@ -363,7 +409,7 @@ packages:
 
 describe("reportDependents — latest", () => {
 	const fetchOf = (status: number, body: string) =>
-		vi.fn(async (_url: string, _init: unknown) => ({ status, headers: { get: () => null }, text: async () => body })) as any;
+		vi.fn(async () => ({ status, headers: { get: () => null }, text: async () => body })) as any;
 	const gh = () =>
 		fakeGithub(
 			[
@@ -371,8 +417,18 @@ describe("reportDependents — latest", () => {
 				["cur", "package.json"]
 			],
 			{
-				old: { files: { "package.json": manifest({ dependencies: { [NAME]: "^1" } }), "package-lock.json": { packages: { [`node_modules/${NAME}`]: { version: "1.4.0" } } } } },
-				cur: { files: { "package.json": manifest({ dependencies: { [NAME]: "^1" } }), "package-lock.json": { packages: { [`node_modules/${NAME}`]: { version: "1.5.0" } } } } }
+				old: {
+					files: {
+						"package.json": manifest({ dependencies: { [NAME]: "^1" } }),
+						"package-lock.json": { packages: { [`node_modules/${NAME}`]: { version: "1.4.0" } } }
+					}
+				},
+				cur: {
+					files: {
+						"package.json": manifest({ dependencies: { [NAME]: "^1" } }),
+						"package-lock.json": { packages: { [`node_modules/${NAME}`]: { version: "1.5.0" } } }
+					}
+				}
 			}
 		);
 
@@ -389,7 +445,11 @@ describe("reportDependents — latest", () => {
 
 	it("uses a custom registry and reports a failed lookup without failing the verb", async () => {
 		const fetch = fetchOf(500, '{"error":"boom"}');
-		const out = await reportDependents(gh(), { owner: "CLDMV", name: NAME, latest: true, classify: false }, { fetch, registry: "https://npm.example.test/" });
+		const out = await reportDependents(
+			gh(),
+			{ owner: "CLDMV", name: NAME, latest: true, classify: false },
+			{ fetch, registry: "https://npm.example.test/" }
+		);
 		expect(fetch.mock.calls[0]![0]).toBe("https://npm.example.test/@cldmv%2ffix-headers/latest");
 		expect(out.latestError).toMatch(/HTTP 500/);
 		expect(out).not.toHaveProperty("latest");
@@ -420,7 +480,8 @@ describe("isBehind", () => {
 });
 
 describe("latestVersion", () => {
-	const fetchOf = (status: number, body: string) => vi.fn(async () => ({ status, headers: { get: () => null }, text: async () => body })) as any;
+	const fetchOf = (status: number, body: string) =>
+		vi.fn(async () => ({ status, headers: { get: () => null }, text: async () => body })) as any;
 
 	it("reads the version from the registry's /latest document", async () => {
 		expect(await latestVersion("left-pad", { fetch: fetchOf(200, '{"version":"1.3.0"}') })).toBe("1.3.0");
@@ -539,7 +600,12 @@ describe("reportDependents — dev branches", () => {
 		const graphql = gh.request.mock.calls.find((c: unknown[]) => c[0] === "POST /graphql");
 		expect(graphql[1]).toMatchObject({ variables: { owner: "CLDMV", after: null, first: 25 } });
 		expect(graphql[1].query).toMatch(/refs\/heads\/dev/);
-		expect(gh.request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", { owner: "CLDMV", repo: "trunk", tree_sha: "dev", recursive: "1" });
+		expect(gh.request).toHaveBeenCalledWith("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
+			owner: "CLDMV",
+			repo: "trunk",
+			tree_sha: "dev",
+			recursive: "1"
+		});
 		expect(out.scanned.devBranches).toBe(1);
 		expect(out.dependents).toEqual([
 			{
@@ -552,7 +618,12 @@ describe("reportDependents — dev branches", () => {
 				lockfile: "package-lock.json",
 				declarations: [
 					{ path: "package.json", declared: [{ field: "devDependencies", range: "^1.5.0" }], resolved: "1.5.1" },
-					{ path: "packages/a/package.json", member: "packages/a", declared: [{ field: "devDependencies", range: "^1.4.0" }], resolved: "1.5.1" }
+					{
+						path: "packages/a/package.json",
+						member: "packages/a",
+						declared: [{ field: "devDependencies", range: "^1.4.0" }],
+						resolved: "1.5.1"
+					}
 				]
 			}
 		]);
@@ -569,7 +640,12 @@ describe("reportDependents — dev branches", () => {
 			["CLDMV/both", "dev"]
 		]);
 		expect(out.dependents[1]!.tier).toBe(out.dependents[0]!.tier);
-		expect(gh.request.mock.calls.filter((c: unknown[]) => c[0] === "GET /repos/{owner}/{repo}/contents/{path}" && (c[1] as any).path === ".github/workflows/next-release.yml")).toHaveLength(1);
+		expect(
+			gh.request.mock.calls.filter(
+				(c: unknown[]) =>
+					c[0] === "GET /repos/{owner}/{repo}/contents/{path}" && (c[1] as any).path === ".github/workflows/next-release.yml"
+			)
+		).toHaveLength(1);
 	});
 
 	it("sorts default-branch entries before dev ones across repos", async () => {
@@ -593,7 +669,13 @@ describe("reportDependents — dev branches", () => {
 		});
 		const out = await reportDependents(gh, { owner: "CLDMV", name: NAME, classify: false });
 		expect(out.abandonedDev).toEqual([{ repo: "CLDMV/old", devVersion: "1.2.0", defaultVersion: "1.10.0" }]);
-		expect(out.dependents.map((d) => d.repo).sort()).toEqual(["CLDMV/ahead", "CLDMV/badJson", "CLDMV/emptyText", "CLDMV/noVersion", "CLDMV/numeric"]);
+		expect(out.dependents.map((d) => d.repo).sort()).toEqual([
+			"CLDMV/ahead",
+			"CLDMV/badJson",
+			"CLDMV/emptyText",
+			"CLDMV/noVersion",
+			"CLDMV/numeric"
+		]);
 		expect(out.scanned.devBranches).toBe(5);
 	});
 
@@ -658,7 +740,10 @@ describe("reportDependents — dev branches", () => {
 			sizes.push(p.variables.first);
 			if (fails-- > 0) throw status(502);
 			const more = sizes.length < 4;
-			return { data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: more, endCursor: "c" }, nodes: [] } } } }, headers: {} };
+			return {
+				data: { data: { repositoryOwner: { repositories: { pageInfo: { hasNextPage: more, endCursor: "c" }, nodes: [] } } } },
+				headers: {}
+			};
 		});
 		const out = await reportDependents({ request } as any, { owner: "CLDMV", name: NAME });
 		expect(sizes).toEqual([25, 13, 7, 7]);
@@ -696,11 +781,17 @@ describe("reportDependents — dev branches", () => {
 
 	it("throws when the GraphQL listing returns errors or no owner", async () => {
 		const reply = (body: unknown) =>
-			vi.fn(async (route: string) => (route === "GET /search/code" ? { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} } : { data: body, headers: {} }));
-		await expect(reportDependents({ request: reply({ errors: [{ message: "boom" }, { message: "bang" }] }) } as any, { owner: "CLDMV", name: NAME })).rejects.toThrow(
-			/listing dev branches failed: boom; bang/
-		);
-		await expect(reportDependents({ request: reply({ data: { repositoryOwner: null } }) } as any, { owner: "nobody", name: NAME })).rejects.toThrow(/no owner "nobody"/);
+			vi.fn(async (route: string) =>
+				route === "GET /search/code"
+					? { data: { total_count: 0, incomplete_results: false, items: [] }, headers: {} }
+					: { data: body, headers: {} }
+			);
+		await expect(
+			reportDependents({ request: reply({ errors: [{ message: "boom" }, { message: "bang" }] }) } as any, { owner: "CLDMV", name: NAME })
+		).rejects.toThrow(/listing dev branches failed: boom; bang/);
+		await expect(
+			reportDependents({ request: reply({ data: { repositoryOwner: null } }) } as any, { owner: "nobody", name: NAME })
+		).rejects.toThrow(/no owner "nobody"/);
 	});
 });
 

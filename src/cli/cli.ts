@@ -49,7 +49,11 @@ Commands:
   otp unlock <user>|--all    clear an agent's lockout and hard lock (--all: everyone)
   otp rotate                 make a new OTP seed, store it, show it once, restart the service`;
 
-const COMMANDS: Record<string, string[]> = { otp: ["unlock", "status", "list", "rotate"], agent: ["add", "remove", "list", "sync", "reconnect"], upgrade: [] };
+const COMMANDS: Record<string, string[]> = {
+	otp: ["unlock", "status", "list", "rotate"],
+	agent: ["add", "remove", "list", "sync", "reconnect"],
+	upgrade: []
+};
 
 /**
  * @param argv  arguments after the program name, e.g. ["otp", "unlock", "repo"]

@@ -48,14 +48,7 @@ import { OtpRefusal, type AuditEntry, type Config, type OtpAudit, type OtpGate a
 import { OTP_ARG, isGated, otpSettings, readSeed, windowText, type OtpSettings } from "./policy.ts";
 import { isEnabled } from "../availability.ts";
 import { OtpStateFile, emptyUser, personOf, userState, type HardLock, type MachinePerson, type OtpState, type UserState } from "./state.ts";
-import {
-	lockStatus,
-	parseOtpOptions,
-	safeEqual,
-	stepOtp,
-	verifyCode,
-	STEP_SECONDS
-} from "@cldmv/lib-otp";
+import { lockStatus, parseOtpOptions, safeEqual, stepOtp, verifyCode, STEP_SECONDS } from "@cldmv/lib-otp";
 
 // The machine's vocabulary, derived from the package's function types (its index doesn't
 // re-export the type aliases itself).
@@ -254,7 +247,8 @@ export class OtpGate implements OtpGateSeam {
 		const locked = lockStatus(person, now);
 		if (locked !== "clear") throw this.lockRefusal(locked, person, user, now);
 
-		const unsavedRefusal = (): OtpRefusal => new OtpRefusal(`OTP could not be checked: the broker could not save its OTP state. Nothing was run.`, { otp: "refused" });
+		const unsavedRefusal = (): OtpRefusal =>
+			new OtpRefusal(`OTP could not be checked: the broker could not save its OTP state. Nothing was run.`, { otp: "refused" });
 		// A bad code this user sent couldn't be saved (disk full, say): check nothing more for them
 		// until the counters are on disk, so a restart can't hand out a fresh guess budget.
 		if (this.unsaved.has(user)) {
@@ -268,7 +262,10 @@ export class OtpGate implements OtpGateSeam {
 		}
 
 		const refusal = (): OtpRefusal =>
-			new OtpRefusal(`OTP required for ${tool}: ask the user for a current code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`, { otp: "refused" });
+			new OtpRefusal(
+				`OTP required for ${tool}: ask the user for a current code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
+				{ otp: "refused" }
+			);
 
 		if (code === undefined || code === null || code === "") throw refusal(); // a missing code is not a failure
 		// A client that sends the code as a JSON number (and so drops a leading zero) gets it back
@@ -300,13 +297,19 @@ export class OtpGate implements OtpGateSeam {
 		// otpSetupProblem/readSeed still gate the router path; this is the gate's own read.
 		const counter = verifyCode(this.secrets.resolve(this.config.otp!.seed).trim(), code, now, this.machine);
 		const id = createHmac("sha256", this.idKey).update(`${user}\0${code}`).digest("hex").slice(0, 16);
-		const { state: after, outcome } = stepOtp(person, counter === undefined ? { kind: "code-bad", now } : { kind: "code-ok", counter, windowId: id, now }, this.machine);
+		const { state: after, outcome } = stepOtp(
+			person,
+			counter === undefined ? { kind: "code-bad", now } : { kind: "code-ok", counter, windowId: id, now },
+			this.machine
+		);
 		switch (outcome?.reason) {
 			case "opened": {
 				// Persist the step before anything runs: if it can't be saved, a restart could let
 				// this code open a second window, so refuse instead.
 				try {
-					this.state.write(this.compact({ ...state, lastAcceptedStep: outcome.counter, users: { ...state.users, [user]: userRecord(after) } }, now));
+					this.state.write(
+						this.compact({ ...state, lastAcceptedStep: outcome.counter, users: { ...state.users, [user]: userRecord(after) } }, now)
+					);
 				} catch (err) {
 					console.error(`gh-broker: ${(err as Error).message}`);
 					throw unsavedRefusal();
@@ -350,16 +353,24 @@ export class OtpGate implements OtpGateSeam {
 	}
 
 	/** The refusal for a wrong code, saying how close `user` now is to a lockout. */
-	private rejection(tool: string, user: string, outcome: Extract<MachineOutcome, { reason: "bad-code" | "locked-out" | "hard-locked-now" }>): OtpRefusal {
+	private rejection(
+		tool: string,
+		user: string,
+		outcome: Extract<MachineOutcome, { reason: "bad-code" | "locked-out" | "hard-locked-now" }>
+	): OtpRefusal {
 		const lead = `OTP code for ${tool} was not accepted`;
 		if (outcome.reason === "hard-locked-now") {
-			return new OtpRefusal(`${lead}, and that was the last lockout allowed: gh-broker is now locked for ${user}. Ask the user to run "${unlockCommand(user)}" on ${this.host}. Nothing was run.`, {
-				otp: "refused"
-			});
+			return new OtpRefusal(
+				`${lead}, and that was the last lockout allowed: gh-broker is now locked for ${user}. Ask the user to run "${unlockCommand(user)}" on ${this.host}. Nothing was run.`,
+				{
+					otp: "refused"
+				}
+			);
 		}
 		const lockout = windowText(this.settings.lockoutSeconds);
 		// The machine resets the count to 0 exactly when this code started a short lockout.
-		if (outcome.reason === "locked-out") return new OtpRefusal(`${lead}, and that was too many bad codes: OTP is locked for ${lockout}. Nothing was run.`, { otp: "refused" });
+		if (outcome.reason === "locked-out")
+			return new OtpRefusal(`${lead}, and that was too many bad codes: OTP is locked for ${lockout}. Nothing was run.`, { otp: "refused" });
 		return new OtpRefusal(
 			`${lead} (${outcome.failures} of ${this.settings.maxFailures} bad codes before a lockout of ${lockout}): ask the user for a fresh code from their authenticator app and pass it as "${OTP_ARG}". Nothing was run.`,
 			{ otp: "refused" }
@@ -400,7 +411,12 @@ export class OtpGate implements OtpGateSeam {
 				hardLock = mine.hardLock;
 				lockedUsers = Object.entries(read.state.users)
 					.filter(([, u]) => u.hardLock)
-					.map(([name, u]) => ({ user: name, since: u.hardLock!.since, lockouts: u.hardLock!.lockouts, unlockCommand: unlockCommand(name) }));
+					.map(([name, u]) => ({
+						user: name,
+						since: u.hardLock!.since,
+						lockouts: u.hardLock!.lockouts,
+						unlockCommand: unlockCommand(name)
+					}));
 			} else {
 				// An unusable file locks every user; the caller is the one we can name.
 				hardLock = { since: read.since, lockouts: 0 };

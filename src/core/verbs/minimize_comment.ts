@@ -65,26 +65,35 @@ const UNMINIMIZE = `
 /** The node id the mutation needs, looked up from a REST id when that's what was given. */
 async function nodeIdOf(octokit: Octokit, input: MinimizeCommentInput): Promise<string> {
 	if (input.commentId !== undefined) {
-		if (typeof input.commentId !== "string" || !input.commentId.trim()) throw new Error("minimize_comment: commentId must be a comment node id");
+		if (typeof input.commentId !== "string" || !input.commentId.trim())
+			throw new Error("minimize_comment: commentId must be a comment node id");
 		if (input.commentNumber !== undefined) throw new Error("minimize_comment: pass commentId or commentNumber, not both");
 		return input.commentId;
 	}
 	if (!Number.isSafeInteger(input.commentNumber) || (input.commentNumber as number) <= 0) {
 		throw new Error("minimize_comment: pass commentId (node id), or commentNumber (REST id) with type and repo");
 	}
-	if (input.type !== "issue" && input.type !== "review") throw new Error('minimize_comment: commentNumber needs type "issue" (issue or PR conversation comment) or "review" (PR review comment)');
+	if (input.type !== "issue" && input.type !== "review")
+		throw new Error(
+			'minimize_comment: commentNumber needs type "issue" (issue or PR conversation comment) or "review" (PR review comment)'
+		);
 	if (typeof input.repo !== "string" || !input.repo) throw new Error("minimize_comment: commentNumber needs repo");
-	const route = input.type === "issue" ? "GET /repos/{owner}/{repo}/issues/comments/{comment_id}" : "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}";
+	const route =
+		input.type === "issue"
+			? "GET /repos/{owner}/{repo}/issues/comments/{comment_id}"
+			: "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}";
 	const res = await octokit.request(route, { owner: input.owner, repo: input.repo, comment_id: input.commentNumber as number });
 	const nodeId = (res.data as { node_id?: unknown }).node_id;
-	if (typeof nodeId !== "string" || !nodeId) throw new Error(`minimize_comment: GitHub returned no node id for ${input.type} comment ${input.commentNumber}`);
+	if (typeof nodeId !== "string" || !nodeId)
+		throw new Error(`minimize_comment: GitHub returned no node id for ${input.type} comment ${input.commentNumber}`);
 	return nodeId;
 }
 
 export async function minimizeComment(octokit: Octokit, input: MinimizeCommentInput): Promise<MinimizeCommentResult> {
 	const classifier = input.classifier ?? "RESOLVED";
 	if (input.unhide === true && input.classifier !== undefined) throw new Error("minimize_comment: unhide takes no classifier");
-	if (!MINIMIZE_CLASSIFIERS.includes(classifier)) throw new Error(`minimize_comment: classifier must be one of ${MINIMIZE_CLASSIFIERS.join(", ")}`);
+	if (!MINIMIZE_CLASSIFIERS.includes(classifier))
+		throw new Error(`minimize_comment: classifier must be one of ${MINIMIZE_CLASSIFIERS.join(", ")}`);
 	const id = await nodeIdOf(octokit, input);
 	type Out = { isMinimized: boolean; minimizedReason: string | null };
 	if (input.unhide === true) {
@@ -111,7 +120,11 @@ export const MINIMIZE_COMMENT_SCHEMA = {
 		repo: { type: "string", description: "repository name (needed with commentNumber)" },
 		commentId: { type: "string", description: 'comment node id, e.g. "IC_…" or "PRRC_…"' },
 		commentNumber: { type: "number", description: "REST comment id, used with type and repo when the node id isn't at hand" },
-		type: { type: "string", enum: ["issue", "review"], description: "with commentNumber: issue (issue or PR conversation comment) or review (PR review comment)" },
+		type: {
+			type: "string",
+			enum: ["issue", "review"],
+			description: "with commentNumber: issue (issue or PR conversation comment) or review (PR review comment)"
+		},
 		classifier: { type: "string", enum: [...MINIMIZE_CLASSIFIERS], description: "why it's hidden (default RESOLVED)" },
 		unhide: { type: "boolean", description: "true shows a hidden comment again" }
 	}

@@ -137,12 +137,17 @@ function underRoot(file: string): string {
  */
 function isPureCoreShim(file: string): boolean {
 	const stripped = stripComments(readFileSync(file, "utf8"));
-	const lines = stripped.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+	const lines = stripped
+		.split("\n")
+		.map((l) => l.trim())
+		.filter((l) => l.length > 0);
 	if (lines.length === 0) return false;
 	for (const line of lines) {
 		const m = /^export\s+(?:\*(?:\s+as\s+\w+)?|\{[^}]*\}|type\s*\{[^}]*\})\s*from\s*["']([^"']+)["'];?$/.exec(line);
 		if (!m) return false;
-		const target = relative(root, resolve(dirname(file), m[1])).split(sep).join("/");
+		const target = relative(root, resolve(dirname(file), m[1]))
+			.split(sep)
+			.join("/");
 		if (!target.startsWith("src/core/")) return false;
 	}
 	return true;
@@ -152,7 +157,10 @@ function isPureCoreShim(file: string): boolean {
 function resolveRelative(fromFile: string, spec: string): string {
 	let target = underRoot(resolve(dirname(fromFile), spec));
 	while (!target.startsWith("src/core/") && isPureCoreShim(join(root, target))) {
-		const first = stripComments(readFileSync(join(root, target), "utf8")).split("\n").map((l) => l.trim()).find((l) => l.length > 0)!;
+		const first = stripComments(readFileSync(join(root, target), "utf8"))
+			.split("\n")
+			.map((l) => l.trim())
+			.find((l) => l.length > 0)!;
 		const spec2 = /from\s*["']([^"']+)["']/.exec(first)![1];
 		target = underRoot(resolve(dirname(join(root, target)), spec2));
 	}
@@ -166,7 +174,18 @@ describe("the src/core library boundary", () => {
 		// A guard against glob rot: if src/core/ ever empties, the boundary test must fail
 		// loudly rather than pass vacuously. The slice-4b move carries ~35 files.
 		expect(files.length).toBeGreaterThanOrEqual(30);
-		for (const name of ["types.ts", "config.ts", "manifest.ts", "catalog.ts", "availability.ts", "denylist.ts", "otp-policy.ts", "agents.ts", "router-core.ts", "index.ts"]) {
+		for (const name of [
+			"types.ts",
+			"config.ts",
+			"manifest.ts",
+			"catalog.ts",
+			"availability.ts",
+			"denylist.ts",
+			"otp-policy.ts",
+			"agents.ts",
+			"router-core.ts",
+			"index.ts"
+		]) {
 			expect(files, name).toContain(join(coreDir, name));
 		}
 	});
@@ -189,7 +208,9 @@ describe("the src/core library boundary", () => {
 				// "@octokit/core" resolve to their package name first.
 				const pkgName = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
 				if (allowedNpm.has(pkgName)) continue;
-				violations.push(`${underCore}: import "${spec}" is not a declared runtime dependency (dependencies: ${[...allowedNpm].join(", ")})`);
+				violations.push(
+					`${underCore}: import "${spec}" is not a declared runtime dependency (dependencies: ${[...allowedNpm].join(", ")})`
+				);
 			}
 		}
 		expect(violations).toEqual([]);

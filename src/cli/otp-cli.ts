@@ -23,7 +23,23 @@ import type { ConfigLayer } from "./config-merge.ts";
 import type { Group } from "./agents.ts";
 import type { StateReading } from "./otp.ts";
 import { parseOtpOptions, stepOtp } from "@cldmv/lib-otp";
-import { DEFAULT_STATE_PATH, DEFAULT_MAX_FAILURES, DEFAULT_MAX_LOCKOUTS, describeUsers, emptyState, formatStatus, generateSeed, personOf, secondsUntilFreshCode, seedCredName, showSeed, spendRecentCodes, userOf, withoutUser, withoutUsers } from "./otp.ts";
+import {
+	DEFAULT_STATE_PATH,
+	DEFAULT_MAX_FAILURES,
+	DEFAULT_MAX_LOCKOUTS,
+	describeUsers,
+	emptyState,
+	formatStatus,
+	generateSeed,
+	personOf,
+	secondsUntilFreshCode,
+	seedCredName,
+	showSeed,
+	spendRecentCodes,
+	userOf,
+	withoutUser,
+	withoutUsers
+} from "./otp.ts";
 import { assertAgentName, registeredAgents, versionWarning } from "./agents.ts";
 
 /**
@@ -56,7 +72,10 @@ export interface OtpDeps {
 }
 
 export const statePathOf = (config: ConfigLayer): string => config.otp?.statePath ?? DEFAULT_STATE_PATH;
-export const limitsOf = (config: ConfigLayer): { maxFailures: number; maxLockouts: number } => ({ maxFailures: config.otp?.maxFailures ?? DEFAULT_MAX_FAILURES, maxLockouts: config.otp?.maxLockouts ?? DEFAULT_MAX_LOCKOUTS });
+export const limitsOf = (config: ConfigLayer): { maxFailures: number; maxLockouts: number } => ({
+	maxFailures: config.otp?.maxFailures ?? DEFAULT_MAX_FAILURES,
+	maxLockouts: config.otp?.maxLockouts ?? DEFAULT_MAX_LOCKOUTS
+});
 
 /** Run one `otp` subcommand. Returns the exit code; throws on a failure the dispatcher reports. */
 export async function otpCommand(command: string, rest: string[], config: ConfigLayer, d: OtpDeps): Promise<number> {
@@ -75,7 +94,13 @@ function status(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 	const configured = seedCredName(config) !== undefined;
 	const warn = versionWarning(d.versions().pkg, d.versions().deployed);
 	if (rest.includes("--json")) {
-		d.log(JSON.stringify({ configured, statePath, fileStatus: read.status, users, unlockCommand: "sudo gh-broker otp unlock <user>" }, null, "\t"));
+		d.log(
+			JSON.stringify(
+				{ configured, statePath, fileStatus: read.status, users, unlockCommand: "sudo gh-broker otp unlock <user>" },
+				null,
+				"\t"
+			)
+		);
 	} else {
 		for (const line of formatStatus(users, { statePath, fileStatus: read.status, configured })) d.log(line);
 	}
@@ -90,14 +115,24 @@ function list(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 	const known = registeredAgents(d.groups()).map((a) => a.user);
 	const locked = describeUsers(read, known, limitsOf(config), d.now())
 		.filter((u) => u.locked)
-		.map((u) => ({ user: u.user, corrupt: Boolean(u.corrupt), hardLock: u.hardLock, lockedUntil: u.lockedUntil, unlockCommand: u.corrupt ? "sudo gh-broker otp unlock --all" : `sudo gh-broker otp unlock ${u.user}` }));
+		.map((u) => ({
+			user: u.user,
+			corrupt: Boolean(u.corrupt),
+			hardLock: u.hardLock,
+			lockedUntil: u.lockedUntil,
+			unlockCommand: u.corrupt ? "sudo gh-broker otp unlock --all" : `sudo gh-broker otp unlock ${u.user}`
+		}));
 	if (rest.includes("--json")) {
 		d.log(JSON.stringify({ statePath, fileStatus: read.status, locked }, null, "\t"));
 		return 0;
 	}
 	if (locked.length === 0) d.log("nobody is locked out");
 	for (const u of locked) {
-		const why = u.corrupt ? `locked: ${statePath} is corrupt` : u.hardLock ? `hard-locked since ${u.hardLock.since} after ${u.hardLock.lockouts} lockouts` : `locked until ${u.lockedUntil}`;
+		const why = u.corrupt
+			? `locked: ${statePath} is corrupt`
+			: u.hardLock
+				? `hard-locked since ${u.hardLock.since} after ${u.hardLock.lockouts} lockouts`
+				: `locked until ${u.lockedUntil}`;
 		d.log(`${u.user}  ${why}  unlock: ${u.unlockCommand}`);
 	}
 	return 0;
@@ -106,14 +141,21 @@ function list(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 /** Record an unlock in the journal next to the daemon's audit log (never fatal). */
 function auditUnlock(d: OtpDeps, user: string, detail?: string): void {
 	try {
-		d.audit({ ts: new Date(d.now()).toISOString(), decision: "otp-unlock", user, by: d.sudoUser() || "root", ...(detail ? { detail } : {}) });
+		d.audit({
+			ts: new Date(d.now()).toISOString(),
+			decision: "otp-unlock",
+			user,
+			by: d.sudoUser() || "root",
+			...(detail ? { detail } : {})
+		});
 	} catch (err) {
 		d.error(`warning: the unlock could not be written to the journal: ${(err as Error).message}`);
 	}
 }
 
 /** What to tell the operator after a write that spent the recent codes (a code that is refused counts as a bad one). */
-const afterUnlock = (now: number): string => `The code the authenticator shows now won't work, nor the one after it: wait ${secondsUntilFreshCode(now)} s for a fresh code.`;
+const afterUnlock = (now: number): string =>
+	`The code the authenticator shows now won't work, nor the one after it: wait ${secondsUntilFreshCode(now)} s for a fresh code.`;
 
 function unlock(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 	const all = rest.includes("--all");
@@ -128,7 +170,8 @@ function unlock(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 	}
 	const now = d.now();
 	if (read.status === "corrupt") {
-		if (!all) throw new Error(`${statePath} is corrupt, so every user is locked; run "sudo gh-broker otp unlock --all" to rewrite it clean`);
+		if (!all)
+			throw new Error(`${statePath} is corrupt, so every user is locked; run "sudo gh-broker otp unlock --all" to rewrite it clean`);
 		// The old lastAcceptedStep can't be read back, so spend everything up to now instead.
 		d.writeState(statePath, spendRecentCodes(emptyState(), now));
 		auditUnlock(d, "*", "rewrote a corrupt state file");
@@ -150,7 +193,11 @@ function unlock(config: ConfigLayer, rest: string[], d: OtpDeps): number {
 	// is spent below, which is the spend that matters across users). Today's outcome keys off the
 	// entry's existence rather than the record's emptiness, so a machine "no-entry" for an
 	// all-zero entry still clears it.
-	const { outcome } = stepOtp(personOf(userOf(read.state, user!)), { kind: "admin-unlock", by: d.sudoUser() || "root", now }, UNLOCK_MACHINE);
+	const { outcome } = stepOtp(
+		personOf(userOf(read.state, user!)),
+		{ kind: "admin-unlock", by: d.sudoUser() || "root", now },
+		UNLOCK_MACHINE
+	);
 	const result = outcome?.reason === "unlocked" ? `unlocked ${user}` : `cleared ${user}'s counters (not hard-locked)`;
 	d.writeState(statePath, spendRecentCodes(withoutUser(read.state, user!), now));
 	auditUnlock(d, user!);
@@ -168,7 +215,10 @@ async function rotate(config: ConfigLayer, d: OtpDeps): Promise<number> {
 	try {
 		d.storeSeed(config, name, seed);
 	} catch (err) {
-		throw new Error(`storing the new seed failed (${(err as Error).message}); the key above is not in use and the old seed is still the stored one. Nothing was restarted; run "sudo gh-broker otp rotate" again`);
+		throw new Error(
+			`storing the new seed failed (${(err as Error).message}); the key above is not in use and the old seed is still the stored one. Nothing was restarted; run "sudo gh-broker otp rotate" again`,
+			{ cause: err }
+		);
 	}
 	d.restart();
 	d.log("service restarted. The old authenticator entry no longer works; remove it from your app.");

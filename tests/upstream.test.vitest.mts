@@ -63,7 +63,9 @@ describe("UpstreamPool", () => {
 	});
 
 	it("evicts the stale client and retries ONCE on a failed op", async () => {
-		callToolMock.mockRejectedValueOnce(new Error("invalid session")).mockResolvedValueOnce({ content: [{ type: "text", text: "recovered" }] });
+		callToolMock
+			.mockRejectedValueOnce(new Error("invalid session"))
+			.mockResolvedValueOnce({ content: [{ type: "text", text: "recovered" }] });
 		const pool = new UpstreamPool(config);
 		const out = await pool.forward("get_me", {}, "TOK");
 

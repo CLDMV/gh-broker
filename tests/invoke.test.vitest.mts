@@ -96,11 +96,15 @@ describe("invoke — the policy gate (strict by default, design #175 §2h)", () 
 
 	it("refuses a default-off tool unless the rule enables it", async () => {
 		const { invoke } = createBroker(makeConfig());
-		await expect(invoke("create_pull_request_with_copilot", { owner: "cldmv", repo: "x", problem_statement: "p" }, mkCtx({ upstream }))).rejects.toMatchObject({
+		await expect(
+			invoke("create_pull_request_with_copilot", { owner: "cldmv", repo: "x", problem_statement: "p" }, mkCtx({ upstream }))
+		).rejects.toMatchObject({
 			code: "unknown-tool"
 		});
 		const enabled = createBroker(
-			makeConfig({ tools: [...makeConfig().tools.slice(0, -1), { name: "create_pull_request_with_copilot", mode: "write", enabled: true }] })
+			makeConfig({
+				tools: [...makeConfig().tools.slice(0, -1), { name: "create_pull_request_with_copilot", mode: "write", enabled: true }]
+			})
 		);
 		await enabled.invoke("create_pull_request_with_copilot", { owner: "cldmv", repo: "x", problem_statement: "p" }, mkCtx({ upstream }));
 		expect(upstream.forward).toHaveBeenCalledTimes(1);
@@ -131,14 +135,28 @@ describe("invoke — the approve seam (round-3 M5)", () => {
 		const ctx = mkCtx({ upstream });
 		await invoke("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "123456" }, ctx);
 		expect(ctx.approve).toHaveBeenCalledTimes(1);
-		expect(ctx.approve).toHaveBeenCalledWith("merge_pull_request", "tester", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "123456" }, ctx.signal);
-		expect(upstream.forward).toHaveBeenCalledWith("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1 }, "token:cldmv:write", ctx.signal);
+		expect(ctx.approve).toHaveBeenCalledWith(
+			"merge_pull_request",
+			"tester",
+			{ owner: "cldmv", repo: "x", pullNumber: 1, otp: "123456" },
+			ctx.signal
+		);
+		expect(upstream.forward).toHaveBeenCalledWith(
+			"merge_pull_request",
+			{ owner: "cldmv", repo: "x", pullNumber: 1 },
+			"token:cldmv:write",
+			ctx.signal
+		);
 	});
 
 	it("an approve refusal is the typed refusal, verbatim; the sink sees a code-bad only when the verdict says so", async () => {
 		const { invoke } = createBroker(makeConfig());
 		const security = vi.fn();
-		const ctx = mkCtx({ upstream, audit: { security }, approve: vi.fn(async () => ({ code: "otp-bad", message: "that code was not accepted" })) });
+		const ctx = mkCtx({
+			upstream,
+			audit: { security },
+			approve: vi.fn(async () => ({ code: "otp-bad", message: "that code was not accepted" }))
+		});
 		await expect(invoke("merge_pull_request", { owner: "cldmv", repo: "x", otp: "000000" }, ctx)).rejects.toSatisfy((err: unknown) => {
 			expect(err).toBeInstanceOf(InvokeError);
 			expect((err as InvokeError).code).toBe("otp-bad");
@@ -154,8 +172,14 @@ describe("invoke — the approve seam (round-3 M5)", () => {
 	it("an approve refusal carrying badCode reaches the security sink as code-bad", async () => {
 		const { invoke } = createBroker(makeConfig());
 		const security = vi.fn();
-		const ctx = mkCtx({ upstream, audit: { security }, approve: vi.fn(async () => ({ code: "otp-bad", message: "that code was not accepted", badCode: true })) });
-		await expect(invoke("merge_pull_request", { owner: "cldmv", repo: "x", otp: "000000" }, ctx)).rejects.toMatchObject({ code: "otp-bad" });
+		const ctx = mkCtx({
+			upstream,
+			audit: { security },
+			approve: vi.fn(async () => ({ code: "otp-bad", message: "that code was not accepted", badCode: true }))
+		});
+		await expect(invoke("merge_pull_request", { owner: "cldmv", repo: "x", otp: "000000" }, ctx)).rejects.toMatchObject({
+			code: "otp-bad"
+		});
 		expect(security).toHaveBeenCalledWith({ kind: "code-bad", tool: "merge_pull_request", person: "tester", failures: 0 });
 	});
 
@@ -193,8 +217,20 @@ describe("invoke — tokens and owners", () => {
 		await invoke("issue_write", { owner: "CLDMV", repo: "x", title: "t" }, mkCtx({ upstream }));
 		await invoke("pull_request_read", { owner: "CLDMV", repo: "x", pullNumber: 1 }, mkCtx({ upstream }));
 		// invoke always carries the call's signal (the ctx signal, or combined with timeoutMs)
-		expect(upstream.forward).toHaveBeenNthCalledWith(1, "issue_write", { owner: "CLDMV", repo: "x", title: "t" }, "token:cldmv:write", expect.any(AbortSignal));
-		expect(upstream.forward).toHaveBeenNthCalledWith(2, "pull_request_read", { owner: "CLDMV", repo: "x", pullNumber: 1 }, "token:cldmv:read", expect.any(AbortSignal));
+		expect(upstream.forward).toHaveBeenNthCalledWith(
+			1,
+			"issue_write",
+			{ owner: "CLDMV", repo: "x", title: "t" },
+			"token:cldmv:write",
+			expect.any(AbortSignal)
+		);
+		expect(upstream.forward).toHaveBeenNthCalledWith(
+			2,
+			"pull_request_read",
+			{ owner: "CLDMV", repo: "x", pullNumber: 1 },
+			"token:cldmv:read",
+			expect.any(AbortSignal)
+		);
 	});
 
 	it("an owner-less read falls back to defaultOwner's READ PAT; a write never falls back", async () => {
@@ -303,9 +339,18 @@ describe("run — the driver adapter (design #175 §2b, the rummage run shape)",
 	it("an op-mcp request delegates to invoke: same policy gate, same typed refusals, same envelope", async () => {
 		const { run } = createBroker(makeConfig());
 		const out = await run({ op: "mcp", target: "pull_request_read" } as DriverRequest, { owner: "cldmv" }, mkCtx({ upstream }));
-		expect(out).toEqual({ tool: "pull_request_read", mode: "read", mcpTarget: "pull_request_read", result: { content: [{ type: "text", text: "ok" }] } });
+		expect(out).toEqual({
+			tool: "pull_request_read",
+			mode: "read",
+			mcpTarget: "pull_request_read",
+			result: { content: [{ type: "text", text: "ok" }] }
+		});
 		// the same code path: a gated tool needs approve through run too
-		const gated = await run({ op: "mcp", target: "merge_pull_request" } as DriverRequest, { owner: "cldmv", repo: "x" }, mkCtx({ upstream, approve: undefined })).catch((e: unknown) => e);
+		const gated = await run(
+			{ op: "mcp", target: "merge_pull_request" } as DriverRequest,
+			{ owner: "cldmv", repo: "x" },
+			mkCtx({ upstream, approve: undefined })
+		).catch((e: unknown) => e);
 		expect((gated as InvokeError).code).toBe("otp-required");
 	});
 
@@ -317,16 +362,28 @@ describe("run — the driver adapter (design #175 §2b, the rummage run shape)",
 			if (route.startsWith("POST /repos/{owner}/{repo}/issues/")) return { data: [{ name: "bug" }] };
 			throw new Error(`unexpected route ${route}`);
 		});
-		const out = await run({ op: "graphql", tool: "issue_labels" } as DriverRequest, { owner: "cldmv", repo: "x", issue_number: 1, add: ["bug"] }, mkCtx({ upstream }));
+		const out = await run(
+			{ op: "graphql", tool: "issue_labels" } as DriverRequest,
+			{ owner: "cldmv", repo: "x", issue_number: 1, add: ["bug"] },
+			mkCtx({ upstream })
+		);
 		expect(out.tool).toBe("issue_labels");
 		expect(out.mcpTarget).toBeUndefined();
-		await expect(run({ op: "rest", tool: "issue_labels" } as DriverRequest, { owner: "cldmv", repo: "x", issue_number: 1, add: ["bug"] }, mkCtx({ upstream }))).resolves.toMatchObject({ tool: "issue_labels" });
+		await expect(
+			run(
+				{ op: "rest", tool: "issue_labels" } as DriverRequest,
+				{ owner: "cldmv", repo: "x", issue_number: 1, add: ["bug"] },
+				mkCtx({ upstream })
+			)
+		).resolves.toMatchObject({ tool: "issue_labels" });
 	});
 
 	it("a malformed request is a typed bad-request before anything runs", async () => {
 		const { run } = createBroker(makeConfig());
 		await expect(run({ op: "mcp" } as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({ code: "bad-request" });
-		await expect(run({ op: "graphql" } as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({ code: "bad-request" });
+		await expect(run({ op: "graphql" } as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({
+			code: "bad-request"
+		});
 		await expect(run({ op: "sse" } as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({ code: "bad-request" });
 		await expect(run(null as unknown as DriverRequest, {}, mkCtx({ upstream }))).rejects.toMatchObject({ code: "bad-request" });
 		expect(upstream.forward).not.toHaveBeenCalled();

