@@ -367,6 +367,32 @@ A `dev` that has fallen behind a release is abandoned, not a trunk: when its roo
 
 ---
 
+## `report_custom_properties`
+
+The custom property values set on one repo, or on every repo in an org. Use it to check what an org-wide property such as `branch-model` is set to. Read-only, `mode: "read"`, `custom: true`.
+
+```json
+{
+	"owner": "cldmv",
+	"property": "branch-model",
+	"value": "v4"
+}
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `owner` | string | — (required) | The org. Selects the read credential. |
+| `repo` | string | — | One repo (`GET /repos/{owner}/{repo}/properties/values`). Omit to list every repo in the org (`GET /orgs/{org}/properties/values`). |
+| `property` | string | — | Keep only repos where this property is set, and report only this property. |
+| `value` | string | — | Needs `property`. Keep only repos where the property has this value; for a multi-select property, where its values include it. |
+| `repositoryQuery` | string | — | Org listing only. Passed through as GitHub's `repository_query` (repo search syntax, e.g. `archived:false`). |
+| `maxRepos` | number | 1000 (hard cap 5000) | Org listing: stop after this many repos. |
+| `maxApiCalls` | number | 30 (hard cap 100) | Hard ceiling on REST calls. The org listing costs one call per 100 repos. |
+
+Returns `{ owner, repo?, repos: [{ repo, properties: { <name>: <value> } }], count }`. A value is a string, an array of strings (multi-select) or `null` (unset). `property` and `value` filter what GitHub returned. The org listing returns `truncated: true` with `truncatedReason` (`max-repos`, `max-api-calls`, `rate-limited`) instead of failing when a cap or the rate limit is hit.
+
+The read PAT needs **Custom properties: Read**: the repository permission for one repo, the organization permission for the org listing. A 403 says which one is missing. Custom properties only exist on org repos; the org listing for a user account fails with a message saying to pass `repo`.
+
 ## `report_release_prs`
 
 Every open release PR for an owner (or one repo), and whether each one's per-version changelog file is already on the release branch. Built for mass updates: it tells an agent which repos have a release waiting and which of those still need a changelog written. Read-only, `mode: "read"`, `custom: true`.
