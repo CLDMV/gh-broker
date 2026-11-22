@@ -360,12 +360,17 @@ describe("agent reconnect", () => {
 		expect(out).toContain(`repo ${SOCK} %2 github sent`);
 	});
 
-	it("lists a socket with no owning tmux process as skipped with the reason, without counting it", () => {
-		const dead = [{ socket: "/tmp/tmux-1000/stale", why: "no server process for this socket" }];
-		const { d, out } = withPanes([pane("%1", IDLE)], {}, {}, "❯ \n", dead);
-		expect(reconnect(["repo"], config, d)).toBe(0);
-		expect(out).toContain("repo /tmp/tmux-1000/stale - skipped (no server process for this socket)");
-		expect(out[out.length - 1]).toBe("sent 1, skipped 0");
+	it("counts sockets with no owning tmux process on one line, without counting them as skipped", () => {
+		const one = [{ socket: "/tmp/tmux-1000/stale", why: "no server process for this socket" }];
+		const a = withPanes([pane("%1", IDLE)], {}, {}, "❯ \n", one);
+		expect(reconnect(["repo"], config, a.d)).toBe(0);
+		expect(a.out).toContain("repo: 1 stale tmux socket ignored (no tmux server running on it)");
+		expect(a.out.some((l) => l.includes("/tmp/tmux-1000/stale"))).toBe(false);
+		expect(a.out[a.out.length - 1]).toBe("sent 1, skipped 0");
+		const two = [...one, { socket: "/tmp/tmux-1000/x", why: "no server process for this socket" }];
+		const b = withPanes([pane("%1", IDLE)], {}, {}, "❯ \n", two);
+		expect(reconnect(["repo"], config, b.d)).toBe(0);
+		expect(b.out).toContain("repo: 2 stale tmux sockets ignored (no tmux server running on them)");
 	});
 
 	it("a tmux server that doesn't answer in time is skipped, and the next server carries on", () => {

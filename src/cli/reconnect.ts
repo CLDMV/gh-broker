@@ -219,7 +219,8 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		const keys = keysOf(places, info, dir, d);
 		let panes = 0;
 		const { servers, skipped: deadSockets } = d.tmuxSockets(info);
-		for (const dead of deadSockets) d.log(`${user} ${clean(dead.socket)} - skipped (${dead.why})`);
+		// Socket files whose tmux server has exited are leftovers, not sessions: one count line, not one line each.
+		if (deadSockets.length) d.log(`${user}: ${deadSockets.length} stale tmux socket${deadSockets.length === 1 ? "" : "s"} ignored (no tmux server running on ${deadSockets.length === 1 ? "it" : "them"})`);
 		for (const server of servers) {
 			const socket = server.socket;
 			let panesOnServer: Pane[];
