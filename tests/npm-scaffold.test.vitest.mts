@@ -464,6 +464,7 @@ describe("npm_scaffold", () => {
 		expect(out.status).toBe("done");
 		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
 		expect(reg.calls.some((c) => c.url.endsWith("/trust"))).toBe(true);
+		expect(out.version).toBe("0.0.0-stage, 0.0.1-stage"); // what's on the registry, not the PLACEHOLDER_VERSION constant (#198)
 	});
 
 	it.each([
@@ -478,7 +479,7 @@ describe("npm_scaffold", () => {
 	it("goes to the trust step, never a second publish, when the package holds only npm's 0.0.0-stage", async () => {
 		const reg = fakeRegistry({ existing: { [PKG]: { name: PKG, versions: { [NPM_STAGE_PLACEHOLDER]: { name: PKG } } } } });
 		const out = await npmScaffold(args(), deps(fakeGitHub(), reg));
-		expect(out).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"] });
+		expect(out).toMatchObject({ status: "done", done: ["trust"], skipped: ["publish"], version: NPM_STAGE_PLACEHOLDER });
 		expect(reg.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
 	});
 
