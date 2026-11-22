@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:13-08:00 (1793974333)
+ *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -16,8 +16,8 @@
 
 /**
  * The `gh-broker` command (the package `bin`, built to bin/gh-broker.mjs): `gh-broker install`,
- * `gh-broker otp ...` and `gh-broker agent ...`. `install` is the installer (src/cli/install.ts);
- * the rest is src/cli/cli.ts with the real effects from src/cli/real-deps.ts.
+ * `gh-broker upgrade`, `gh-broker otp ...` and `gh-broker agent ...`. `install` is the installer
+ * (src/cli/install.ts); the rest is src/cli/cli.ts with the real effects from src/cli/real-deps.ts.
  */
 import { runCli } from "../cli/cli.ts";
 import { install } from "../cli/install.ts";
