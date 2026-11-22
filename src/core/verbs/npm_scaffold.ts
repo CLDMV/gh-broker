@@ -123,6 +123,7 @@ export interface NpmScaffoldResult {
 	remaining?: NpmScaffoldStep[];
 	/** Steps skipped because an earlier call already completed them. */
 	skipped?: NpmScaffoldStep[];
+	/** The placeholder version published; on a resumed call, the placeholder version(s) found on the registry, comma-separated. */
 	version: string;
 	url: string;
 	trustId?: string;
@@ -406,13 +407,17 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 		}
 	}
 
+	// A resumed call reports the placeholder version(s) actually on the registry (e.g.
+	// "0.0.0-stage, 0.0.1-stage"), not this release's PLACEHOLDER_VERSION constant.
+	const resumed = { ...base, version: entries.map(([v]) => v).sort().join(", ") };
+
 	let out: Awaited<ReturnType<NpmRegistry["addGithubTrust"]>>;
 	try {
 		out = await deps.registry.addGithubTrust(args.package, { repository: facts.repository, file: args.workflow }, args.npm_otp);
 	} catch (err) {
 		if (err instanceof NpmOtpRequired) {
 			return {
-				...base,
+				...resumed,
 				status: "needs_otp",
 				done: [],
 				remaining: ["trust"],
@@ -448,7 +453,7 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 		const found = matches as Record<string, unknown>;
 		if (trustExpired(found, (deps.now ?? Date.now)())) {
 			return {
-				...base,
+				...resumed,
 				status: "expired",
 				done: [],
 				remaining: ["trust"],
@@ -463,7 +468,7 @@ export async function npmScaffold(input: unknown, deps: NpmScaffoldDeps): Promis
 
 	const trustId = typeof out.config?.id === "string" ? out.config.id : undefined;
 	return {
-		...base,
+		...resumed,
 		status: "done",
 		done: alreadyThere ? [] : ["trust"],
 		skipped: alreadyThere ? ["publish", "trust"] : ["publish"],
