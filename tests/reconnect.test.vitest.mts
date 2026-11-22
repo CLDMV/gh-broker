@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { composerState, reconnect, safeKey, undimmed, RECONNECT_HELP } from "../src/cli/reconnect.ts";
+import { composerState, parseWait, reconnect, safeKey, undimmed, MAX_WAIT_MS, RECONNECT_HELP, WAIT_POLL_MS } from "../src/cli/reconnect.ts";
 import { brokerKeyOf, mcpEntry, SkippedFolder } from "../src/cli/mcp-config.ts";
 import { TmuxTimeout, type Pane, type TmuxServer } from "../src/cli/tmux.ts";
 import { makeDeps, config, GROUPS } from "./helpers/cli-deps.mjs";
@@ -192,6 +192,92 @@ describe("agent reconnect", () => {
 		);
 	}
 	const pane = (id: string, text: string, over: Partial<Pane> = {}): Pane => ({ id, pid: 200, text, foreground: true, inMode: false, synchronized: false, ...over });
+
+	describe("--wait", () => {
+		const TYPING = "❯ half a sentence";
+		it("parses seconds and minutes up to 30m", () => {
+			expect(parseWait("90")).toBe(90_000);
+			expect(parseWait("90s")).toBe(90_000);
+			expect(parseWait("5m")).toBe(300_000);
+			expect(parseWait("30m")).toBe(MAX_WAIT_MS);
+			for (const bad of ["31m", "0", "0s", "5h", "-5", "5 m", "", "1.5m", "99999"]) expect(parseWait(bad)).toBeUndefined();
+		});
+
+		it("refuses a missing or bad time", () => {
+			const { d } = withPanes([pane("%1", IDLE)]);
+			expect(() => reconnect(["--wait"], config, d)).toThrow("--wait takes a time up to 30m");
+			expect(() => reconnect(["--wait", "forever"], config, d)).toThrow("--wait takes a time up to 30m");
+			expect(() => reconnect(["--wait=45m"], config, d)).toThrow("--wait takes a time up to 30m");
+		});
+
+		it("waits for a pane with text in its input box and sends once it clears", () => {
+			const { d, out } = withPanes([pane("%1", TYPING), pane("%2", IDLE)]);
+			// first re-capture is for %2's pre-send check; then %1 is polled: still typing, then clear
+			d.tmuxPaneText.mockReturnValueOnce(IDLE).mockReturnValueOnce(TYPING).mockReturnValueOnce(IDLE);
+			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(0);
+			expect(out).toContain(`repo ${SOCK} %1 github waiting (composer not empty, or a dialog is showing)`);
+			expect(out).toContain("waiting up to 1m for 1 pane to clear");
+			expect(out).toContain(`repo ${SOCK} %1 github sent`);
+			expect(out).toContain(`repo ${SOCK} %2 github sent`);
+			expect(d.tmuxSend).toHaveBeenCalledTimes(2);
+			expect(d.sleep).toHaveBeenCalledTimes(2);
+			expect(d.sleep).toHaveBeenCalledWith(WAIT_POLL_MS);
+			expect(out[out.length - 1]).toBe("sent 2, skipped 0");
+		});
+
+		it("skips a pane still blocked at the deadline, with the reason and how long it waited", () => {
+			const { d, out } = withPanes([pane("%1", "Do you want to proceed?\n1. Yes")], {}, {}, "Do you want to proceed?\n1. Yes");
+			expect(reconnect(["repo", "--wait=12s"], config, d)).toBe(3);
+			expect(d.tmuxSend).not.toHaveBeenCalled();
+			// 5s, 5s, then the 2s left: never past the deadline
+			expect(d.sleep.mock.calls.map((c: number[]) => c[0])).toEqual([5000, 5000, 2000]);
+			expect(out).toContain(`repo ${SOCK} %1 github skipped (no Claude Code prompt on screen; still after waiting 12s)`);
+			expect(out).toContain("waiting up to 12s for 1 pane to clear");
+		});
+
+		it("waits on a pane that changed between the check and the send", () => {
+			const { d, out } = withPanes([pane("%1", IDLE)]);
+			d.tmuxPaneText.mockReturnValueOnce(TYPING).mockReturnValueOnce(IDLE);
+			expect(reconnect(["repo", "--wait", "30s"], config, d)).toBe(0);
+			expect(out).toContain(`repo ${SOCK} %1 github waiting (changed since capture)`);
+			expect(out).toContain(`repo ${SOCK} %1 github sent`);
+		});
+
+		it("drops a pane that disappears while waiting, retries one whose capture times out, and counts a failed send as skipped", () => {
+			const { d, out } = withPanes([pane("%1", TYPING), pane("%2", TYPING), pane("%3", TYPING)]);
+			// rounds poll the list back to front: %3, %2, %1
+			d.tmuxPaneText
+				.mockReturnValueOnce(IDLE) // %3 clears; its send fails
+				.mockImplementationOnce(() => {
+					throw new TmuxTimeout("tmux timed out");
+				}) // %2: tmux timed out this round
+				.mockReturnValueOnce(undefined) // %1 gone
+				.mockReturnValueOnce(IDLE); // %2 next round: clear
+			d.tmuxSend.mockImplementationOnce(() => {
+				throw new Error("pane is dead");
+			});
+			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(3);
+			expect(out).toContain(`repo ${SOCK} %3 github skipped (send failed: pane is dead)`);
+			expect(out).toContain(`repo ${SOCK} %1 github skipped (gone while waiting)`);
+			expect(out).toContain(`repo ${SOCK} %2 github sent`);
+			expect(out[out.length - 1]).toBe("sent 1, skipped 2");
+		});
+
+		it("lets an unexpected tmux error through", () => {
+			const { d } = withPanes([pane("%1", TYPING)]);
+			d.tmuxPaneText.mockImplementationOnce(() => {
+				throw new Error("boom");
+			});
+			expect(() => reconnect(["repo", "--wait", "1m"], config, d)).toThrow("boom");
+		});
+
+		it("doesn't wait on a dry run", () => {
+			const { d, out } = withPanes([pane("%1", TYPING)]);
+			expect(reconnect(["repo", "--dry-run", "--wait", "1m"], config, d)).toBe(3);
+			expect(d.sleep).not.toHaveBeenCalled();
+			expect(out).toContain(`repo ${SOCK} %1 github skipped (composer not empty, or a dialog is showing)`);
+		});
+	});
 
 	it("sends /mcp reconnect with the agent's own key, as the agent, and lists it as sent", () => {
 		const { d, out } = withPanes([pane("%3", IDLE), pane("%4", IDLE, { foreground: false })]);

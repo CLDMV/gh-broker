@@ -159,6 +159,19 @@ describe("upgradeCommand", () => {
 		expect(nearOwnFlag("--forse")).toBe("--force");
 		expect(nearOwnFlag("--verison")).toBe("--version");
 		expect(nearOwnFlag("--future-thing")).toBeUndefined();
+		expect(nearOwnFlag("--wiat")).toBe("--wait");
+	});
+
+	it("--wait goes to the reconnect step and its finish line; a bad time or --no-reconnect alongside is refused", () => {
+		const order: string[] = [];
+		const { d } = makeDeps({ runNewBinary: (args: string[]) => { order.push(args.join(" ")); } });
+		expect(upgradeCommand(["--wait", "5m"], config, d)).toBe(0);
+		expect(order).toEqual(["install", "agent reconnect --wait 5m"]);
+		expect(parseUpgradeArgs(["--wait=90s", "--claude-config", "repo:/srv/x"])).toMatchObject({ wait: "90s", installFlags: ["--claude-config", "repo:/srv/x"] });
+		expect(upgradeSteps("latest", [], true, "5m").at(-1)).toEqual({ name: "agent reconnect", command: "sudo gh-broker agent reconnect --wait 5m" });
+		expect(() => parseUpgradeArgs(["--wait"])).toThrow("--wait takes a time up to 30m");
+		expect(() => parseUpgradeArgs(["--wait", "2h"])).toThrow("--wait takes a time up to 30m");
+		expect(() => parseUpgradeArgs(["--wait", "5m", "--no-reconnect"])).toThrow("--no-reconnect skips it");
 	});
 
 	it("runs the three steps in order: npm install, the new binary's install with the flags, its reconnect", () => {
