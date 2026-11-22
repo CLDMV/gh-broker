@@ -19,17 +19,17 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.13.1 (November 2026)
+### Latest: v0.14.0 (November 2026)
 
-- **`report_release_changes` works on releases with merge-commit PRs.** A branch commit ending in an issue number, such as `(#223)`, used to be looked up as a PR, and the resulting 404 failed the whole report. That number is now listed under `excluded` as `not-a-pr` and the report comes back as usual.
-- [View full v0.13.1 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.1.md)
+- **Read repository custom properties.** `report_custom_properties` returns the custom property values for one repo, or for every repo in an org, optionally filtered to one property and value (for example `branch-model` = `v4`). The read PAT needs Custom properties: Read for it.
+- [View full v0.14.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.0.md)
 
 ### Recent Releases
 
+- **v0.13.1** (November 2026) — `report_release_changes` lists a commit's issue number as `not-a-pr` instead of failing on it ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.1.md))
 - **v0.13.0** (November 2026) — `sudo gh-broker upgrade` does the npm install, reinstall and agent reconnect in one go; `gh-broker agent reconnect` on its own; `npm_scaffold` reports an expired trusted publisher ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.0.md))
 - **v0.12.0** (November 2026) — the broker's core is a library: `createBroker` gives a host `invoke` and `run` with the daemon's policy, OTP and dispatch code ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.12.0.md))
 - **v0.11.2** (November 2026) — `npm_scaffold` waits for npm's staged first publish and returns `status: "pending"` instead of failing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.2.md))
-- **v0.11.1** (November 2026) — the daemon loads again; `qrcode` is out of the daemon bundle and the build runs the built daemon before publishing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.11.1.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
