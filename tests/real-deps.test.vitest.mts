@@ -106,6 +106,13 @@ describe("runNewBinary", () => {
 	it("reports a non-zero exit, a signal kill, and a spawn error with the args that ran", () => {
 		h.spawnSync.mockReturnValue({ status: 1, stdout: "", stderr: "" });
 		expect(() => realDeps().runNewBinary(["agent", "reconnect"])).toThrow("/usr/local/bin/gh-broker agent reconnect exited 1");
+		let caught: unknown;
+		try {
+			realDeps().runNewBinary(["agent", "reconnect"]);
+		} catch (err) {
+			caught = err;
+		}
+		expect(caught).toMatchObject({ status: 1 }); // upgrade tells a reconnect that only skipped panes (3) from a failure by this
 		h.spawnSync.mockReturnValue({ status: null, signal: "SIGTERM", stdout: "", stderr: "" });
 		expect(() => realDeps().runNewBinary(["install"])).toThrow("/usr/local/bin/gh-broker install exited on signal SIGTERM");
 		h.spawnSync.mockReturnValue({ error: new Error("EACCES"), status: null, stdout: "", stderr: "" });

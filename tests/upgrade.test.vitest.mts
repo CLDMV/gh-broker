@@ -245,6 +245,15 @@ describe("upgradeCommand", () => {
 		expect(err[2]).toBe("  sudo gh-broker agent reconnect");
 	});
 
+	it("a reconnect that only skipped panes (exit 3) doesn't fail the upgrade; it says to rerun it", () => {
+		const skipped = Object.assign(new Error("/usr/local/bin/gh-broker agent reconnect exited 3"), { status: 3 });
+		const { d, out, err } = makeDeps({ runNewBinary: (args: string[]) => { if (args[0] === "agent") throw skipped; } });
+		expect(upgradeCommand([], config, d)).toBe(0);
+		expect(err).toEqual([]);
+		expect(out).toContain("some sessions were skipped (listed above); once they're clear, run: sudo gh-broker agent reconnect");
+		expect(out[out.length - 1]).toMatch(/^✅ gh-broker is at .*; some sessions not reconnected$/);
+	});
+
 	it("--no-reconnect leaves two steps and never runs the new binary's reconnect", () => {
 		const { d, out } = makeDeps();
 		expect(upgradeCommand(["--no-reconnect"], config, d)).toBe(0);

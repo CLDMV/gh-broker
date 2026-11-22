@@ -51,7 +51,9 @@ Usage: sudo gh-broker upgrade [--version <v>] [--force] [--no-reconnect] [instal
   3. the newly installed binary's agent reconnect — "/mcp reconnect <key>" in every running
      Claude Code session
 
-Stops at the first failed step and prints what to run to finish. --no-reconnect skips step 3.
+Stops at the first failed step and prints what to run to finish. Sessions step 3
+skips (someone typing, a dialog open) don't fail the upgrade; it says to rerun
+agent reconnect once they're clear. --no-reconnect skips step 3.
 The target must be a semantic version (--version 0.12.1); a downgrade needs --force. When the
 package is installed AND deployed at the target, nothing runs unless --force. Other flags pass
 through to install (e.g. --claude-config <user>:<dir>, --no-mcp-config) and are validated before
@@ -211,6 +213,7 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 	const steps = upgradeSteps(target, args.installFlags, !args.noReconnect);
 	// A forced downgrade stays visible on the step line (an unforced one is refused above).
 	const downgrade = args.force && target !== "latest" && installed !== undefined && semverLess(target, installed);
+	let reconnectSkipped = false;
 	for (const [i, step] of steps.entries()) {
 		d.log(`==> step ${i + 1}/${steps.length}: ${step.name}${i === 0 && downgrade ? " (downgrade)" : ""}`);
 		try {
@@ -220,10 +223,17 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 			else if (i === 1) d.runNewBinary(["install", ...args.installFlags]);
 			else d.runNewBinary(["agent", "reconnect"]);
 		} catch (err) {
+			// Reconnect exits 3 when it only skipped panes (someone typing, a dialog open): the
+			// upgrade itself is done, and those sessions can be reconnected once they're clear.
+			if (i === 2 && (err as { status?: number }).status === 3) {
+				d.log(`some sessions were skipped (listed above); once they're clear, run: ${step.command}`);
+				reconnectSkipped = true;
+				continue;
+			}
 			for (const line of finishLines(steps, i, (err as Error).message)) d.error(line);
 			return 1;
 		}
 	}
-	d.log(`✅ gh-broker is at ${target}${installed === target && deployed === target ? " (reinstalled)" : ""}${args.noReconnect ? "; reconnect skipped" : ""}`);
+	d.log(`✅ gh-broker is at ${target}${installed === target && deployed === target ? " (reinstalled)" : ""}${args.noReconnect ? "; reconnect skipped" : reconnectSkipped ? "; some sessions not reconnected" : ""}`);
 	return 0;
 }
