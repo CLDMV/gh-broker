@@ -44,14 +44,18 @@ function creds(existing: string[] = []) {
 
 describe("credentialPlan", () => {
 	it("refuses a --secret name the config does not use", () => {
-		expect(() => plan({ cliSecrets: { "cldmv-raed": "x" } })).toThrow(/--secret names no credential this config uses: cldmv-raed \(it uses: cldmv-read, cldmv-write, npm-token\)/);
+		expect(() => plan({ cliSecrets: { "cldmv-raed": "x" } })).toThrow(
+			/--secret names no credential this config uses: cldmv-raed \(it uses: cldmv-read, cldmv-write, npm-token\)/
+		);
 	});
 
 	it("takes an explicit value from --secret, then --secrets-file, then env", () => {
 		const env = { GH_BROKER_SECRET_CLDMV_READ: "from-env" };
 		expect(plan({ env }).p.explicit("cldmv-read")).toBe("from-env");
 		expect(plan({ env, imported: { "cldmv-read": "from-file" } }).p.explicit("cldmv-read")).toBe("from-file");
-		expect(plan({ env, imported: { "cldmv-read": "from-file" }, cliSecrets: { "cldmv-read": "from-cli" } }).p.explicit("cldmv-read")).toBe("from-cli");
+		expect(plan({ env, imported: { "cldmv-read": "from-file" }, cliSecrets: { "cldmv-read": "from-cli" } }).p.explicit("cldmv-read")).toBe(
+			"from-cli"
+		);
 		expect(plan({ imported: { "cldmv-read": "" }, env: { GH_BROKER_SECRET_CLDMV_READ: "" } }).p.explicit("cldmv-read")).toBeUndefined();
 	});
 
@@ -67,9 +71,13 @@ describe("credentialPlan", () => {
 	});
 
 	it("fails a required credential that is missing or left empty", async () => {
-		await expect(plan({ nonInteractive: true }).p.resolve("cldmv-read")).rejects.toThrow(/missing credential "cldmv-read" — provide via --secret, --secrets-file or env GH_BROKER_SECRET_CLDMV_READ/);
+		await expect(plan({ nonInteractive: true }).p.resolve("cldmv-read")).rejects.toThrow(
+			/missing credential "cldmv-read" — provide via --secret, --secrets-file or env GH_BROKER_SECRET_CLDMV_READ/
+		);
 		await expect(plan({}, [""]).p.resolve("cldmv-read")).rejects.toThrow(/empty value for "cldmv-read"/);
-		await expect(plan({ appKeyName: "gh-app-key", needed: ["gh-app-key"] }).p.resolve("gh-app-key")).rejects.toThrow(/GitHub App private key/);
+		await expect(plan({ appKeyName: "gh-app-key", needed: ["gh-app-key"] }).p.resolve("gh-app-key")).rejects.toThrow(
+			/GitHub App private key/
+		);
 	});
 
 	it("lets an optional credential be skipped, never failing", async () => {
@@ -97,12 +105,20 @@ describe("credentialPlan", () => {
 			const stored = await p.storeSystemd(c.io);
 			expect(stored).toEqual(["cldmv-read", "cldmv-write"]);
 			expect(c.written).toEqual({ "cldmv-write": "write-typed" });
-			expect(logs).toEqual(["  cldmv-read: existing systemd-creds kept", "  cldmv-write: encrypted (systemd-creds)", "  npm-token: not stored — its tools stay hidden until it is (re-run the installer to add it)"]);
+			expect(logs).toEqual([
+				"  cldmv-read: existing systemd-creds kept",
+				"  cldmv-write: encrypted (systemd-creds)",
+				"  npm-token: not stored — its tools stay hidden until it is (re-run the installer to add it)"
+			]);
 		});
 
 		it("rotates on an explicit value or a plaintext entry, and notes a replaced npm token", async () => {
 			const c = creds(["cldmv-read", "cldmv-write", "npm-token"]);
-			const { p, logs } = plan({ cliSecrets: { "cldmv-read": "new-read" }, existingFile: { "cldmv-write": "file-write" }, mints: (n) => n === "npm-token" });
+			const { p, logs } = plan({
+				cliSecrets: { "cldmv-read": "new-read" },
+				existingFile: { "cldmv-write": "file-write" },
+				mints: (n) => n === "npm-token"
+			});
 			expect(await p.storeSystemd(c.io)).toEqual(["cldmv-read", "cldmv-write", "npm-token"]);
 			expect(c.written).toEqual({ "cldmv-read": "new-read", "cldmv-write": "file-write", "npm-token": "npm_MINTED" });
 			expect(logs).toContain("  cldmv-read: rotated (systemd-creds)");
@@ -113,13 +129,21 @@ describe("credentialPlan", () => {
 
 	describe("storeFile", () => {
 		it("keeps stored values, fills missing ones, rotates on an explicit value, and skips an optional one", async () => {
-			const { p, logs } = plan({ needed: ["cldmv-read", "cldmv-write", "cldmv-new", "npm-token"], existingFile: { "cldmv-read": "old-read", "cldmv-write": "old-write" }, cliSecrets: { "cldmv-write": "new-write", "cldmv-new": "fresh" }, nonInteractive: true });
+			const { p, logs } = plan({
+				needed: ["cldmv-read", "cldmv-write", "cldmv-new", "npm-token"],
+				existingFile: { "cldmv-read": "old-read", "cldmv-write": "old-write" },
+				cliSecrets: { "cldmv-write": "new-write", "cldmv-new": "fresh" },
+				nonInteractive: true
+			});
 			expect(await p.storeFile()).toEqual({ "cldmv-read": "old-read", "cldmv-write": "new-write", "cldmv-new": "fresh" });
 			expect(logs).toEqual(["  npm-token: not stored — its tools stay hidden until it is (re-run the installer to add it)"]);
 		});
 
 		it("replaces a stored npm token with a newly created one and says the old one is still live", async () => {
-			const { p, logs } = plan({ existingFile: { "cldmv-read": "r", "cldmv-write": "w", "npm-token": "npm_old" }, mints: (n) => n === "npm-token" });
+			const { p, logs } = plan({
+				existingFile: { "cldmv-read": "r", "cldmv-write": "w", "npm-token": "npm_old" },
+				mints: (n) => n === "npm-token"
+			});
 			expect(await p.storeFile()).toEqual({ "cldmv-read": "r", "cldmv-write": "w", "npm-token": "npm_MINTED" });
 			expect(logs.some((l) => /previous npm-token is still valid/.test(l))).toBe(true);
 		});

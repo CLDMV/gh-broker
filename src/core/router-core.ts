@@ -51,7 +51,13 @@ import { reportReleasePrs, type ReportReleasePrsInput } from "../verbs/report_re
 import { reportReleaseChanges, type ReportReleaseChangesInput } from "../verbs/report_release_changes.ts";
 import { reportAlertStatus, type ReportAlertStatusInput } from "../verbs/report_alert_status.ts";
 import { issueLabels, type IssueLabelsInput } from "../verbs/issue_labels.ts";
-import { reportCiStatus, ciStatusForHeadSha, ciStatusForHeads, type ReportCiStatusInput, type FailedJobLogsFetcher } from "../verbs/report_ci_status.ts";
+import {
+	reportCiStatus,
+	ciStatusForHeadSha,
+	ciStatusForHeads,
+	type ReportCiStatusInput,
+	type FailedJobLogsFetcher
+} from "../verbs/report_ci_status.ts";
 import { npmScaffold } from "../verbs/npm_scaffold.ts";
 import { minimizeComment, type MinimizeCommentInput } from "../verbs/minimize_comment.ts";
 import { deleteBranch, type DeleteBranchInput } from "../verbs/delete_branch.ts";
@@ -129,9 +135,15 @@ export const REPO_CREATING = new Set(["create_repository", "fork_repository"]);
  * fork goes, so the write PAT is the destination's. create_repository also needs `private`
  * said explicitly, so a repo's visibility is never left to a default.
  */
-export function creationOwner(tool: string, args: Record<string, unknown>, owners: { [owner: string]: { read: string; write: string } }): string {
+export function creationOwner(
+	tool: string,
+	args: Record<string, unknown>,
+	owners: { [owner: string]: { read: string; write: string } }
+): string {
 	if (typeof args.organization !== "string" || !args.organization) {
-		throw new Error(`tool "${tool}": "organization" is required (the org the repo is created in); gh-broker doesn't create repos in a personal account`);
+		throw new Error(
+			`tool "${tool}": "organization" is required (the org the repo is created in); gh-broker doesn't create repos in a personal account`
+		);
 	}
 	const org = args.organization.toLowerCase();
 	if (!Object.hasOwn(owners, org)) throw new Error(`no credentials configured for owner "${org}" — add it to config.owners + creds`);
@@ -146,7 +158,8 @@ export function creationOwner(tool: string, args: Record<string, unknown>, owner
  * record of what a run did. The other methods (dispatch, re-run, cancel) stay, behind the gate.
  */
 export function refuseLogDeletion(args: Record<string, unknown>): void {
-	if (args.method === "delete_workflow_run_logs") throw new Error('tool "actions_run_trigger": method "delete_workflow_run_logs" is not allowed in gh-broker; a run\'s logs are kept');
+	if (args.method === "delete_workflow_run_logs")
+		throw new Error('tool "actions_run_trigger": method "delete_workflow_run_logs" is not allowed in gh-broker; a run\'s logs are kept');
 }
 
 /** Derive the repo owner from a tool call's arguments, so we pick the right PAT. */
@@ -171,7 +184,15 @@ export function extractOwner(args: Record<string, unknown>): string | undefined 
  * custom rule runs the local verb, an augment rule the post-processed forward, anything
  * else a plain forward to the hosted MCP.
  */
-export async function dispatchCall(deps: RouteDeps, rule: ToolRule, tool: string, args: Record<string, unknown>, owner: string, token: string, person: string): Promise<CallToolResult> {
+export async function dispatchCall(
+	deps: RouteDeps,
+	rule: ToolRule,
+	tool: string,
+	args: Record<string, unknown>,
+	owner: string,
+	token: string,
+	person: string
+): Promise<CallToolResult> {
 	return rule.custom
 		? dispatchCustom(deps, tool, args, owner, token, person)
 		: rule.augment
@@ -184,7 +205,14 @@ export async function dispatchCall(deps: RouteDeps, rule: ToolRule, tool: string
  * signal this is today's exact three-argument call — the daemon path, whose call shape
  * is pinned byte-identical by the router suite.
  */
-export function forwardCall(upstream: Upstream, tool: string, args: Record<string, unknown>, token: string, signal?: AbortSignal, timeoutMs?: number): Promise<CallToolResult> {
+export function forwardCall(
+	upstream: Upstream,
+	tool: string,
+	args: Record<string, unknown>,
+	token: string,
+	signal?: AbortSignal,
+	timeoutMs?: number
+): Promise<CallToolResult> {
 	// Each optional argument appears only when set — a signal-only call stays today's exact
 	// four-argument shape, and the daemon (neither set) stays at three.
 	if (signal !== undefined && timeoutMs !== undefined) return upstream.forward(tool, args, token, signal, timeoutMs);
@@ -198,7 +226,14 @@ export function forwardCall(upstream: Upstream, tool: string, args: Record<strin
  * (owner, mode) PAT; the npm_scaffold case resolves its two extra credentials itself
  * through the resolver. Everything here is injected — no store, no fs, no clock.
  */
-export async function dispatchCustom(deps: RouteDeps, tool: string, args: Record<string, unknown>, owner: string, token: string, person: string): Promise<CallToolResult> {
+export async function dispatchCustom(
+	deps: RouteDeps,
+	tool: string,
+	args: Record<string, unknown>,
+	owner: string,
+	token: string,
+	person: string
+): Promise<CallToolResult> {
 	switch (tool) {
 		// DEFERRED: link_issue (App-token-only addClosingIssueReference) is not wired in — see docs.
 		// Re-enable by restoring this case + the import above + the catalog block, adding a
@@ -242,7 +277,10 @@ export async function dispatchCustom(deps: RouteDeps, tool: string, args: Record
 		}
 		case "report_dependents": {
 			const octokit = client(deps, token);
-			const out = await reportDependents(octokit, args as unknown as ReportDependentsInput, { ...(deps.npm?.registry ? { registry: deps.npm.registry } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
+			const out = await reportDependents(octokit, args as unknown as ReportDependentsInput, {
+				...(deps.npm?.registry ? { registry: deps.npm.registry } : {}),
+				...(deps.signal ? { signal: deps.signal } : {})
+			});
 			return { content: [{ type: "text", text: JSON.stringify(out) }] };
 		}
 		case "report_custom_properties": {
@@ -319,7 +357,13 @@ function makeJobLogsFetcher(upstream: Upstream, owner: string, repo: string, tok
 	return async (runId, tailLines) => {
 		const map = new Map<number, string>();
 		try {
-			const result = await forwardCall(upstream, "get_job_logs", { owner, repo, run_id: runId, failed_only: true, return_content: true, tail_lines: tailLines }, token, signal);
+			const result = await forwardCall(
+				upstream,
+				"get_job_logs",
+				{ owner, repo, run_id: runId, failed_only: true, return_content: true, tail_lines: tailLines },
+				token,
+				signal
+			);
 			const textBlock = result.content?.find((c) => (c as { type?: string }).type === "text") as { text?: string } | undefined;
 			if (!textBlock?.text) return map;
 			const parsed = JSON.parse(textBlock.text) as { logs?: Array<{ job_id?: unknown; logs_content?: unknown }> };
@@ -349,7 +393,13 @@ function makeJobLogsFetcher(upstream: Upstream, owner: string, repo: string, tok
  * rather than thrown — a shape mismatch should degrade to "no CI data added," not
  * break an otherwise-successful PR read.
  */
-export async function dispatchAugmented(deps: RouteDeps, tool: string, args: Record<string, unknown>, owner: string, token: string): Promise<CallToolResult> {
+export async function dispatchAugmented(
+	deps: RouteDeps,
+	tool: string,
+	args: Record<string, unknown>,
+	owner: string,
+	token: string
+): Promise<CallToolResult> {
 	switch (tool) {
 		case "pull_request_read": {
 			const { ciVerbosity, logLines, ...upstreamArgs } = args as Record<string, unknown> & { ciVerbosity?: number; logLines?: number };
@@ -381,7 +431,11 @@ export async function dispatchAugmented(deps: RouteDeps, tool: string, args: Rec
 		case "list_pull_requests": {
 			// Same opt-in contract as pull_request_read, applied to each item of the list.
 			// Detail is capped by maxDetail; see ciStatusForHeads for the shared budget.
-			const { ciVerbosity, logLines, maxDetail, ...upstreamArgs } = args as Record<string, unknown> & { ciVerbosity?: number; logLines?: number; maxDetail?: number };
+			const { ciVerbosity, logLines, maxDetail, ...upstreamArgs } = args as Record<string, unknown> & {
+				ciVerbosity?: number;
+				logLines?: number;
+				maxDetail?: number;
+			};
 			const result = await forwardCall(deps.upstream, tool, upstreamArgs, token, deps.signal, deps.timeoutMs);
 			if (ciVerbosity === undefined) return result;
 
@@ -409,7 +463,11 @@ export async function dispatchAugmented(deps: RouteDeps, tool: string, args: Rec
 				fetchFailedJobLogs: makeJobLogsFetcher(deps.upstream, owner, repo, token, deps.signal)
 			});
 			const byNumber = new Map(cis.map((c) => [c.pull, c]));
-			textBlock.text = JSON.stringify((list as Array<{ number?: unknown }>).map((item) => (typeof item?.number === "number" && byNumber.has(item.number) ? { ...item, ci: byNumber.get(item.number) } : item)));
+			textBlock.text = JSON.stringify(
+				(list as Array<{ number?: unknown }>).map((item) =>
+					typeof item?.number === "number" && byNumber.has(item.number) ? { ...item, ci: byNumber.get(item.number) } : item
+				)
+			);
 			return result;
 		}
 		default:

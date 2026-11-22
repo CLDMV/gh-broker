@@ -47,14 +47,20 @@ export function otpSettings(config: Config): OtpSettings {
 export function readSeed(config: Config, secrets: SecretStore): { key: Buffer } | { problem: string } {
 	if (!config.otp) return { problem: "OTP is not set up on this broker (no config.otp); re-run the installer to set it up" };
 	const name = config.otp.seed.replace(/^cred:/, "");
-	if (!secrets.has(config.otp.seed)) return { problem: `OTP is not set up on this broker: its seed credential "${name}" is not stored (re-run the installer to generate it)` };
+	if (!secrets.has(config.otp.seed))
+		return {
+			problem: `OTP is not set up on this broker: its seed credential "${name}" is not stored (re-run the installer to generate it)`
+		};
 	let key: Buffer;
 	try {
 		key = base32Decode(secrets.resolve(config.otp.seed).trim());
 	} catch {
 		key = Buffer.alloc(0);
 	}
-	if (key.length === 0) return { problem: `OTP is not set up on this broker: the stored seed "${name}" is not valid base32 (re-run the installer to replace it)` };
+	if (key.length === 0)
+		return {
+			problem: `OTP is not set up on this broker: the stored seed "${name}" is not valid base32 (re-run the installer to replace it)`
+		};
 	return { key };
 }
 
@@ -63,4 +69,3 @@ export function otpSetupProblem(config: Config, secrets: SecretStore): string | 
 	const seed = readSeed(config, secrets);
 	return "problem" in seed ? seed.problem : undefined;
 }
-

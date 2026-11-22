@@ -106,7 +106,8 @@ function validateRefs(config: Config, read: (name: string) => string): void {
 		read(assertSafeName(config.app.privateKey.slice(CRED_PREFIX.length)));
 	}
 	if (config.npm) {
-		if (!config.npm.token.startsWith(CRED_PREFIX)) throw new Error(`secrets: config.npm.token must be a "cred:<name>" ref, got "${config.npm.token}"`);
+		if (!config.npm.token.startsWith(CRED_PREFIX))
+			throw new Error(`secrets: config.npm.token must be a "cred:<name>" ref, got "${config.npm.token}"`);
 		assertSafeName(config.npm.token.slice(CRED_PREFIX.length));
 	}
 	// GHCR credentials are optional too: format-checked here, and the ghcr_* tools are hidden
@@ -120,7 +121,9 @@ function validateRefs(config: Config, read: (name: string) => string): void {
 function systemdCredsStore(config: Config): SecretStore {
 	const dir = process.env.CREDENTIALS_DIRECTORY;
 	if (!dir) {
-		throw new Error("secrets: $CREDENTIALS_DIRECTORY unset — the systemd-creds provider needs LoadCredentialEncrypted= (run under systemd)");
+		throw new Error(
+			"secrets: $CREDENTIALS_DIRECTORY unset — the systemd-creds provider needs LoadCredentialEncrypted= (run under systemd)"
+		);
 	}
 	const cache = new Map<string, string>();
 	const read = (name: string): string => {
@@ -130,7 +133,7 @@ function systemdCredsStore(config: Config): SecretStore {
 		try {
 			val = readFileSync(join(dir, name), "utf8").replace(/\r?\n$/, "");
 		} catch (err) {
-			throw new Error(`secrets: credential "${name}" not available: ${(err as Error).message}`);
+			throw new Error(`secrets: credential "${name}" not available: ${(err as Error).message}`, { cause: err });
 		}
 		if (!val) throw new Error(`secrets: credential "${name}" is empty`);
 		cache.set(name, val);
@@ -147,7 +150,7 @@ function fileStore(config: Config): SecretStore {
 	try {
 		raw = JSON.parse(readFileSync(path, "utf8"));
 	} catch (err) {
-		throw new Error(`secrets: cannot read/parse secrets file ${path}: ${(err as Error).message}`);
+		throw new Error(`secrets: cannot read/parse secrets file ${path}: ${(err as Error).message}`, { cause: err });
 	}
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
 		throw new Error(`secrets: ${path} must be a JSON object of { "<name>": "<token>" }`);

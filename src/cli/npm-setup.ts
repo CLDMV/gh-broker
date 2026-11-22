@@ -63,6 +63,7 @@ const isHttpsUrl = (u: unknown): boolean => {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** A parsed npm registry response body (loosely shaped; `_raw` is set when it was not JSON). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry JSON varies by endpoint and is read field by field
 type NpmBody = Record<string, any>;
 
 async function readJson(res: Response): Promise<NpmBody> {
@@ -106,7 +107,11 @@ export async function createNpmToken(o: CreateNpmTokenOptions): Promise<{ token:
 				method: "DELETE",
 				headers: { authorization: `Bearer ${session}`, "npm-command": "logout" }
 			});
-			o.log(res.status >= 200 && res.status < 300 ? "  npm login session revoked" : `  note: could not revoke the npm login session (HTTP ${res.status}); it expires on its own`);
+			o.log(
+				res.status >= 200 && res.status < 300
+					? "  npm login session revoked"
+					: `  note: could not revoke the npm login session (HTTP ${res.status}); it expires on its own`
+			);
 		} catch (err) {
 			o.log(`  note: could not revoke the npm login session (${(err as Error).message}); it expires on its own`);
 		}
@@ -123,7 +128,9 @@ async function webLogin(registry: string, doFetch: typeof fetch, o: CreateNpmTok
 	if (res.status < 200 || res.status >= 300 || !isHttpsUrl(body.loginUrl) || !isHttpsUrl(body.doneUrl)) {
 		throw new Error(`npm web login could not start (HTTP ${res.status})${detail(body)}`);
 	}
-	o.log(`  Log in to npm in a browser (as the account that owns ${o.scopes.join(", ")}):\n\n    ${body.loginUrl}\n\n  Waiting for the login to be approved…`);
+	o.log(
+		`  Log in to npm in a browser (as the account that owns ${o.scopes.join(", ")}):\n\n    ${body.loginUrl}\n\n  Waiting for the login to be approved…`
+	);
 	const deadline = Date.now() + (o.pollTimeoutMs ?? 10 * 60_000);
 	for (;;) {
 		const poll = await doFetch(body.doneUrl, { method: "GET", headers: { accept: "application/json", "npm-command": "login" } });

@@ -19,7 +19,13 @@ vi.mock("node:process", async () => {
 		}
 	}
 	h.stdin = new FakeStdin();
-	h.stdout = { out: "", write(s: string) { this.out += s; return true; } };
+	h.stdout = {
+		out: "",
+		write(s: string) {
+			this.out += s;
+			return true;
+		}
+	};
 	return { stdin: h.stdin, stdout: h.stdout };
 });
 

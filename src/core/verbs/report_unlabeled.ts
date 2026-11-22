@@ -103,9 +103,7 @@ async function listUnlabeledIssues(
 ): Promise<{ scanned: number; unlabeled: UnlabeledItem[] }> {
 	const raw = await paginate<RawIssueOrPull>(octokit, budget, "GET /repos/{owner}/{repo}/issues", { owner, repo, state }, limit);
 	const issuesOnly = raw.filter((it) => !("pull_request" in it));
-	const unlabeled = issuesOnly
-		.filter((it) => it.labels.length === 0)
-		.map((it) => toUnlabeledItem(owner, repo, "issue", it));
+	const unlabeled = issuesOnly.filter((it) => it.labels.length === 0).map((it) => toUnlabeledItem(owner, repo, "issue", it));
 	return { scanned: issuesOnly.length, unlabeled };
 }
 
@@ -165,7 +163,13 @@ export async function reportUnlabeled(octokit: Octokit, input: ReportUnlabeledIn
 		}
 	} catch (err) {
 		if (err instanceof RateLimited) {
-			return { scanned, unlabeled, truncated: true, truncatedReason: "rate-limited", ...(err.retryAfterSeconds !== undefined ? { retryAfterSeconds: err.retryAfterSeconds } : {}) };
+			return {
+				scanned,
+				unlabeled,
+				truncated: true,
+				truncatedReason: "rate-limited",
+				...(err.retryAfterSeconds !== undefined ? { retryAfterSeconds: err.retryAfterSeconds } : {})
+			};
 		}
 		if (err instanceof CallBudgetExhausted) {
 			return { scanned, unlabeled, truncated: true, truncatedReason: "max-api-calls" };
@@ -187,8 +191,17 @@ export const REPORT_UNLABELED_SCHEMA = {
 		target: { type: "string", enum: ["issues", "pulls", "both"], description: "what to scan for missing labels", default: "both" },
 		state: { type: "string", enum: ["open", "closed", "all"], description: "issue/PR state to scan", default: "open" },
 		includeDrafts: { type: "boolean", description: "include draft PRs in the report (default: excluded)", default: false },
-		maxRepos: { type: "number", description: `safety cap on repos scanned when repo is omitted (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})` },
-		perRepoLimit: { type: "number", description: `safety cap on items scanned per repo, per resource type (default ${DEFAULT_PER_REPO_LIMIT}, hard cap ${HARD_PER_REPO_LIMIT})` },
-		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` }
+		maxRepos: {
+			type: "number",
+			description: `safety cap on repos scanned when repo is omitted (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})`
+		},
+		perRepoLimit: {
+			type: "number",
+			description: `safety cap on items scanned per repo, per resource type (default ${DEFAULT_PER_REPO_LIMIT}, hard cap ${HARD_PER_REPO_LIMIT})`
+		},
+		maxApiCalls: {
+			type: "number",
+			description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})`
+		}
 	}
 };

@@ -32,7 +32,11 @@ const GHCR_TOOLS = new Set(["ghcr_push", "ghcr_push_status", "ghcr_tags"]);
  * Shipped but off until a tool entry says `"enabled": true`. Copilot's coding agent writes code
  * into a repo outside `git`, so it's opt-in; once enabled it's also gated by default.
  */
-export const DEFAULT_DISABLED: ReadonlySet<string> = new Set(["create_pull_request_with_copilot", "assign_copilot_to_issue", "assign_copilot_to_issue_with_intent"]);
+export const DEFAULT_DISABLED: ReadonlySet<string> = new Set([
+	"create_pull_request_with_copilot",
+	"assign_copilot_to_issue",
+	"assign_copilot_to_issue_with_intent"
+]);
 
 /** Whether `rule` is served: its own `enabled` flag, else the built-in default. */
 export function isEnabled(rule: ToolRule): boolean {
@@ -73,7 +77,8 @@ export function unavailableReason(rule: ToolRule, config: Pick<Config, "npm" | "
 	}
 	if (rule.name === "npm_scaffold") {
 		if (!config.npm) return "the npm integration is not configured (enable it with the installer's --npm)";
-		if (!capability.has(config.npm.token)) return `its credential "${config.npm.token.replace(/^cred:/, "")}" is not stored (re-run the installer with --npm)`;
+		if (!capability.has(config.npm.token))
+			return `its credential "${config.npm.token.replace(/^cred:/, "")}" is not stored (re-run the installer with --npm)`;
 	}
 	if (GHCR_TOOLS.has(rule.name)) {
 		if (!config.ghcr) return "GHCR pushes are not configured (config.ghcr)";

@@ -64,7 +64,14 @@ import { MINIMIZE_COMMENT_DESCRIPTION, MINIMIZE_COMMENT_SCHEMA } from "./verbs/m
 import { DELETE_BRANCH_DESCRIPTION, DELETE_BRANCH_SCHEMA } from "./verbs/delete_branch.ts";
 import { DISMISS_ALERT_DESCRIPTION, DISMISS_ALERT_SCHEMA } from "./verbs/dismiss_alert.ts";
 import { OTP_STATUS_DESCRIPTION, OTP_STATUS_SCHEMA } from "./verbs/otp_status.ts";
-import { GHCR_PUSH_DESCRIPTION, GHCR_PUSH_SCHEMA, GHCR_PUSH_STATUS_DESCRIPTION, GHCR_PUSH_STATUS_SCHEMA, GHCR_TAGS_DESCRIPTION, GHCR_TAGS_SCHEMA } from "./verbs/ghcr/schemas.ts";
+import {
+	GHCR_PUSH_DESCRIPTION,
+	GHCR_PUSH_SCHEMA,
+	GHCR_PUSH_STATUS_DESCRIPTION,
+	GHCR_PUSH_STATUS_SCHEMA,
+	GHCR_TAGS_DESCRIPTION,
+	GHCR_TAGS_SCHEMA
+} from "./verbs/ghcr/schemas.ts";
 
 /** The JSON schema a verb advertises for its arguments. */
 export interface ToolInputSchema {
@@ -448,10 +455,14 @@ export function permissivePolicy(rules: readonly ToolRule[]): PolicyApplication 
 		const decl = Object.hasOwn(MANIFEST, rule.name) ? MANIFEST[rule.name] : undefined;
 		if (!decl) continue; // config-only tool: no manifest facts to exceed
 		if (decl.mode === "read" && rule.mode === "write") {
-			warnings.push(`tool "${rule.name}": config.tools widens its mode to "write", but the manifest declares "read" — the broker serves it as configured`);
+			warnings.push(
+				`tool "${rule.name}": config.tools widens its mode to "write", but the manifest declares "read" — the broker serves it as configured`
+			);
 		}
 		if (decl.otp && rule.otp === false) {
-			warnings.push(`tool "${rule.name}": config.tools turns off its OTP gate ("otp": false), but the manifest gates it — the broker serves it ungated`);
+			warnings.push(
+				`tool "${rule.name}": config.tools turns off its OTP gate ("otp": false), but the manifest gates it — the broker serves it ungated`
+			);
 		}
 	}
 	return { tools, warnings };

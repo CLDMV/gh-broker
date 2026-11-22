@@ -30,7 +30,7 @@ function makeConfig(overrides: Record<string, unknown> = {}): any {
 function fakeGate(log: string[], refusal?: OtpRefusal) {
 	return {
 		enabled: true,
-		hardLockRefusal: (user: string) => refusal,
+		hardLockRefusal: () => refusal,
 		authorize: (tool: string, code: unknown, user: string) => {
 			log.push(`authorize:${tool}:${user}:${String(code)}`);
 			return { otp: "opened" as const, window: "w-1", until: "2026-01-01T00:05:00.000Z" };
@@ -47,7 +47,10 @@ describe("the Router dispatches through the injected OtpGate seam (design #175 �
 	beforeEach(() => {
 		vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void logLines.push(a.join(" ")));
 		logLines = [];
-		secrets = { resolve: vi.fn((ref: string) => (ref === "cred:otp-seed" ? "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" : `token:${ref}`)), has: vi.fn(() => true) };
+		secrets = {
+			resolve: vi.fn((ref: string) => (ref === "cred:otp-seed" ? "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" : `token:${ref}`)),
+			has: vi.fn(() => true)
+		};
 		upstream = { forward: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] }) };
 	});
 
@@ -162,7 +165,9 @@ describe("the Router dispatches ghcr_* through the injected GhcrVerbs seam (desi
 			status: () => ({}),
 			tags: async () => ({})
 		});
-		await expect(r.call("ghcr_push", { owner: "Alpha", image: "hoot", tag: "1.0.0", archive: "/drop/a.tar" }, { user: "tester" })).rejects.toThrow("boom");
+		await expect(
+			r.call("ghcr_push", { owner: "Alpha", image: "hoot", tag: "1.0.0", archive: "/drop/a.tar" }, { user: "tester" })
+		).rejects.toThrow("boom");
 		const row = JSON.parse(logLines.find((l) => l.includes('"tool":"ghcr_push"'))!);
 		expect(row).toMatchObject({ tool: "ghcr_push", decision: "custom", ok: false, detail: "boom" });
 	});
@@ -186,7 +191,10 @@ describe("GhcrService reports the async completion row through the injected onJo
 					maxArchiveBytes: DEFAULT_MAX_ARCHIVE_BYTES,
 					owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot"] } }
 				},
-				{ resolve: (ref: string) => (ref === "cred:cldmv-packages" ? "ghp_testPatValue0123456789abcdefABCDEF" : "x"), has: () => true } as any,
+				{
+					resolve: (ref: string) => (ref === "cred:cldmv-packages" ? "ghp_testPatValue0123456789abcdefABCDEF" : "x"),
+					has: () => true
+				} as any,
 				{ base, onJobDone }
 			);
 			const img = ociArchive();
@@ -202,7 +210,14 @@ describe("GhcrService reports the async completion row through the injected onJo
 			// The completion row: async, from the job's finally, through the injected callback.
 			expect(onJobDone).toHaveBeenCalledTimes(1);
 			const row = onJobDone.mock.calls[0]![0] as Record<string, unknown>;
-			expect(row).toMatchObject({ tool: "ghcr_push", owner: "cldmv", mode: "write", repo: `${new URL(base).host}/cldmv/hoot`, decision: "custom", ok: true });
+			expect(row).toMatchObject({
+				tool: "ghcr_push",
+				owner: "cldmv",
+				mode: "write",
+				repo: `${new URL(base).host}/cldmv/hoot`,
+				decision: "custom",
+				ok: true
+			});
 			expect(String(row.detail)).toContain(`job=${job.job} tag=1.0.0 digest=`);
 			expect(String(row.detail)).toContain(`archive=${archive}`);
 			// The injected sink replaced the default: the completion row did NOT also go to audit().
@@ -241,7 +256,9 @@ describe("unavailableReason takes the injected capability predicate (design #175
 	});
 
 	it("a gated tool is hidden by the injected otpProblem (the host's seed-decoding check)", () => {
-		expect(unavailableReason(rule("merge_pull_request"), config(), { has: () => true, otpProblem: () => "OTP is not set up" })).toBe("OTP is not set up");
+		expect(unavailableReason(rule("merge_pull_request"), config(), { has: () => true, otpProblem: () => "OTP is not set up" })).toBe(
+			"OTP is not set up"
+		);
 	});
 
 	it("credentials stored + OTP ready → available", () => {
@@ -261,7 +278,12 @@ describe("the Router's ghcr refusal runs before the gate (fix 8)", () => {
 				tools: [{ name: "ghcr_push", mode: "write" }],
 				owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
 				// The availability check must pass so the pin reaches the no-GhcrVerbs refusal.
-				ghcr: { dropDir: "/var/lib/gh-broker/drop", protectReleaseTags: true, maxArchiveBytes: 1_073_741_824, owners: { cldmv: { credential: "cred:ghcr-cldmv" } } }
+				ghcr: {
+					dropDir: "/var/lib/gh-broker/drop",
+					protectReleaseTags: true,
+					maxArchiveBytes: 1_073_741_824,
+					owners: { cldmv: { credential: "cred:ghcr-cldmv" } }
+				}
 			};
 			const secrets = { resolve: vi.fn(() => "token:x"), has: vi.fn(() => true) };
 			const upstream = { forward: vi.fn() };
@@ -269,7 +291,14 @@ describe("the Router's ghcr refusal runs before the gate (fix 8)", () => {
 			// after it — the pin is that the refusal happens before any code is asked for.
 			// The gate is REQUIRED since the default flips (slice 5) — a stub whose authorize
 			// throws proves the ghcr refusal happens before any gate interaction.
-			const gate = { enabled: true, hardLockRefusal: () => undefined, authorize: () => { throw new Error("the gate must not run for a ghcr call"); }, status: () => ({}) };
+			const gate = {
+				enabled: true,
+				hardLockRefusal: () => undefined,
+				authorize: () => {
+					throw new Error("the gate must not run for a ghcr call");
+				},
+				status: () => ({})
+			};
 			const r = new Router(cfg as any, secrets as any, upstream as any, undefined, gate, undefined);
 			await expect(r.call("ghcr_push", { image: "x" }, { user: "tester" })).rejects.toThrow(/no GhcrVerbs implementation was injected/);
 			expect(secrets.resolve).not.toHaveBeenCalled(); // no token resolved
@@ -295,15 +324,25 @@ describe("a gated ghcr tool still goes through the gate (fix N1: the dispatch mu
 				// that on otp_status — and a gated ghcr call must still be asked for a code.
 				tools: [{ name: "ghcr_push", mode: "write", otp: true }],
 				owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
-				ghcr: { dropDir: "/var/lib/gh-broker/drop", protectReleaseTags: true, maxArchiveBytes: 1_073_741_824, owners: { cldmv: { credential: "cred:ghcr-cldmv" } } },
+				ghcr: {
+					dropDir: "/var/lib/gh-broker/drop",
+					protectReleaseTags: true,
+					maxArchiveBytes: 1_073_741_824,
+					owners: { cldmv: { credential: "cred:ghcr-cldmv" } }
+				},
 				otp: { seed: "cred:otp-seed" }
 			};
 			// The availability check decodes the stored seed, so the store must hand back a
 			// valid base32 seed for the otp credential (base32 of "12345678901234567890").
-			const secrets = { resolve: vi.fn((ref: string) => (ref === "cred:otp-seed" ? "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" : "token:x")), has: vi.fn(() => true) };
+			const secrets = {
+				resolve: vi.fn((ref: string) => (ref === "cred:otp-seed" ? "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" : "token:x")),
+				has: vi.fn(() => true)
+			};
 			const upstream = { forward: vi.fn() };
 			const ghcr = { push: vi.fn().mockResolvedValue({ pushed: true }), tags: vi.fn(), status: vi.fn() };
-			const authorize = vi.fn(() => { throw new OtpRefusal("OTP required for ghcr_push. Nothing was run.", { otp: "refused" }); });
+			const authorize = vi.fn(() => {
+				throw new OtpRefusal("OTP required for ghcr_push. Nothing was run.", { otp: "refused" });
+			});
 			const gate = { enabled: true, hardLockRefusal: () => undefined, authorize, status: () => ({}) };
 			const r = new Router(cfg as any, secrets as any, upstream as any, undefined, gate, ghcr);
 			await expect(r.call("ghcr_push", { image: "x", otp: "000000" }, { user: "tester" })).rejects.toThrow(/OTP required/);

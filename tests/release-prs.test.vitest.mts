@@ -17,9 +17,15 @@ const hit = (repo: string, number: number, title: string, over: Record<string, u
 	...over
 });
 
-const search = (items: unknown[], over: Record<string, unknown> = {}) => ({ data: { total_count: items.length, incomplete_results: false, items, ...over }, headers: {} });
+const search = (items: unknown[], over: Record<string, unknown> = {}) => ({
+	data: { total_count: items.length, incomplete_results: false, items, ...over },
+	headers: {}
+});
 
-const pull = (head = "next", base = "master", draft = false) => ({ data: { head: { ref: head }, base: { ref: base }, draft }, headers: {} });
+const pull = (head = "next", base = "master", draft = false) => ({
+	data: { head: { ref: head }, base: { ref: base }, draft },
+	headers: {}
+});
 
 describe("parseReleaseVersion", () => {
 	it("reads the version out of a release title, with or without the v", () => {
@@ -103,7 +109,11 @@ describe("reportReleasePrs", () => {
 			throw status(404, "Not Found");
 		});
 		const out = await reportReleasePrs(octokit, { owner: "cldmv" });
-		expect(out.releasePrs[0]).toMatchObject({ status: "needs-changelog", version: "0.1.0", checkedPaths: ["docs/changelog/v0/v0.1.0.md", "docs/changelogs/v0/v0.1.0.md"] });
+		expect(out.releasePrs[0]).toMatchObject({
+			status: "needs-changelog",
+			version: "0.1.0",
+			checkedPaths: ["docs/changelog/v0/v0.1.0.md", "docs/changelogs/v0/v0.1.0.md"]
+		});
 		expect(out.releasePrs[0]).not.toHaveProperty("changelogPath");
 		expect(out.summary).toEqual({ ready: 0, needsChangelog: 1, unknownVersion: 0 });
 	});
@@ -130,7 +140,11 @@ describe("reportReleasePrs", () => {
 		});
 		const out = await reportReleasePrs(octokit, { owner: "cldmv" });
 		expect(out.summary).toEqual({ ready: 1, needsChangelog: 1, unknownVersion: 1 });
-		expect(out.releasePrs.map((p) => `${p.repo}:${p.head}:${p.status}`)).toEqual(["CLDMV/a:hotfixes:ready", "CLDMV/b:next:needs-changelog", "CLDMV/c:next:unknown-version"]);
+		expect(out.releasePrs.map((p) => `${p.repo}:${p.head}:${p.status}`)).toEqual([
+			"CLDMV/a:hotfixes:ready",
+			"CLDMV/b:next:needs-changelog",
+			"CLDMV/c:next:unknown-version"
+		]);
 	});
 
 	it("onlyMissing drops ready PRs from the list but keeps the summary counts", async () => {
@@ -148,13 +162,15 @@ describe("reportReleasePrs", () => {
 	it("reports draft from the pull, falling back to the search hit", async () => {
 		const octokit = octokitWith(async (route) => {
 			if (route === "GET /search/issues") return search([hit("a", 1, "release: v1.0.0", { draft: true })]);
-			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return { data: { head: { ref: "next" }, base: { ref: "master" } }, headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}")
+				return { data: { head: { ref: "next" }, base: { ref: "master" } }, headers: {} };
 			return { data: {}, headers: {} };
 		});
 		expect((await reportReleasePrs(octokit, { owner: "cldmv" })).releasePrs[0]!.draft).toBe(true);
 		const plain = octokitWith(async (route) => {
 			if (route === "GET /search/issues") return search([hit("a", 1, "release: v1.0.0")]);
-			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") return { data: { head: { ref: "next" }, base: { ref: "master" } }, headers: {} };
+			if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}")
+				return { data: { head: { ref: "next" }, base: { ref: "master" } }, headers: {} };
 			return { data: {}, headers: {} };
 		});
 		expect((await reportReleasePrs(plain, { owner: "cldmv" })).releasePrs[0]!.draft).toBe(false);
@@ -214,7 +230,9 @@ describe("reportReleasePrs", () => {
 	});
 
 	it("omits retryAfterSeconds when GitHub sent none", async () => {
-		const octokit = octokitWith(async () => { throw status(429, "Too Many Requests"); });
+		const octokit = octokitWith(async () => {
+			throw status(429, "Too Many Requests");
+		});
 		const out = await reportReleasePrs(octokit, { owner: "cldmv" });
 		expect(out.truncatedReason).toBe("rate-limited");
 		expect(out).not.toHaveProperty("retryAfterSeconds");
@@ -230,7 +248,9 @@ describe("reportReleasePrs", () => {
 	});
 
 	it("propagates a plain permission 403 on the search", async () => {
-		const octokit = octokitWith(async () => { throw status(403, "Resource not accessible by personal access token"); });
+		const octokit = octokitWith(async () => {
+			throw status(403, "Resource not accessible by personal access token");
+		});
 		await expect(reportReleasePrs(octokit, { owner: "cldmv" })).rejects.toThrow("Resource not accessible");
 	});
 

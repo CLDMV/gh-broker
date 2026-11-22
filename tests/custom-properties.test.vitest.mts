@@ -3,7 +3,8 @@ import { reportCustomProperties, filterProperties, REPORT_CUSTOM_PROPERTIES_SCHE
 
 type Handler = (route: string, params: any) => Promise<{ data: unknown; headers?: Record<string, string> }>;
 const octokitWith = (handler: Handler): any => ({ request: vi.fn(handler) });
-const status = (code: number, message = "x", headers: Record<string, string> = {}) => Object.assign(new Error(message), { status: code, response: { headers } });
+const status = (code: number, message = "x", headers: Record<string, string> = {}) =>
+	Object.assign(new Error(message), { status: code, response: { headers } });
 const ok = (data: unknown) => ({ data, headers: {} });
 
 const entry = (name: string, props: Record<string, string | string[] | null>) => ({
@@ -36,10 +37,18 @@ describe("reportCustomProperties — one repo", () => {
 		const octokit = octokitWith(async (route, p) => {
 			expect(route).toBe("GET /repos/{owner}/{repo}/properties/values");
 			expect(p).toMatchObject({ owner: "CLDMV", repo: "nexus" });
-			return ok([{ property_name: "branch-model", value: "v4" }, { property_name: "tier", value: null }]);
+			return ok([
+				{ property_name: "branch-model", value: "v4" },
+				{ property_name: "tier", value: null }
+			]);
 		});
 		const out = await reportCustomProperties(octokit, { owner: "CLDMV", repo: "nexus" });
-		expect(out).toEqual({ owner: "CLDMV", repo: "nexus", repos: [{ repo: "nexus", properties: { "branch-model": "v4", tier: null } }], count: 1 });
+		expect(out).toEqual({
+			owner: "CLDMV",
+			repo: "nexus",
+			repos: [{ repo: "nexus", properties: { "branch-model": "v4", tier: null } }],
+			count: 1
+		});
 	});
 
 	it("returns no repos when the filter doesn't match", async () => {
@@ -49,29 +58,67 @@ describe("reportCustomProperties — one repo", () => {
 	});
 
 	it("names the missing repository permission on a 403, and passes other errors through", async () => {
-		await expect(reportCustomProperties(octokitWith(async () => { throw status(403, "Resource not accessible by personal access token"); }), { owner: "CLDMV", repo: "nexus" })).rejects.toThrow('repository permission "Custom properties: read"');
-		await expect(reportCustomProperties(octokitWith(async () => { throw status(404, "Not Found"); }), { owner: "CLDMV", repo: "nope" })).rejects.toThrow("Not Found");
+		await expect(
+			reportCustomProperties(
+				octokitWith(async () => {
+					throw status(403, "Resource not accessible by personal access token");
+				}),
+				{ owner: "CLDMV", repo: "nexus" }
+			)
+		).rejects.toThrow('repository permission "Custom properties: read"');
+		await expect(
+			reportCustomProperties(
+				octokitWith(async () => {
+					throw status(404, "Not Found");
+				}),
+				{ owner: "CLDMV", repo: "nope" }
+			)
+		).rejects.toThrow("Not Found");
 	});
 
 	it("reports a rate limit as truncated, with retryAfterSeconds when GitHub sent it", async () => {
-		const a = await reportCustomProperties(octokitWith(async () => { throw status(429, "Too Many Requests", { "retry-after": "12" }); }), { owner: "CLDMV", repo: "nexus" });
-		expect(a).toEqual({ owner: "CLDMV", repo: "nexus", repos: [], count: 0, truncated: true, truncatedReason: "rate-limited", retryAfterSeconds: 12 });
-		const b = await reportCustomProperties(octokitWith(async () => { throw status(429, "Too Many Requests"); }), { owner: "CLDMV", repo: "nexus" });
+		const a = await reportCustomProperties(
+			octokitWith(async () => {
+				throw status(429, "Too Many Requests", { "retry-after": "12" });
+			}),
+			{ owner: "CLDMV", repo: "nexus" }
+		);
+		expect(a).toEqual({
+			owner: "CLDMV",
+			repo: "nexus",
+			repos: [],
+			count: 0,
+			truncated: true,
+			truncatedReason: "rate-limited",
+			retryAfterSeconds: 12
+		});
+		const b = await reportCustomProperties(
+			octokitWith(async () => {
+				throw status(429, "Too Many Requests");
+			}),
+			{ owner: "CLDMV", repo: "nexus" }
+		);
 		expect(b).not.toHaveProperty("retryAfterSeconds");
-		const c = await reportCustomProperties(octokitWith(async () => ok([])), { owner: "CLDMV", repo: "nexus", maxApiCalls: 0 });
+		const c = await reportCustomProperties(
+			octokitWith(async () => ok([])),
+			{ owner: "CLDMV", repo: "nexus", maxApiCalls: 0 }
+		);
 		expect(c).toEqual({ owner: "CLDMV", repo: "nexus", repos: [], count: 0, truncated: true, truncatedReason: "max-api-calls" });
 	});
 
 	it("refuses value without property, and repositoryQuery with repo", async () => {
 		const octokit = octokitWith(async () => ok([]));
 		await expect(reportCustomProperties(octokit, { owner: "CLDMV", value: "v4" })).rejects.toThrow("value needs property");
-		await expect(reportCustomProperties(octokit, { owner: "CLDMV", repo: "nexus", repositoryQuery: "archived:false" })).rejects.toThrow("org listing only");
+		await expect(reportCustomProperties(octokit, { owner: "CLDMV", repo: "nexus", repositoryQuery: "archived:false" })).rejects.toThrow(
+			"org listing only"
+		);
 		expect(octokit.request).not.toHaveBeenCalled();
 	});
 });
 
 describe("reportCustomProperties — org listing", () => {
-	const page = (n: number, offset = 0) => Array.from({ length: n }, (_, i) => entry(`r${offset + i}`, { "branch-model": (offset + i) % 2 ? "v4" : "dev-trunk" }));
+	const page = (n: number, offset = 0) =>
+		Array.from({ length: n }, (_, i) => entry(`r${offset + i}`, { "branch-model": (offset + i) % 2 ? "v4" : "dev-trunk" }));
 
 	it("pages through the org listing, passes repository_query, and filters", async () => {
 		const octokit = octokitWith(async (route, p) => {
@@ -79,7 +126,12 @@ describe("reportCustomProperties — org listing", () => {
 			expect(p).toMatchObject({ org: "CLDMV", repository_query: "archived:false", per_page: 100 });
 			return ok(p.page === 1 ? page(100) : page(5, 100));
 		});
-		const out = await reportCustomProperties(octokit, { owner: "CLDMV", property: "branch-model", value: "v4", repositoryQuery: "archived:false" });
+		const out = await reportCustomProperties(octokit, {
+			owner: "CLDMV",
+			property: "branch-model",
+			value: "v4",
+			repositoryQuery: "archived:false"
+		});
 		expect(octokit.request).toHaveBeenCalledTimes(2);
 		expect(out.count).toBe(52);
 		expect(out.repos[0]).toEqual({ repo: "r1", properties: { "branch-model": "v4" } });
@@ -92,7 +144,10 @@ describe("reportCustomProperties — org listing", () => {
 			return ok([{ repository_name: "bare" }, entry("x", { a: "1" })]);
 		});
 		const out = await reportCustomProperties(octokit, { owner: "CLDMV" });
-		expect(out.repos).toEqual([{ repo: "bare", properties: {} }, { repo: "x", properties: { a: "1" } }]);
+		expect(out.repos).toEqual([
+			{ repo: "bare", properties: {} },
+			{ repo: "x", properties: { a: "1" } }
+		]);
 	});
 
 	it("stops at maxRepos and says so; exactly maxRepos is not truncation", async () => {
@@ -105,18 +160,52 @@ describe("reportCustomProperties — org listing", () => {
 	});
 
 	it("truncates on the call budget and on a rate limit", async () => {
-		const budget = await reportCustomProperties(octokitWith(async () => ok(page(100))), { owner: "CLDMV", maxApiCalls: 2 });
+		const budget = await reportCustomProperties(
+			octokitWith(async () => ok(page(100))),
+			{ owner: "CLDMV", maxApiCalls: 2 }
+		);
 		expect(budget).toMatchObject({ truncated: true, truncatedReason: "max-api-calls", repos: [], count: 0 });
-		const limited = await reportCustomProperties(octokitWith(async () => { throw status(429, "Too Many Requests", { "retry-after": "5" }); }), { owner: "CLDMV" });
+		const limited = await reportCustomProperties(
+			octokitWith(async () => {
+				throw status(429, "Too Many Requests", { "retry-after": "5" });
+			}),
+			{ owner: "CLDMV" }
+		);
 		expect(limited).toMatchObject({ truncated: true, truncatedReason: "rate-limited", retryAfterSeconds: 5 });
-		const noRetry = await reportCustomProperties(octokitWith(async () => { throw status(429, "Too Many Requests"); }), { owner: "CLDMV" });
+		const noRetry = await reportCustomProperties(
+			octokitWith(async () => {
+				throw status(429, "Too Many Requests");
+			}),
+			{ owner: "CLDMV" }
+		);
 		expect(noRetry).not.toHaveProperty("retryAfterSeconds");
 	});
 
 	it("explains a 404 (not an org), names the org permission on a 403, and passes other errors through", async () => {
-		await expect(reportCustomProperties(octokitWith(async () => { throw status(404, "Not Found"); }), { owner: "someuser" })).rejects.toThrow("custom properties are org-only");
-		await expect(reportCustomProperties(octokitWith(async () => { throw status(403, "Resource not accessible"); }), { owner: "CLDMV" })).rejects.toThrow('organization permission "Custom properties: read"');
-		await expect(reportCustomProperties(octokitWith(async () => { throw status(500, "boom"); }), { owner: "CLDMV" })).rejects.toThrow("boom");
+		await expect(
+			reportCustomProperties(
+				octokitWith(async () => {
+					throw status(404, "Not Found");
+				}),
+				{ owner: "someuser" }
+			)
+		).rejects.toThrow("custom properties are org-only");
+		await expect(
+			reportCustomProperties(
+				octokitWith(async () => {
+					throw status(403, "Resource not accessible");
+				}),
+				{ owner: "CLDMV" }
+			)
+		).rejects.toThrow('organization permission "Custom properties: read"');
+		await expect(
+			reportCustomProperties(
+				octokitWith(async () => {
+					throw status(500, "boom");
+				}),
+				{ owner: "CLDMV" }
+			)
+		).rejects.toThrow("boom");
 	});
 
 	it("clamps maxRepos and maxApiCalls to their hard caps", async () => {
@@ -130,6 +219,14 @@ describe("REPORT_CUSTOM_PROPERTIES_SCHEMA", () => {
 	it("requires owner and allows no extra properties", () => {
 		expect(REPORT_CUSTOM_PROPERTIES_SCHEMA.required).toEqual(["owner"]);
 		expect(REPORT_CUSTOM_PROPERTIES_SCHEMA.additionalProperties).toBe(false);
-		expect(Object.keys(REPORT_CUSTOM_PROPERTIES_SCHEMA.properties).sort()).toEqual(["maxApiCalls", "maxRepos", "owner", "property", "repo", "repositoryQuery", "value"]);
+		expect(Object.keys(REPORT_CUSTOM_PROPERTIES_SCHEMA.properties).sort()).toEqual([
+			"maxApiCalls",
+			"maxRepos",
+			"owner",
+			"property",
+			"repo",
+			"repositoryQuery",
+			"value"
+		]);
 	});
 });

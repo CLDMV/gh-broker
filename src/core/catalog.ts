@@ -16,7 +16,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { NO_PERSON, type Config, type TokenResolver, type ToolRule } from "./types.ts";
 import { MANIFEST } from "./manifest.ts";
-import { unavailableReason } from "./availability.ts";
 import { OTP_ARG, isGated, otpSettings, windowText } from "./otp-policy.ts";
 
 /**
@@ -61,7 +60,12 @@ export interface CatalogOpts {
  * If the upstream fetch fails (network/token), we advertise minimal schemas rather
  * than fail startup — the daemon still serves and calls still route correctly.
  */
-export async function buildCatalog(config: Config, resolveToken: TokenResolver, upstream: CatalogUpstream, opts: CatalogOpts = {}): Promise<Tool[]> {
+export async function buildCatalog(
+	config: Config,
+	resolveToken: TokenResolver,
+	upstream: CatalogUpstream,
+	opts: CatalogOpts = {}
+): Promise<Tool[]> {
 	// Absent opts are env-free and silent (a library host is Quack-safe); the daemon
 	// passes its env-derived timeout, stderr sink and availability predicate explicitly.
 	const timeoutMs = opts.upstreamTimeoutMs ?? 10000;
@@ -119,7 +123,9 @@ export async function buildCatalog(config: Config, resolveToken: TokenResolver, 
 		const up = upstreamByName.get(rule.name);
 		if (!up && upstreamFetched) {
 			// Reachable upstream that doesn't expose this tool → it would 32602 at call time. Skip + warn.
-			log?.(`catalog: allowlisted tool "${rule.name}" is NOT exposed by the upstream (${config.upstream}) — skipping it. Check the tool name or the upstream toolset (e.g. use /mcp/x/all for non-default toolsets like labels).`);
+			log?.(
+				`catalog: allowlisted tool "${rule.name}" is NOT exposed by the upstream (${config.upstream}) — skipping it. Check the tool name or the upstream toolset (e.g. use /mcp/x/all for non-default toolsets like labels).`
+			);
 			continue;
 		}
 		const base = up ?? { name: rule.name, description: `(${rule.mode}) proxied to the GitHub MCP`, inputSchema: { type: "object" } };
@@ -138,7 +144,11 @@ export async function buildCatalog(config: Config, resolveToken: TokenResolver, 
 						type: "object",
 						properties: {
 							...(baseSchema.properties ?? {}),
-							ciVerbosity: { type: "number", enum: [0, 1, 2, 3], description: "gh-broker extension: add a ci field to each listed PR at this verbosity" },
+							ciVerbosity: {
+								type: "number",
+								enum: [0, 1, 2, 3],
+								description: "gh-broker extension: add a ci field to each listed PR at this verbosity"
+							},
 							logLines: { type: "number", description: "gh-broker extension: tier-3 log tail length" },
 							maxDetail: { type: "number", description: "gh-broker extension: how many PRs get tier 1-3 detail (default 10, hard cap 50)" }
 						}
@@ -154,7 +164,11 @@ export async function buildCatalog(config: Config, resolveToken: TokenResolver, 
 					type: "object",
 					properties: {
 						...(baseSchema.properties ?? {}),
-						ciVerbosity: { type: "number", enum: [0, 1, 2, 3], description: 'gh-broker extension: also compute CI status at this verbosity (method "get" only)' },
+						ciVerbosity: {
+							type: "number",
+							enum: [0, 1, 2, 3],
+							description: 'gh-broker extension: also compute CI status at this verbosity (method "get" only)'
+						},
 						logLines: { type: "number", description: "gh-broker extension: tier-3 log tail length" }
 					}
 				}
@@ -178,7 +192,10 @@ export async function buildCatalog(config: Config, resolveToken: TokenResolver, 
 			continue;
 		}
 		if (rule.name === "actions_run_trigger") {
-			tools.push({ ...base, description: `${base.description ?? ""} gh-broker: method "delete_workflow_run_logs" is refused; a run's logs are kept.`.trim() });
+			tools.push({
+				...base,
+				description: `${base.description ?? ""} gh-broker: method "delete_workflow_run_logs" is refused; a run's logs are kept.`.trim()
+			});
 			continue;
 		}
 		if (rule.name === "issue_write") {
@@ -190,7 +207,8 @@ export async function buildCatalog(config: Config, resolveToken: TokenResolver, 
 				: " Read the current labels first and pass the full set you want to keep.";
 			tools.push({
 				...base,
-				description: `${base.description ?? ""} WARNING (gh-broker): "labels" REPLACES the issue's whole label set — every label not listed is removed.${pointer}`.trim()
+				description:
+					`${base.description ?? ""} WARNING (gh-broker): "labels" REPLACES the issue's whole label set — every label not listed is removed.${pointer}`.trim()
 			});
 			continue;
 		}
@@ -211,13 +229,17 @@ function withOtp(tools: Tool[], config: Config): Tool[] {
 		const schema = tool.inputSchema as { properties?: Record<string, unknown>; required?: string[]; [k: string]: unknown };
 		return {
 			...tool,
-			description: `${tool.description ?? ""} Needs a broker OTP (gh-broker): ask the user for a current code from their authenticator app and pass it as "${OTP_ARG}". One code works for every gated tool for ${window} after the first call that uses it.`.trim(),
+			description:
+				`${tool.description ?? ""} Needs a broker OTP (gh-broker): ask the user for a current code from their authenticator app and pass it as "${OTP_ARG}". One code works for every gated tool for ${window} after the first call that uses it.`.trim(),
 			inputSchema: {
 				...schema,
 				type: "object",
 				properties: {
 					...(schema.properties ?? {}),
-					[OTP_ARG]: { type: "string", description: "gh-broker: a current 6-digit code from the user's authenticator app, or the code that opened the current window" }
+					[OTP_ARG]: {
+						type: "string",
+						description: "gh-broker: a current 6-digit code from the user's authenticator app, or the code that opened the current window"
+					}
 				},
 				required: [...(schema.required ?? []).filter((r) => r !== OTP_ARG), OTP_ARG]
 			}

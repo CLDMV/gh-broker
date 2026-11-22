@@ -11,7 +11,14 @@ vi.mock("node:fs", () => ({
 }));
 
 import { readFileSync, existsSync, writeFileSync, rmSync, chmodSync, chownSync } from "node:fs";
-import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "../src/cli/secret-store.ts";
+import {
+	writeSecretsFile,
+	readSecretsFile,
+	removeSecretsFile,
+	referencedCredNames,
+	optionalCredNames,
+	detectSecretsProvider
+} from "../src/cli/secret-store.ts";
 
 const mockRead = vi.mocked(readFileSync);
 const mockExists = vi.mocked(existsSync);
@@ -90,11 +97,17 @@ describe("removeSecretsFile", () => {
 
 describe("optionalCredNames", () => {
 	it("lists the npm token and nothing required", () => {
-		const cfg = { owners: { o: { read: "cred:a", write: "cred:b" } }, app: { privateKey: "cred:k" }, npm: { token: "cred:npm-token", scopes: ["@cldmv"] } };
+		const cfg = {
+			owners: { o: { read: "cred:a", write: "cred:b" } },
+			app: { privateKey: "cred:k" },
+			npm: { token: "cred:npm-token", scopes: ["@cldmv"] }
+		};
 		expect(optionalCredNames(cfg)).toEqual(["npm-token"]);
 		expect(optionalCredNames({ owners: cfg.owners })).toEqual([]);
 		expect(optionalCredNames({ npm: { token: "npm_inline" } })).toEqual([]);
-		expect(optionalCredNames({ ...cfg, ghcr: { owners: { cldmv: { credential: "cred:cldmv-packages" }, x: { credential: "inline" } } } })).toEqual(["npm-token", "cldmv-packages"]);
+		expect(
+			optionalCredNames({ ...cfg, ghcr: { owners: { cldmv: { credential: "cred:cldmv-packages" }, x: { credential: "inline" } } } })
+		).toEqual(["npm-token", "cldmv-packages"]);
 	});
 
 	it("rejects an unsafe cred name", () => {

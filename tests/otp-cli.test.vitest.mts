@@ -6,8 +6,16 @@ import { makeDeps, config, NOW } from "./helpers/cli-deps.mjs";
 /** What a CLI write sets lastAcceptedStep to at NOW: every code up to one step ahead is spent. */
 const STEP = Math.floor(NOW / 30000) + 1;
 
-const stateWith = (users: Record<string, unknown>, over: Record<string, unknown> = {}) => ({ status: "ok", state: { ...emptyState(), lastAcceptedStep: 9, users, ...over } });
-const hard = { ...emptyUser(), failures: 2, lockouts: ["2026-11-01T12:00:00.000Z"], hardLock: { since: "2026-11-01T12:00:00.000Z", lockouts: 3 } };
+const stateWith = (users: Record<string, unknown>, over: Record<string, unknown> = {}) => ({
+	status: "ok",
+	state: { ...emptyState(), lastAcceptedStep: 9, users, ...over }
+});
+const hard = {
+	...emptyUser(),
+	failures: 2,
+	lockouts: ["2026-11-01T12:00:00.000Z"],
+	hardLock: { since: "2026-11-01T12:00:00.000Z", lockouts: 3 }
+};
 
 describe("otp status", () => {
 	it("prints every registered agent, even with no state file", async () => {
@@ -32,7 +40,12 @@ describe("otp status", () => {
 		const { d, out } = makeDeps({ readState: () => stateWith({ repo: { ...emptyUser(), failures: 3 } }) });
 		await otpCommand("status", ["--json"], cfg, d);
 		const j = JSON.parse(out[0]);
-		expect(j).toMatchObject({ configured: true, statePath: "/x/state.json", fileStatus: "ok", unlockCommand: "sudo gh-broker otp unlock <user>" });
+		expect(j).toMatchObject({
+			configured: true,
+			statePath: "/x/state.json",
+			fileStatus: "ok",
+			unlockCommand: "sudo gh-broker otp unlock <user>"
+		});
 		expect(j.users.find((u: any) => u.user === "repo")).toMatchObject({ failures: 3, maxFailures: 7, maxLockouts: 2, locked: false });
 	});
 
@@ -46,7 +59,7 @@ describe("otp status", () => {
 	it("warns on stderr when the package and the deployed version differ", async () => {
 		const { d, err } = makeDeps({ versions: () => ({ pkg: "2.0.0", deployed: "1.0.0" }) });
 		await otpCommand("status", [], config, d);
-		expect(err[0]).toContain("run \"sudo gh-broker upgrade\"");
+		expect(err[0]).toContain('run "sudo gh-broker upgrade"');
 	});
 });
 
@@ -69,13 +82,25 @@ describe("otp unlock", () => {
 		const other = { ...emptyUser(), failures: 1 };
 		const { d, out } = makeDeps({ readState: () => stateWith({ repo: hard, glmtest: other }) });
 		expect(await otpCommand("unlock", ["repo"], config, d)).toBe(0);
-		expect(d.writeState).toHaveBeenCalledWith("/var/lib/gh-broker/otp-state.json", { version: 1, lastAcceptedStep: STEP, users: { glmtest: other } });
-		expect(out[0]).toBe("unlocked repo. The code the authenticator shows now won't work, nor the one after it: wait 60 s for a fresh code.");
+		expect(d.writeState).toHaveBeenCalledWith("/var/lib/gh-broker/otp-state.json", {
+			version: 1,
+			lastAcceptedStep: STEP,
+			users: { glmtest: other }
+		});
+		expect(out[0]).toBe(
+			"unlocked repo. The code the authenticator shows now won't work, nor the one after it: wait 60 s for a fresh code."
+		);
 		expect(d.audit).toHaveBeenCalledWith({ ts: new Date(NOW).toISOString(), decision: "otp-unlock", user: "repo", by: "admin" });
 	});
 
 	it("still unlocks when the journal write fails, with a warning; names root without a sudo user", async () => {
-		const { d, err } = makeDeps({ readState: () => stateWith({ repo: hard }), sudoUser: () => undefined, audit: vi.fn(() => { throw new Error("systemd-cat: not found"); }) });
+		const { d, err } = makeDeps({
+			readState: () => stateWith({ repo: hard }),
+			sudoUser: () => undefined,
+			audit: vi.fn(() => {
+				throw new Error("systemd-cat: not found");
+			})
+		});
 		expect(await otpCommand("unlock", ["repo"], config, d)).toBe(0);
 		expect(d.writeState).toHaveBeenCalled();
 		expect(d.audit).toHaveBeenCalledWith(expect.objectContaining({ by: "root" }));
@@ -86,7 +111,9 @@ describe("otp unlock", () => {
 		const { d, out } = makeDeps({ readState: () => stateWith({ repo: hard }), sudoUser: () => "" });
 		expect(await otpCommand("unlock", ["repo"], config, d)).toBe(0);
 		expect(d.audit).toHaveBeenCalledWith(expect.objectContaining({ by: "root" }));
-		expect(out[0]).toBe("unlocked repo. The code the authenticator shows now won't work, nor the one after it: wait 60 s for a fresh code.");
+		expect(out[0]).toBe(
+			"unlocked repo. The code the authenticator shows now won't work, nor the one after it: wait 60 s for a fresh code."
+		);
 	});
 
 	it("clears counters for a user who isn't hard-locked, and skips a user with no entry", async () => {
@@ -110,7 +137,9 @@ describe("otp unlock", () => {
 	it("refuses a single-user unlock on a corrupt file, but --all rewrites it clean", async () => {
 		const corrupt = () => ({ status: "corrupt", state: emptyState() });
 		const one = makeDeps({ readState: corrupt });
-		await expect(otpCommand("unlock", ["repo"], config, one.d)).rejects.toThrow(/corrupt, so every user is locked; run "sudo gh-broker otp unlock --all"/);
+		await expect(otpCommand("unlock", ["repo"], config, one.d)).rejects.toThrow(
+			/corrupt, so every user is locked; run "sudo gh-broker otp unlock --all"/
+		);
 		expect(one.d.writeState).not.toHaveBeenCalled();
 		const all = makeDeps({ readState: corrupt });
 		await otpCommand("unlock", ["--all"], config, all.d);
@@ -144,7 +173,12 @@ describe("otp list", () => {
 		const { d, out } = makeDeps({ readState: () => stateWith({ repo: hard }) });
 		await otpCommand("list", ["--json"], config, d);
 		const j = JSON.parse(out[0]);
-		expect(j).toMatchObject({ fileStatus: "ok", locked: [{ user: "repo", corrupt: false, hardLock: hard.hardLock, lockedUntil: null, unlockCommand: "sudo gh-broker otp unlock repo" }] });
+		expect(j).toMatchObject({
+			fileStatus: "ok",
+			locked: [
+				{ user: "repo", corrupt: false, hardLock: hard.hardLock, lockedUntil: null, unlockCommand: "sudo gh-broker otp unlock repo" }
+			]
+		});
 	});
 });
 
@@ -174,14 +208,24 @@ describe("otp rotate", () => {
 	});
 
 	it("shows the seed before storing it, and says it isn't in use when storing fails", async () => {
-		const { d, out } = makeDeps({ storeSeed: () => { throw new Error("disk full"); } });
-		await expect(otpCommand("rotate", [], config, d)).rejects.toThrow('storing the new seed failed (disk full); the key above is not in use and the old seed is still the stored one. Nothing was restarted; run "sudo gh-broker otp rotate" again');
+		const { d, out } = makeDeps({
+			storeSeed: () => {
+				throw new Error("disk full");
+			}
+		});
+		await expect(otpCommand("rotate", [], config, d)).rejects.toThrow(
+			'storing the new seed failed (disk full); the key above is not in use and the old seed is still the stored one. Nothing was restarted; run "sudo gh-broker otp rotate" again'
+		);
 		expect(out.join("\n")).toContain("key: NEWSEED");
 		expect(d.restart).not.toHaveBeenCalled();
 	});
 
 	it("stores nothing when showing the seed fails", async () => {
-		const { d } = makeDeps({ qr: async () => { throw new Error("tty gone"); } });
+		const { d } = makeDeps({
+			qr: async () => {
+				throw new Error("tty gone");
+			}
+		});
 		await expect(otpCommand("rotate", [], config, d)).rejects.toThrow("tty gone");
 		expect(d.storeSeed).not.toHaveBeenCalled();
 	});

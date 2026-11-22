@@ -113,7 +113,10 @@ export class Registry {
 		} catch {
 			detail = res.body.toString("utf8").replace(/\s+/g, " ").trim();
 		}
-		const hint = res.status === 401 || res.status === 403 ? " — check the ghcr credential is a classic PAT with write:packages, not expired, and allowed for this package" : "";
+		const hint =
+			res.status === 401 || res.status === 403
+				? " — check the ghcr credential is a classic PAT with write:packages, not expired, and allowed for this package"
+				: "";
 		// Scrub before truncating: a secret cut at the 300-character boundary would no longer
 		// match the exact-value replacement.
 		const shown = this.clean(detail).slice(0, 300);
@@ -146,7 +149,9 @@ export class Registry {
 					if (len < MAX_BODY) chunks.push(c);
 					len += c.length;
 				});
-				res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).subarray(0, MAX_BODY) }));
+				res.on("end", () =>
+					resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).subarray(0, MAX_BODY) })
+				);
 				res.on("error", reject);
 			});
 			req.setTimeout(IDLE_TIMEOUT_MS, () => req.destroy(new Error(`${method} timed out`)));
@@ -227,7 +232,13 @@ export class Registry {
 		const patchUrl = this.sameOrigin(start.headers.location, "blob upload");
 
 		const auth = { Authorization: `Bearer ${this.token}` };
-		const patch = await this.send("PATCH", patchUrl, { ...auth, "Content-Type": "application/octet-stream", "Content-Length": String(size) }, body, onBytes);
+		const patch = await this.send(
+			"PATCH",
+			patchUrl,
+			{ ...auth, "Content-Type": "application/octet-stream", "Content-Length": String(size) },
+			body,
+			onBytes
+		);
 		if (patch.status === 401) return patch;
 		if (patch.status !== 202 && patch.status !== 204) throw this.err(`uploading blob ${digest}`, patch);
 		const putUrl = this.sameOrigin(typeof patch.headers.location === "string" ? patch.headers.location : patchUrl.href, "blob upload");
@@ -241,14 +252,24 @@ export class Registry {
 
 	/** True when `reference` (tag or digest) already names a manifest in this repository. */
 	async manifestExists(reference: string): Promise<boolean> {
-		const res = await this.authed("HEAD", this.url(`/v2/${this.repository}/manifests/${reference}`), { Accept: MANIFEST_ACCEPT }, undefined);
+		const res = await this.authed(
+			"HEAD",
+			this.url(`/v2/${this.repository}/manifests/${reference}`),
+			{ Accept: MANIFEST_ACCEPT },
+			undefined
+		);
 		if (res.status === 200) return true;
 		if (res.status === 404) return false;
 		throw this.err(`checking tag ${reference}`, res);
 	}
 
 	async putManifest(tag: string, mediaType: string, bytes: Buffer): Promise<void> {
-		const res = await this.authed("PUT", this.url(`/v2/${this.repository}/manifests/${tag}`), { "Content-Type": mediaType, "Content-Length": String(bytes.length) }, bytes);
+		const res = await this.authed(
+			"PUT",
+			this.url(`/v2/${this.repository}/manifests/${tag}`),
+			{ "Content-Type": mediaType, "Content-Length": String(bytes.length) },
+			bytes
+		);
 		if (res.status !== 201 && res.status !== 200) throw this.err(`pushing manifest for tag ${tag}`, res);
 	}
 

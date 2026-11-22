@@ -39,7 +39,12 @@ function host(overrides: Record<string, unknown> = {}) {
 		],
 		owners: { cldmv: { read: "cred:cldmv-read", write: "cred:cldmv-write" } },
 		defaultOwner: "cldmv",
-		ghcr: { dropDir: "/var/lib/gh-broker/drop", protectReleaseTags: true, maxArchiveBytes: 1_073_741_824, owners: { cldmv: { credential: "cred:ghcr-cldmv" } } },
+		ghcr: {
+			dropDir: "/var/lib/gh-broker/drop",
+			protectReleaseTags: true,
+			maxArchiveBytes: 1_073_741_824,
+			owners: { cldmv: { credential: "cred:ghcr-cldmv" } }
+		},
 		...overrides
 	};
 	const capability = { has: (ref: string) => STORED.has(ref), otpProblem: () => undefined };
@@ -77,7 +82,9 @@ describe("end to end: a strict host through invoke (design #175 §2b/§2h)", () 
 
 	it("a default-off tool is refused unless the host enables it", async () => {
 		const h = host();
-		await expect(h.broker.invoke("create_pull_request_with_copilot", { owner: "cldmv", repo: "x", problem_statement: "p" }, h.ctx())).rejects.toMatchObject({
+		await expect(
+			h.broker.invoke("create_pull_request_with_copilot", { owner: "cldmv", repo: "x", problem_statement: "p" }, h.ctx())
+		).rejects.toMatchObject({
 			code: "unknown-tool"
 		});
 		const on = host({
@@ -86,7 +93,11 @@ describe("end to end: a strict host through invoke (design #175 §2b/§2h)", () 
 				{ name: "create_pull_request_with_copilot", mode: "write", enabled: true }
 			]
 		});
-		await on.broker.invoke("create_pull_request_with_copilot", { owner: "cldmv", repo: "x", problem_statement: "p", otp: "654321" }, on.ctx());
+		await on.broker.invoke(
+			"create_pull_request_with_copilot",
+			{ owner: "cldmv", repo: "x", problem_statement: "p", otp: "654321" },
+			on.ctx()
+		);
 		expect(on.upstream.forward).toHaveBeenCalledTimes(1);
 		expect(on.approve).toHaveBeenCalledTimes(1); // gated once enabled
 	});
@@ -96,17 +107,21 @@ describe("end to end: a strict host through invoke (design #175 §2b/§2h)", () 
 		// An expiry refusal is not a guess — the verdict carries no badCode, so the sink
 		// sees nothing (invoke does not count failures; approve owns its counter).
 		const ctx = h.ctx({ approve: vi.fn(async () => ({ code: "otp-expired", message: "that code has expired" })) });
-		await expect(h.broker.invoke("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "000000" }, ctx)).rejects.toSatisfy((err: unknown) => {
-			expect(err).toBeInstanceOf(InvokeError);
-			expect((err as InvokeError).code).toBe("otp-expired");
-			expect((err as Error).message).toBe("that code has expired");
-			return true;
-		});
+		await expect(h.broker.invoke("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "000000" }, ctx)).rejects.toSatisfy(
+			(err: unknown) => {
+				expect(err).toBeInstanceOf(InvokeError);
+				expect((err as InvokeError).code).toBe("otp-expired");
+				expect((err as Error).message).toBe("that code has expired");
+				return true;
+			}
+		);
 		expect(h.security).not.toHaveBeenCalled();
 		expect(h.upstream.forward).not.toHaveBeenCalled();
 		// A counted bad code (the verdict says so with badCode) reaches the sink.
 		const counted = h.ctx({ approve: vi.fn(async () => ({ code: "otp-bad", message: "that code was wrong", badCode: true })) });
-		await expect(h.broker.invoke("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "000000" }, counted)).rejects.toMatchObject({ code: "otp-bad" });
+		await expect(
+			h.broker.invoke("merge_pull_request", { owner: "cldmv", repo: "x", pullNumber: 1, otp: "000000" }, counted)
+		).rejects.toMatchObject({ code: "otp-bad" });
 		expect(h.security).toHaveBeenCalledWith({ kind: "code-bad", tool: "merge_pull_request", person: "tester", failures: 0 });
 	});
 
@@ -114,7 +129,9 @@ describe("end to end: a strict host through invoke (design #175 §2b/§2h)", () 
 		const h = host();
 		const ctx = h.ctx();
 		delete (ctx as { approve?: unknown }).approve;
-		await expect(h.broker.invoke("merge_pull_request", { owner: "cldmv", repo: "x", otp: "654321" }, ctx)).rejects.toMatchObject({ code: "otp-required" });
+		await expect(h.broker.invoke("merge_pull_request", { owner: "cldmv", repo: "x", otp: "654321" }, ctx)).rejects.toMatchObject({
+			code: "otp-required"
+		});
 		expect(h.upstream.forward).not.toHaveBeenCalled();
 	});
 

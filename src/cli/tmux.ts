@@ -91,10 +91,23 @@ export interface TmuxOptions {
 	has?: typeof has;
 }
 
-const resolve = ({ proc = "/proc", tmp = "/tmp", readdir = readdirSync, lstat = lstatSync, readlink = readlinkSync, readHead: head = readHead, run: exec = run, has: hasCmd = has }: TmuxOptions) => ({ proc, tmp, readdir, lstat, readlink, head, exec, hasCmd });
+const resolve = ({
+	proc = "/proc",
+	tmp = "/tmp",
+	readdir = readdirSync,
+	lstat = lstatSync,
+	readlink = readlinkSync,
+	readHead: head = readHead,
+	run: exec = run,
+	has: hasCmd = has
+}: TmuxOptions) => ({ proc, tmp, readdir, lstat, readlink, head, exec, hasCmd });
 
 /** The environment a tmux command runs with as the agent: root's PATH, the agent's HOME, no $TMUX (the client must talk to the -S socket), and a UTF-8 locale (a bare one makes tmux write `_` for the tab in -F output). */
-const agentEnv = (info: UserInfo): NodeJS.ProcessEnv => ({ PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", HOME: info.home, LANG: "C.UTF-8" });
+const agentEnv = (info: UserInfo): NodeJS.ProcessEnv => ({
+	PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+	HOME: info.home,
+	LANG: "C.UTF-8"
+});
 
 /** Why a socket is not used: no owning tmux process was found for it (or its binary could not be resolved) — a live server always has a pid that holds its socket, so such a socket is dead or unexplained, and guessing a binary could pick the wrong version. */
 const NO_SERVER = "no server process for this socket";
@@ -116,7 +129,11 @@ function tmux(server: TmuxServer, info: UserInfo, args: string[], exec: typeof r
 	// them, which breaks a -S socket reachable only through a group); without it, fall back to
 	// the uid/gid spawn.
 	const r = hasCmd("/usr/bin/setpriv")
-		? exec("/usr/bin/setpriv", [`--reuid=${info.uid}`, `--regid=${info.gid}`, "--init-groups", "--", server.binary, "-S", server.socket, ...args], opts)
+		? exec(
+				"/usr/bin/setpriv",
+				[`--reuid=${info.uid}`, `--regid=${info.gid}`, "--init-groups", "--", server.binary, "-S", server.socket, ...args],
+				opts
+			)
 		: exec(server.binary, ["-S", server.socket, ...args], { ...opts, uid: info.uid, gid: info.gid });
 	// A timed-out or killed command reports status null: it is not "exited null", it never
 	// answered — the caller skips this server or pane and carries on.
@@ -248,7 +265,10 @@ function processTable(proc: string, readdir: typeof readdirSync, lstat: typeof l
 			// stat's fields after the command name (which can contain ")"): state, ppid, pgrp,
 			// session, tty_nr, tpgid, ...
 			const stat = head(`${proc}/${entry}/stat`, 4096);
-			const rest = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+			const rest = stat
+				.slice(stat.lastIndexOf(")") + 2)
+				.trim()
+				.split(/\s+/);
 			table.set(pid, {
 				argv: head(`${proc}/${entry}/cmdline`, MAX_CMDLINE_BYTES).split("\0").filter(Boolean),
 				uid: lstat(`${proc}/${entry}`).uid,
@@ -272,7 +292,11 @@ function claudePidsInTree(pid: number, table: Map<number, ProcEntry>, childrenOf
 	for (let i = 0; i < queue.length; i++) {
 		const p = queue[i]!;
 		if (isClaude(table.get(p)?.argv ?? [])) out.push(p);
-		for (const child of childrenOf.get(p) ?? []) if (!seen.has(child)) { seen.add(child); queue.push(child); }
+		for (const child of childrenOf.get(p) ?? [])
+			if (!seen.has(child)) {
+				seen.add(child);
+				queue.push(child);
+			}
 	}
 	return out;
 }
@@ -304,7 +328,9 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 		// (stopped, or a background `claude -p` under a shell someone is typing at) must not be
 		// typed into — it is still reported, with foreground false.
 		const tpgid = table.get(panePid)?.tpgid;
-		const fg = candidates.find((c) => table.get(c)?.pgrp === tpgid && table.get(c)?.state !== "T" && (command === "claude" || command === "node"));
+		const fg = candidates.find(
+			(c) => table.get(c)?.pgrp === tpgid && table.get(c)?.state !== "T" && (command === "claude" || command === "node")
+		);
 		const claude = fg ?? candidates[0]!;
 		try {
 			if (lstat(`${proc}/${claude}`).uid !== info.uid) continue; // not the agent's claude
@@ -355,7 +381,10 @@ export function configDirOf(pid: number, opts: TmuxOptions = {}): string | undef
 	const { proc, head } = resolve(opts);
 	try {
 		const env = head(`${proc}/${pid}/environ`, MAX_ENVIRON_BYTES).split("\0");
-		const value = env.find((e) => e.startsWith("CLAUDE_CONFIG_DIR="))?.slice("CLAUDE_CONFIG_DIR=".length).replace(/\/+$/, "");
+		const value = env
+			.find((e) => e.startsWith("CLAUDE_CONFIG_DIR="))
+			?.slice("CLAUDE_CONFIG_DIR=".length)
+			.replace(/\/+$/, "");
 		return value?.startsWith("/") ? value : undefined;
 	} catch {
 		// the process exited, or its environ can't be read

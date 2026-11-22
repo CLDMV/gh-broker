@@ -36,21 +36,54 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-	run, has, isRoot, userExists, requireGid,
-	ensureServiceUser, createAgentUser,
-	pointNodeSymlinks, currentNodeBin, ensureDirs, installUnit,
-	enableService, restartService, serviceActive, deployDist, writeConfigFile, ensureAgentGroup,
-	trySystemdCredDecrypt, systemdCredsEncrypt, ensureCredsDir, writeCredsDropin, removeCredsDropin, ensureDropDir
+	run,
+	has,
+	isRoot,
+	userExists,
+	requireGid,
+	ensureServiceUser,
+	createAgentUser,
+	pointNodeSymlinks,
+	currentNodeBin,
+	ensureDirs,
+	installUnit,
+	enableService,
+	restartService,
+	serviceActive,
+	deployDist,
+	writeConfigFile,
+	ensureAgentGroup,
+	trySystemdCredDecrypt,
+	systemdCredsEncrypt,
+	ensureCredsDir,
+	writeCredsDropin,
+	removeCredsDropin,
+	ensureDropDir
 } from "./system.ts";
 import { promptLine, promptHidden, confirm, choose } from "./prompt.ts";
 import { buildConfig, readOperatorConfig, secretsBlock, type ConfigLayer, type DeployConfig } from "./config-merge.ts";
-import { writeSecretsFile, readSecretsFile, removeSecretsFile, referencedCredNames, optionalCredNames, detectSecretsProvider } from "./secret-store.ts";
+import {
+	writeSecretsFile,
+	readSecretsFile,
+	removeSecretsFile,
+	referencedCredNames,
+	optionalCredNames,
+	detectSecretsProvider
+} from "./secret-store.ts";
 import { parseArgs, NPM_SCOPE, envSecretKey, type InstallArgs } from "./install-args.ts";
 import { generateSeed, seedCredName, seedExists, showSeed, writeFileAtomic } from "./otp.ts";
 import { credentialPlan } from "./credentials.ts";
 import { createNpmToken } from "./npm-setup.ts";
 import { hostname } from "node:os";
-import { assertAgentName, classifyInstall, migrationPlan, NPM_INSTALL_COMMAND, parseGroups, registeredAgents, LEGACY_CLIENTS_GROUP } from "./agents.ts";
+import {
+	assertAgentName,
+	classifyInstall,
+	migrationPlan,
+	NPM_INSTALL_COMMAND,
+	parseGroups,
+	registeredAgents,
+	LEGACY_CLIENTS_GROUP
+} from "./agents.ts";
 import { configureMcp, smokeAgent } from "./agent-cli.ts";
 import { realDeps } from "./real-deps.ts";
 
@@ -69,6 +102,7 @@ const die: (m: string) => never = (m) => {
 	process.exit(1);
 };
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- config, secrets-file and package.json documents, read field by field
 function readJson(path: string): any {
 	try {
 		return JSON.parse(readFileSync(path, "utf8"));
@@ -198,7 +232,9 @@ async function runInstall(argv: string[]): Promise<void> {
 
 	step("prerequisites");
 	for (const cmd of ["systemctl", "useradd", "getent", "sudo"]) if (!has(cmd)) die(`missing required command: ${cmd}`);
-	for (const cmd of ["socat", "rsync"]) if (!has(cmd)) log(`  note: '${cmd}' not found — ${cmd === "socat" ? "the agent socket bridge needs it" : "will fall back to a plain copy"}`);
+	for (const cmd of ["socat", "rsync"])
+		if (!has(cmd))
+			log(`  note: '${cmd}' not found — ${cmd === "socat" ? "the agent socket bridge needs it" : "will fall back to a plain copy"}`);
 
 	// --- agent users ---
 	// An agent is registered by the group gh-broker-agent-<user>. Upgrades keep the registered ones,
@@ -224,14 +260,23 @@ async function runInstall(argv: string[]): Promise<void> {
 			die((err as Error).message);
 		}
 		if (!userExists(requested)) {
-			const create = opts.createAgentUser || (!opts.nonInteractive && (await confirm(`User "${requested}" does not exist. Create it (plain, no sudo)?`)));
+			const create =
+				opts.createAgentUser ||
+				(!opts.nonInteractive && (await confirm(`User "${requested}" does not exist. Create it (plain, no sudo)?`)));
 			if (!create) die(`agent user "${requested}" missing — create it first or pass --create-agent-user`);
 			createAgentUser(requested);
 			log(`  created "${requested}"`);
 		}
 	}
-	const agents = [...new Set([...registered.map((a) => a.user), ...migration.add.filter(userExists), ...(requested ? [requested] : [])])].sort();
-	for (const name of migration.add) log(userExists(name) ? `  migrating ${LEGACY_CLIENTS_GROUP} member "${name}" to a registered agent` : `  skipping ${LEGACY_CLIENTS_GROUP} member "${name}": no such user`);
+	const agents = [
+		...new Set([...registered.map((a) => a.user), ...migration.add.filter(userExists), ...(requested ? [requested] : [])])
+	].sort();
+	for (const name of migration.add)
+		log(
+			userExists(name)
+				? `  migrating ${LEGACY_CLIENTS_GROUP} member "${name}" to a registered agent`
+				: `  skipping ${LEGACY_CLIENTS_GROUP} member "${name}": no such user`
+		);
 	log(`  agents: ${agents.join(", ")}`);
 	// The GHCR drop dir belongs to one agent. A new one goes to the agent named now, else the
 	// first registered; an existing one keeps its owner (see ensureDropDir).
@@ -239,8 +284,12 @@ async function runInstall(argv: string[]): Promise<void> {
 
 	// --- where this copy of the package lives ---
 	const where = classifyInstall(REPO);
-	if (where === "nvm") log(`  warning: this package is installed under an nvm Node version folder; that copy breaks when Node is upgraded. Reinstall it globally: ${NPM_INSTALL_COMMAND}`);
-	else if (where === "checkout" && !existsSync("/usr/local/bin/gh-broker")) log(`  note: no global gh-broker command found. Get one with: ${NPM_INSTALL_COMMAND}`);
+	if (where === "nvm")
+		log(
+			`  warning: this package is installed under an nvm Node version folder; that copy breaks when Node is upgraded. Reinstall it globally: ${NPM_INSTALL_COMMAND}`
+		);
+	else if (where === "checkout" && !existsSync("/usr/local/bin/gh-broker"))
+		log(`  note: no global gh-broker command found. Get one with: ${NPM_INSTALL_COMMAND}`);
 
 	// --- the daemon bundle ---
 	// The package ships it prebuilt. A checkout builds it with the command itself
@@ -286,20 +335,38 @@ async function runInstall(argv: string[]): Promise<void> {
 	// supplied one through --secrets-file/env.
 	step("npm integration");
 	let npmMint = false;
-	if (opts.npm || (!merged.npm && current === null && !opts.nonInteractive && (await confirm("Enable npm_scaffold (create new npm packages and their trusted publishers)?")))) {
+	if (
+		opts.npm ||
+		(!merged.npm &&
+			current === null &&
+			!opts.nonInteractive &&
+			(await confirm("Enable npm_scaffold (create new npm packages and their trusted publishers)?")))
+	) {
 		let scopes = opts.npmScopes.length ? opts.npmScopes : merged.npm?.scopes;
 		if (!scopes?.length) {
 			const fallback = `@${Object.keys(merged.owners ?? {})[0] ?? ""}`.toLowerCase();
-			const answer = opts.nonInteractive ? fallback : (await promptLine(`  npm scope(s) to allow, comma-separated [${fallback}]: `)) || fallback;
-			scopes = answer.split(",").map((s) => s.trim()).filter(Boolean);
+			const answer = opts.nonInteractive
+				? fallback
+				: (await promptLine(`  npm scope(s) to allow, comma-separated [${fallback}]: `)) || fallback;
+			scopes = answer
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean);
 		}
 		for (const s of scopes) if (!NPM_SCOPE.test(s)) die(`npm scope must be a lowercase npm scope like "@acme", got "${s}"`);
 		const tokenOrgs = opts.npmOrgs.length ? opts.npmOrgs : (merged.npm?.tokenOrgs ?? []);
-		merged.npm = { ...(merged.npm ?? {}), token: merged.npm?.token ?? NPM_TOKEN_REF, scopes, ...(opts.npmRegistry ? { registry: opts.npmRegistry } : {}) };
+		merged.npm = {
+			...(merged.npm ?? {}),
+			token: merged.npm?.token ?? NPM_TOKEN_REF,
+			scopes,
+			...(opts.npmRegistry ? { registry: opts.npmRegistry } : {})
+		};
 		if (tokenOrgs.length) merged.npm.tokenOrgs = tokenOrgs;
 		else delete merged.npm.tokenOrgs;
 		npmMint = true;
-		log(`  ${current?.npm ? "rotating the npm token" : "enabling"} for ${scopes.join(", ")}${tokenOrgs.length ? ` (plus org read-write on ${tokenOrgs.join(", ")})` : ""}`);
+		log(
+			`  ${current?.npm ? "rotating the npm token" : "enabling"} for ${scopes.join(", ")}${tokenOrgs.length ? ` (plus org read-write on ${tokenOrgs.join(", ")})` : ""}`
+		);
 	} else {
 		log(merged.npm ? `  enabled for ${merged.npm.scopes!.join(", ")} (rotate the token with --npm)` : "  not enabled (enable with --npm)");
 	}
@@ -318,11 +385,17 @@ async function runInstall(argv: string[]): Promise<void> {
 		// first install (or an ambiguous one) falls through to the prompt.
 		let credNames: string[] = [];
 		try {
-			credNames = readdirSync(credsDir).filter((f) => f.endsWith(".cred")).map((f) => f.slice(0, -".cred".length));
+			credNames = readdirSync(credsDir)
+				.filter((f) => f.endsWith(".cred"))
+				.map((f) => f.slice(0, -".cred".length));
 		} catch {
 			// no creds dir yet — nothing encrypted on disk
 		}
-		const detected = detectSecretsProvider({ configured: current?.secrets?.provider, credNames, fileTokenNames: Object.keys(existingFile) });
+		const detected = detectSecretsProvider({
+			configured: current?.secrets?.provider,
+			credNames,
+			fileTokenNames: Object.keys(existingFile)
+		});
 		if (detected) {
 			provider = detected;
 			log(`  keeping existing backend: ${provider} (change it with --secrets-provider)`);
@@ -395,6 +468,7 @@ async function runInstall(argv: string[]): Promise<void> {
 					log(`  ${name}: created${out.expires ? ` (expires ${out.expires.slice(0, 10)})` : ""}`);
 					return out.token;
 				} catch (err) {
+					// eslint-disable-next-line preserve-caught-error -- the registry error object holds the request (credentials); its message is enough
 					throw new Error(`npm token setup failed: ${(err as Error).message}`);
 				}
 			},
@@ -452,6 +526,7 @@ async function runInstall(argv: string[]): Promise<void> {
 	for (const name of agents) if (!(await smokeAgent(name, merged, dep))) smokeFailed = true;
 	if (smokeFailed) die("smoke test failed (see above)");
 
-	log(`\n✅ gh-broker installed. Manage agents with: sudo gh-broker agent add|remove|list|sync|reconnect, OTP with: sudo gh-broker otp status|unlock|rotate`);
+	log(
+		`\n✅ gh-broker installed. Manage agents with: sudo gh-broker agent add|remove|list|sync|reconnect, OTP with: sudo gh-broker otp status|unlock|rotate`
+	);
 }
-

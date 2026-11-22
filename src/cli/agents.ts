@@ -39,7 +39,10 @@ export function validAgentName(name: unknown): name is string {
 
 /** Throws a clear error for an invalid agent user name. */
 export function assertAgentName(name: unknown): string {
-	if (!validAgentName(name)) throw new Error(`"${name}" is not a valid agent user name (lowercase letters, digits, "_" and "-", starting with a letter or "_", at most 16 characters)`);
+	if (!validAgentName(name))
+		throw new Error(
+			`"${name}" is not a valid agent user name (lowercase letters, digits, "_" and "-", starting with a letter or "_", at most 16 characters)`
+		);
 	return name;
 }
 

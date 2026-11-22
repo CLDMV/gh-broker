@@ -88,6 +88,7 @@ export function parseWait(v: string): number | undefined {
  */
 
 /** Any CSI escape (SGR colours and attributes, cursor moves) — dropped before matching screen shapes. */
+// eslint-disable-next-line no-control-regex -- matching terminal escape sequences is the point
 const CSI = /\x1b\[[0-9;:?]*[ -/]*[@-~]/g;
 
 /**
@@ -99,6 +100,7 @@ export function undimmed(line: string): string {
 	let out = "";
 	let dim = false;
 	let last = 0;
+	// eslint-disable-next-line no-control-regex -- matching terminal escape sequences is the point
 	for (const m of line.matchAll(/\x1b\[([0-9;:?]*)([ -/]*[@-~])/g)) {
 		if (!dim) out += line.slice(last, m.index);
 		last = m.index! + m[0].length;
@@ -160,6 +162,7 @@ export function composerState(text: string): "empty" | "typing" | "none" {
 export const safeKey = (key: string): boolean => /^[A-Za-z0-9_.-]{1,64}$/.test(key);
 
 /** Control characters never reach root's terminal in a log line: a socket path, pane id or a tmux error message carrying C0 or C1 controls (U+009B is CSI on some terminals) is blanked out. */
+// eslint-disable-next-line no-control-regex -- blanking control characters is the point
 const clean = (s: string): string => s.replace(/[\x00-\x1f\x7f\x80-\x9f]/g, "?");
 
 /** Split `agent reconnect` arguments into the agent users (at most one), --dry-run, --wait and --help. */
@@ -257,7 +260,10 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		let panes = 0;
 		const { servers, skipped: deadSockets } = d.tmuxSockets(info);
 		// Socket files whose tmux server has exited are leftovers, not sessions: one count line, not one line each.
-		if (deadSockets.length) d.log(`${user}: ${deadSockets.length} stale tmux socket${deadSockets.length === 1 ? "" : "s"} ignored (no tmux server running on ${deadSockets.length === 1 ? "it" : "them"})`);
+		if (deadSockets.length)
+			d.log(
+				`${user}: ${deadSockets.length} stale tmux socket${deadSockets.length === 1 ? "" : "s"} ignored (no tmux server running on ${deadSockets.length === 1 ? "it" : "them"})`
+			);
 		for (const server of servers) {
 			const socket = server.socket;
 			let panesOnServer: Pane[];
@@ -306,7 +312,15 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				}
 				const composer = composerState(pane.text);
 				if (composer !== "empty") {
-					blocked(user, socket, server, info, pane.id, key, composer === "typing" ? "composer not empty, or a dialog is showing" : "no Claude Code prompt on screen");
+					blocked(
+						user,
+						socket,
+						server,
+						info,
+						pane.id,
+						key,
+						composer === "typing" ? "composer not empty, or a dialog is showing" : "no Claude Code prompt on screen"
+					);
 					continue;
 				}
 				if (dryRun) {

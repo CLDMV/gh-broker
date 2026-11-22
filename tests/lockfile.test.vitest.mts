@@ -96,7 +96,7 @@ describe("installedVersions", () => {
 		const classic = [
 			"# yarn lockfile v1",
 			"",
-			'ws@^7.0.0, ws@^7.1.0:',
+			"ws@^7.0.0, ws@^7.1.0:",
 			'  version "7.4.6"',
 			'  resolved "https://x"',
 			'"@scope/pkg@^1.0.0":',
@@ -106,7 +106,15 @@ describe("installedVersions", () => {
 		].join("\n");
 		expect(installedVersions("yarn", classic, "ws")).toEqual(["7.4.6"]);
 		expect(installedVersions("yarn", classic, "@scope/pkg")).toEqual(["1.2.3"]);
-		const berry = ["__metadata:", "  version: 6", "", '"ws@npm:^8.0.0, ws@npm:^8.1.0":', "  dependencies:", "  version: 8.17.1", "  resolution: x"].join("\n");
+		const berry = [
+			"__metadata:",
+			"  version: 6",
+			"",
+			'"ws@npm:^8.0.0, ws@npm:^8.1.0":',
+			"  dependencies:",
+			"  version: 8.17.1",
+			"  resolution: x"
+		].join("\n");
 		expect(installedVersions("yarn", berry, "ws")).toEqual(["8.17.1"]);
 	});
 });

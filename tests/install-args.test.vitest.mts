@@ -3,7 +3,16 @@ import { parseArgs, envSecretKey } from "../src/cli/install-args.ts";
 
 describe("parseArgs", () => {
 	it("defaults", () => {
-		expect(parseArgs([])).toEqual({ positional: [], nonInteractive: false, createAgentUser: false, noMcpConfig: false, npm: false, npmScopes: [], npmOrgs: [], cliSecrets: {} });
+		expect(parseArgs([])).toEqual({
+			positional: [],
+			nonInteractive: false,
+			createAgentUser: false,
+			noMcpConfig: false,
+			npm: false,
+			npmScopes: [],
+			npmOrgs: [],
+			cliSecrets: {}
+		});
 	});
 
 	it("reads every flag", () => {
@@ -49,20 +58,43 @@ describe("parseArgs", () => {
 
 	it("parses every config flag", () => {
 		const o = parseArgs([
-			"--config", "/etc/x.json",
-			"--owner", "acme", "--owner", "beta",
-			"--installation-id", "acme=42",
-			"--default-owner", "acme",
-			"--listen", "agents:/run/x",
-			"--upstream", "https://example.test/mcp",
-			"--app-id", "77",
-			"--app-private-key", "cred:my-key",
-			"--secrets-path", "/etc/s.json",
-			"--npm", "--npm-registry", "https://registry.example.test",
-			"--ghcr-owner", "acme", "--ghcr-username", "Me-1",
-			"--ghcr-image", "app", "--ghcr-image", "app-*", "--ghcr-image", "team/svc",
-			"--ghcr-drop-dir", "/srv/x/drop",
-			"--ghcr-max-archive-bytes", "1048576",
+			"--config",
+			"/etc/x.json",
+			"--owner",
+			"acme",
+			"--owner",
+			"beta",
+			"--installation-id",
+			"acme=42",
+			"--default-owner",
+			"acme",
+			"--listen",
+			"agents:/run/x",
+			"--upstream",
+			"https://example.test/mcp",
+			"--app-id",
+			"77",
+			"--app-private-key",
+			"cred:my-key",
+			"--secrets-path",
+			"/etc/s.json",
+			"--npm",
+			"--npm-registry",
+			"https://registry.example.test",
+			"--ghcr-owner",
+			"acme",
+			"--ghcr-username",
+			"Me-1",
+			"--ghcr-image",
+			"app",
+			"--ghcr-image",
+			"app-*",
+			"--ghcr-image",
+			"team/svc",
+			"--ghcr-drop-dir",
+			"/srv/x/drop",
+			"--ghcr-max-archive-bytes",
+			"1048576",
 			"--no-protect-release-tags"
 		]);
 		expect(o).toMatchObject({
@@ -89,7 +121,8 @@ describe("parseArgs", () => {
 
 	it("leaves the config fields unset when no config flag is given", () => {
 		const o = parseArgs(["--agent-user", "a"]);
-		for (const k of ["configFile", "owners", "defaultOwner", "listen", "upstream", "appId", "ghcrOwner", "protectReleaseTags"]) expect(o[k]).toBeUndefined();
+		for (const k of ["configFile", "owners", "defaultOwner", "listen", "upstream", "appId", "ghcrOwner", "protectReleaseTags"])
+			expect(o[k]).toBeUndefined();
 	});
 
 	it("collects --secret name=token pairs, keeping any = inside the token", () => {
@@ -148,11 +181,16 @@ describe("parseArgs", () => {
 
 describe("--claude-config (#163)", () => {
 	it("takes <user>:<absolute folder>, repeatable, without a trailing slash", () => {
-		expect(parseArgs(["--claude-config", "glmtest:/srv/claude/", "--claude-config", "repo:/x"]).claudeConfigs).toEqual([{ user: "glmtest", dir: "/srv/claude" }, { user: "repo", dir: "/x" }]);
+		expect(parseArgs(["--claude-config", "glmtest:/srv/claude/", "--claude-config", "repo:/x"]).claudeConfigs).toEqual([
+			{ user: "glmtest", dir: "/srv/claude" },
+			{ user: "repo", dir: "/x" }
+		]);
 		expect(parseArgs(["--claude-config", "repo:/"]).claudeConfigs).toEqual([{ user: "repo", dir: "/" }]);
 	});
 	it("refuses a missing user, a relative folder or a bad name", () => {
-		expect(() => parseArgs(["--claude-config", "/srv/claude"])).toThrow('--claude-config takes <agent user>:<absolute folder>, got "/srv/claude"');
+		expect(() => parseArgs(["--claude-config", "/srv/claude"])).toThrow(
+			'--claude-config takes <agent user>:<absolute folder>, got "/srv/claude"'
+		);
 		expect(() => parseArgs(["--claude-config", ":/srv"])).toThrow(/takes <agent user>:<absolute folder>/);
 		expect(() => parseArgs(["--claude-config", "repo:rel"])).toThrow(/takes <agent user>:<absolute folder>/);
 		expect(() => parseArgs(["--claude-config", "Bad:/x"])).toThrow(/not a valid agent user name/);

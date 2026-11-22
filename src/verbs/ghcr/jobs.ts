@@ -82,7 +82,10 @@ export class JobQueue {
 	}
 
 	submit(meta: JobMeta, hooks: JobHooks): Job {
-		if (this.activeCount() >= this.maxPending) throw new QueueFull(`ghcr_push: ${this.activeCount()} pushes are already queued or running — wait for one to finish (ghcr_push_status)`);
+		if (this.activeCount() >= this.maxPending)
+			throw new QueueFull(
+				`ghcr_push: ${this.activeCount()} pushes are already queued or running — wait for one to finish (ghcr_push_status)`
+			);
 		const job: Job = { ...meta, job: randomUUID(), state: "queued", createdAt: new Date().toISOString() };
 		this.jobs.set(job.job, job);
 		this.pending.push({ job, hooks });

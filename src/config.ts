@@ -37,13 +37,15 @@ export function loadConfig(path: string): Config {
 	try {
 		raw = JSON.parse(readFileSync(path, "utf8"));
 	} catch (err) {
-		throw new Error(`config: cannot read/parse ${path}: ${(err as Error).message}`);
+		throw new Error(`config: cannot read/parse ${path}: ${(err as Error).message}`, { cause: err });
 	}
 	if (typeof raw !== "object" || raw === null) throw new Error("config: root must be an object");
 	const c = raw as Record<string, unknown>;
 
 	if (typeof c.listen === "string" && c.listen.startsWith("unix:")) {
-		throw new Error('config.listen: the shared "unix:" socket was replaced by one socket per agent; re-run the installer (sudo gh-broker install) to set listen to "agents:/run/gh-broker/agents"');
+		throw new Error(
+			'config.listen: the shared "unix:" socket was replaced by one socket per agent; re-run the installer (sudo gh-broker install) to set listen to "agents:/run/gh-broker/agents"'
+		);
 	}
 	if (typeof c.listen !== "string" || !agentsDir(c.listen)) {
 		throw new Error('config.listen: must be "agents:<absolute directory>", e.g. "agents:/run/gh-broker/agents"');
@@ -118,7 +120,8 @@ function parseOtpConfig(raw: unknown): OtpConfig {
 		// ms value leaves the Date range and toISOString throws. The lib-otp option set caps
 		// it there too — bounding it here keeps the error naming the config key instead of an
 		// OtpError from the gate's constructor at startup.
-		if (key === "lockoutSeconds" && v > 8_640_000_000_000) throw new Error("config.otp.lockoutSeconds: must be at most 8640000000000 (the largest lockout that fits a Date)");
+		if (key === "lockoutSeconds" && v > 8_640_000_000_000)
+			throw new Error("config.otp.lockoutSeconds: must be at most 8640000000000 (the largest lockout that fits a Date)");
 		out[key] = v;
 	}
 	if (o.statePath !== undefined) {
@@ -127,4 +130,3 @@ function parseOtpConfig(raw: unknown): OtpConfig {
 	}
 	return out;
 }
-

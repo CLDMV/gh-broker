@@ -263,9 +263,18 @@ function isUnavailable(err: unknown): boolean {
 	return status === 403 || status === 404;
 }
 
-async function fetchRaw(octokit: Octokit, budget: CallBudget, spec: TypeSpec, route: string, params: Record<string, unknown>, limit: number): Promise<unknown[]> {
+async function fetchRaw(
+	octokit: Octokit,
+	budget: CallBudget,
+	spec: TypeSpec,
+	route: string,
+	params: Record<string, unknown>,
+	limit: number
+): Promise<unknown[]> {
 	const query = { ...params, state: "open" };
-	return spec.cursor ? paginateAfter<unknown>(octokit, budget, route, query, limit) : paginate<unknown>(octokit, budget, route, query, limit);
+	return spec.cursor
+		? paginateAfter<unknown>(octokit, budget, route, query, limit)
+		: paginate<unknown>(octokit, budget, route, query, limit);
 }
 
 function severityRank(s: string): number {
@@ -382,7 +391,9 @@ export async function reportSecurityAlerts(octokit: Octokit, input: ReportSecuri
 		else if (r === 2) row.medium++;
 		else if (r >= 3 && r <= 5) row.low++;
 	}
-	const byRepo = [...rollup.values()].sort((a, b) => b.critical - a.critical || b.high - a.high || b.total - a.total || a.repo.localeCompare(b.repo));
+	const byRepo = [...rollup.values()].sort(
+		(a, b) => b.critical - a.critical || b.high - a.high || b.total - a.total || a.repo.localeCompare(b.repo)
+	);
 
 	if (input.classify) {
 		try {
@@ -431,12 +442,34 @@ export const REPORT_SECURITY_ALERTS_SCHEMA = {
 			items: { type: "string", enum: ["dependabot", "codeql", "secrets"] },
 			description: "which alert types to read (default: all three)"
 		},
-		maxRepos: { type: "number", description: `safety cap on repos swept per-repo when the org-level endpoint is unavailable (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})` },
-		alertLimit: { type: "number", description: `safety cap on alerts fetched per type (org mode) or per repo per type (default ${DEFAULT_ALERT_LIMIT}, hard cap ${HARD_ALERT_LIMIT})` },
-		maxApiCalls: { type: "number", description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})` },
-		summaryOnly: { type: "boolean", description: "return only the per-repo roll-up (byRepo) and counts, not the alert list — a few KB instead of ~700 KB for a whole org", default: false },
-		minSeverity: { type: "string", enum: ["critical", "high", "medium", "low"], description: "keep only alerts at or above this severity (secret-scanning alerts are always kept)" },
+		maxRepos: {
+			type: "number",
+			description: `safety cap on repos swept per-repo when the org-level endpoint is unavailable (default ${DEFAULT_MAX_REPOS}, hard cap ${HARD_MAX_REPOS})`
+		},
+		alertLimit: {
+			type: "number",
+			description: `safety cap on alerts fetched per type (org mode) or per repo per type (default ${DEFAULT_ALERT_LIMIT}, hard cap ${HARD_ALERT_LIMIT})`
+		},
+		maxApiCalls: {
+			type: "number",
+			description: `hard ceiling on total REST calls this invocation makes (default ${DEFAULT_MAX_API_CALLS}, hard cap ${HARD_MAX_API_CALLS})`
+		},
+		summaryOnly: {
+			type: "boolean",
+			description: "return only the per-repo roll-up (byRepo) and counts, not the alert list — a few KB instead of ~700 KB for a whole org",
+			default: false
+		},
+		minSeverity: {
+			type: "string",
+			enum: ["critical", "high", "medium", "low"],
+			description: "keep only alerts at or above this severity (secret-scanning alerts are always kept)"
+		},
 		repos: { type: "array", items: { type: "string" }, description: "keep only these repos (names, with or without the owner prefix)" },
-		classify: { type: "boolean", description: "add each repo's flow tier (v4 / dev-trunk / non-v4) and the raw signals to byRepo; about 3 REST calls per repo with alerts", default: false }
+		classify: {
+			type: "boolean",
+			description:
+				"add each repo's flow tier (v4 / dev-trunk / non-v4) and the raw signals to byRepo; about 3 REST calls per repo with alerts",
+			default: false
+		}
 	}
 };

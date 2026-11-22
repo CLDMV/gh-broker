@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, indexTools } from "../src/config.ts";
@@ -64,7 +64,9 @@ describe("loadConfig — listen / upstream", () => {
 		for (const listen of ["tcp:0.0.0.0:9000", "agents:relative/dir", "agents:"]) {
 			const c = baseConfig();
 			c.listen = listen;
-			expect(() => loadConfig(writeConfig(c))).toThrow('config.listen: must be "agents:<absolute directory>", e.g. "agents:/run/gh-broker/agents"');
+			expect(() => loadConfig(writeConfig(c))).toThrow(
+				'config.listen: must be "agents:<absolute directory>", e.g. "agents:/run/gh-broker/agents"'
+			);
 		}
 	});
 
@@ -125,7 +127,10 @@ describe("loadConfig — tools", () => {
 
 	it("carries an enabled flag through, refuses a non-boolean one, and never lets otp_status be disabled", () => {
 		const c = baseConfig();
-		c.tools = [{ name: "assign_copilot_to_issue", mode: "write", enabled: true }, { name: "get_me", mode: "read", enabled: false }];
+		c.tools = [
+			{ name: "assign_copilot_to_issue", mode: "write", enabled: true },
+			{ name: "get_me", mode: "read", enabled: false }
+		];
 		expect(loadConfig(writeConfig(c)).tools).toEqual([
 			{ name: "assign_copilot_to_issue", mode: "write", custom: false, augment: false, enabled: true },
 			{ name: "get_me", mode: "read", custom: false, augment: false, enabled: false }
@@ -164,8 +169,13 @@ describe("loadConfig — tools", () => {
 
 	it("refuses a tool on the built-in deny list, even gated, and names why", () => {
 		const c = baseConfig();
-		c.tools = [{ name: "get_me", mode: "read" }, { name: "push_files", mode: "write", otp: true }];
-		expect(() => loadConfig(writeConfig(c))).toThrow('config.tools[1] ("push_files"): never allowed in gh-broker (file writes go through git); remove it from config.tools');
+		c.tools = [
+			{ name: "get_me", mode: "read" },
+			{ name: "push_files", mode: "write", otp: true }
+		];
+		expect(() => loadConfig(writeConfig(c))).toThrow(
+			'config.tools[1] ("push_files"): never allowed in gh-broker (file writes go through git); remove it from config.tools'
+		);
 		c.tools = [{ name: "delete_repository", mode: "write" }];
 		expect(() => loadConfig(writeConfig(c))).toThrow(/never allowed in gh-broker \(deleting a repo stays a manual step in GitHub\)/);
 	});
@@ -366,7 +376,10 @@ describe("loadConfig — npm", () => {
 	});
 
 	it("leaves registry out when it is not set", () => {
-		expect(loadConfig(writeConfig({ ...baseConfig(), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } })).npm).toEqual({ token: "cred:npm-token", scopes: ["@cldmv"] });
+		expect(loadConfig(writeConfig({ ...baseConfig(), npm: { token: "cred:npm-token", scopes: ["@cldmv"] } })).npm).toEqual({
+			token: "cred:npm-token",
+			scopes: ["@cldmv"]
+		});
 	});
 
 	it("accepts a token ref, scopes, an https registry and token orgs", () => {
@@ -391,7 +404,10 @@ describe("loadConfig — npm", () => {
 });
 
 describe("loadConfig — ghcr", () => {
-	const ghcr = { dropDir: "/srv/gh-broker/ghcr-drop", owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot"] } } };
+	const ghcr = {
+		dropDir: "/srv/gh-broker/ghcr-drop",
+		owners: { cldmv: { username: "Shinrai", credential: "cred:cldmv-packages", images: ["hoot"] } }
+	};
 
 	it("parses a ghcr block", () => {
 		const c = loadConfig(writeConfig({ ...baseConfig(), ghcr }));
@@ -401,7 +417,9 @@ describe("loadConfig — ghcr", () => {
 
 	it("omits ghcr when absent and rejects a malformed block", () => {
 		expect(loadConfig(writeConfig(baseConfig())).ghcr).toBeUndefined();
-		expect(() => loadConfig(writeConfig({ ...baseConfig(), ghcr: { ...ghcr, dropDir: "/etc/x/y" } }))).toThrow(/config.ghcr.dropDir: may not be under \/etc/);
+		expect(() => loadConfig(writeConfig({ ...baseConfig(), ghcr: { ...ghcr, dropDir: "/etc/x/y" } }))).toThrow(
+			/config.ghcr.dropDir: may not be under \/etc/
+		);
 	});
 
 	it("ships no owner-specific data in config.example.json, and it loads once an owner is added", () => {
@@ -429,7 +447,14 @@ describe("loadConfig — otp", () => {
 
 	it("parses config.otp, keeping only what was given (defaults live in src/otp/policy.ts)", () => {
 		expect(loadConfig(writeConfig({ ...baseConfig(), otp: { seed: "cred:otp-seed" } })).otp).toEqual({ seed: "cred:otp-seed" });
-		const full = { seed: "cred:otp-seed", windowSeconds: 120, maxFailures: 3, lockoutSeconds: 60, maxLockouts: 2, statePath: "/var/lib/gh-broker/s.json" };
+		const full = {
+			seed: "cred:otp-seed",
+			windowSeconds: 120,
+			maxFailures: 3,
+			lockoutSeconds: 60,
+			maxLockouts: 2,
+			statePath: "/var/lib/gh-broker/s.json"
+		};
 		expect(loadConfig(writeConfig({ ...baseConfig(), otp: full })).otp).toEqual(full);
 		expect(loadConfig(writeConfig(baseConfig())).otp).toBeUndefined();
 	});
@@ -451,23 +476,43 @@ describe("loadConfig — otp", () => {
 	});
 
 	it("accepts a lockoutSeconds exactly at the Date-range bound", () => {
-		expect(loadConfig(writeConfig({ ...baseConfig(), otp: { seed: "cred:s", lockoutSeconds: 8_640_000_000_000 } })).otp).toEqual({ seed: "cred:s", lockoutSeconds: 8_640_000_000_000 });
+		expect(loadConfig(writeConfig({ ...baseConfig(), otp: { seed: "cred:s", lockoutSeconds: 8_640_000_000_000 } })).otp).toEqual({
+			seed: "cred:s",
+			lockoutSeconds: 8_640_000_000_000
+		});
 	});
 
 	it("carries a tool's otp flag only when it is set, and rejects a non-boolean", () => {
-		const out = loadConfig(writeConfig(withTools([{ name: "get_me", mode: "read" }, { name: "a", mode: "write", otp: true }, { name: "b", mode: "write", otp: false }])));
+		const out = loadConfig(
+			writeConfig(
+				withTools([
+					{ name: "get_me", mode: "read" },
+					{ name: "a", mode: "write", otp: true },
+					{ name: "b", mode: "write", otp: false }
+				])
+			)
+		);
 		expect(out.tools).toEqual([
 			{ name: "get_me", mode: "read", custom: false, augment: false },
 			{ name: "a", mode: "write", custom: false, augment: false, otp: true },
 			{ name: "b", mode: "write", custom: false, augment: false, otp: false }
 		]);
-		expect(() => loadConfig(writeConfig(withTools([{ name: "a", mode: "write", otp: "yes" }])))).toThrow(/config\.tools\[0\]\.otp: must be true or false/);
+		expect(() => loadConfig(writeConfig(withTools([{ name: "a", mode: "write", otp: "yes" }])))).toThrow(
+			/config\.tools\[0\]\.otp: must be true or false/
+		);
 	});
 
 	it("otp_status must be custom and can't be gated", () => {
-		expect(loadConfig(writeConfig(withTools([{ name: "otp_status", mode: "read", custom: true, otp: false }]))).tools[0]).toMatchObject({ name: "otp_status", otp: false });
-		expect(() => loadConfig(writeConfig(withTools([{ name: "otp_status", mode: "read", custom: true, otp: true }])))).toThrow(/"otp_status"\): can't be gated/);
-		expect(() => loadConfig(writeConfig(withTools([{ name: "otp_status", mode: "read" }])))).toThrow(/"otp_status"\): must be custom: true/);
+		expect(loadConfig(writeConfig(withTools([{ name: "otp_status", mode: "read", custom: true, otp: false }]))).tools[0]).toMatchObject({
+			name: "otp_status",
+			otp: false
+		});
+		expect(() => loadConfig(writeConfig(withTools([{ name: "otp_status", mode: "read", custom: true, otp: true }])))).toThrow(
+			/"otp_status"\): can't be gated/
+		);
+		expect(() => loadConfig(writeConfig(withTools([{ name: "otp_status", mode: "read" }])))).toThrow(
+			/"otp_status"\): must be custom: true/
+		);
 	});
 
 	it("config.example.json enables otp_status and the otp block", () => {

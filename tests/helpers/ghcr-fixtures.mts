@@ -114,7 +114,8 @@ export function ociArchive(opts: OciOptions = {}): BuiltImage {
 	const raw = (opts.layerContents ?? ["layer one", "layer two"]).map(layerTar);
 	const layers = opts.gzip ? raw.map((l) => gzipSync(l)) : raw;
 	const config = imageConfig(raw.map((l) => sha(l)));
-	const layerType = opts.layerMediaType ?? (opts.gzip ? "application/vnd.oci.image.layer.v1.tar+gzip" : "application/vnd.oci.image.layer.v1.tar");
+	const layerType =
+		opts.layerMediaType ?? (opts.gzip ? "application/vnd.oci.image.layer.v1.tar+gzip" : "application/vnd.oci.image.layer.v1.tar");
 	const manifest: Record<string, any> = {
 		schemaVersion: 2,
 		mediaType: opts.manifestMediaType ?? "application/vnd.oci.image.manifest.v1+json",
@@ -124,7 +125,12 @@ export function ociArchive(opts: OciOptions = {}): BuiltImage {
 	};
 	opts.mutateManifest?.(manifest);
 	const manifestBytes = Buffer.from(JSON.stringify(manifest));
-	const mDesc = { mediaType: manifest.mediaType, digest: sha(manifestBytes), size: manifestBytes.length, platform: { os: "linux", architecture: "amd64" } };
+	const mDesc = {
+		mediaType: manifest.mediaType,
+		digest: sha(manifestBytes),
+		size: manifestBytes.length,
+		platform: { os: "linux", architecture: "amd64" }
+	};
 	const blobs: Array<[string, Buffer]> = [
 		[sha(config), config],
 		[sha(manifestBytes), manifestBytes],
@@ -132,9 +138,20 @@ export function ociArchive(opts: OciOptions = {}): BuiltImage {
 	];
 	let index: Buffer;
 	if (opts.nested) {
-		const inner = Buffer.from(JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [mDesc, ...(opts.extraIndexEntries ?? [])] }));
+		const inner = Buffer.from(
+			JSON.stringify({
+				schemaVersion: 2,
+				mediaType: "application/vnd.oci.image.index.v1+json",
+				manifests: [mDesc, ...(opts.extraIndexEntries ?? [])]
+			})
+		);
 		blobs.push([sha(inner), inner]);
-		index = Buffer.from(JSON.stringify({ schemaVersion: 2, manifests: [{ mediaType: "application/vnd.oci.image.index.v1+json", digest: sha(inner), size: inner.length }] }));
+		index = Buffer.from(
+			JSON.stringify({
+				schemaVersion: 2,
+				manifests: [{ mediaType: "application/vnd.oci.image.index.v1+json", digest: sha(inner), size: inner.length }]
+			})
+		);
 	} else {
 		index = Buffer.from(JSON.stringify({ schemaVersion: 2, manifests: [mDesc, ...(opts.extraIndexEntries ?? [])] }));
 	}
@@ -279,14 +296,17 @@ export class FakeRegistry {
 
 		if (url.pathname === "/token") {
 			const expected = `Basic ${Buffer.from(`${this.opts.username}:${this.opts.password}`).toString("base64")}`;
-			if (this.opts.tokenStatus) return this.json(res, this.opts.tokenStatus, { errors: [{ code: "DENIED", message: `denied for ${req.headers.authorization}` }] });
-			if (req.headers.authorization !== expected) return this.json(res, 401, { errors: [{ code: "UNAUTHORIZED", message: "bad credentials" }] });
+			if (this.opts.tokenStatus)
+				return this.json(res, this.opts.tokenStatus, { errors: [{ code: "DENIED", message: `denied for ${req.headers.authorization}` }] });
+			if (req.headers.authorization !== expected)
+				return this.json(res, 401, { errors: [{ code: "UNAUTHORIZED", message: "bad credentials" }] });
 			if (this.opts.tokenMissing) return this.json(res, 200, {});
 			this.validToken = `regtok-${++this.tokensIssued}-secretvalue`;
 			return this.json(res, 200, { token: this.validToken });
 		}
 
-		if (this.opts.rejectBearer || req.headers.authorization !== `Bearer ${this.validToken}`) return this.json(res, 401, { errors: [{ code: "UNAUTHORIZED", message: "authentication required" }] });
+		if (this.opts.rejectBearer || req.headers.authorization !== `Bearer ${this.validToken}`)
+			return this.json(res, 401, { errors: [{ code: "UNAUTHORIZED", message: "authentication required" }] });
 		if (!this.expired && this.opts.expireTokenAfter !== undefined && ++this.authedCount > this.opts.expireTokenAfter) {
 			this.expired = true;
 			this.validToken = undefined;
@@ -309,7 +329,8 @@ export class FakeRegistry {
 			const chunks = this.uploads.get(id);
 			if (!chunks) return this.json(res, 404, { errors: [{ code: "BLOB_UPLOAD_UNKNOWN", message: "unknown upload" }] });
 			if (req.method === "PATCH") {
-				if (Number(req.headers["content-length"]) !== body.length) return this.json(res, 400, { errors: [{ code: "SIZE_INVALID", message: "length mismatch" }] });
+				if (Number(req.headers["content-length"]) !== body.length)
+					return this.json(res, 400, { errors: [{ code: "SIZE_INVALID", message: "length mismatch" }] });
 				chunks.push(body);
 				res.writeHead(202, { Location: url.pathname, "Content-Length": "0" });
 				return void res.end();
@@ -358,14 +379,17 @@ export class FakeRegistry {
 			return void res.end();
 		}
 		if (kind === "tags" && rest === "list") {
-			if (this.opts.noRepo) return this.json(res, 404, { errors: [{ code: "NAME_UNKNOWN", message: "repository name not known to registry" }] });
+			if (this.opts.noRepo)
+				return this.json(res, 404, { errors: [{ code: "NAME_UNKNOWN", message: "repository name not known to registry" }] });
 			const size = this.opts.tagPageSize ?? 1000;
 			const last = url.searchParams.get("last");
 			const start = last ? this.tags.indexOf(last) + 1 : 0;
 			const page = this.tags.slice(start, start + size);
 			const more = start + size < this.tags.length;
 			const linkBase = this.opts.foreignLink ? "http://evil.example" : "";
-			const headers: Record<string, string> = more ? { Link: `<${linkBase}${url.pathname}?n=${size}&last=${page[page.length - 1]}>; rel="next"` } : {};
+			const headers: Record<string, string> = more
+				? { Link: `<${linkBase}${url.pathname}?n=${size}&last=${page[page.length - 1]}>; rel="next"` }
+				: {};
 			return this.json(res, 200, { name: m[1], tags: page }, headers);
 		}
 		return this.json(res, 405, { errors: [{ code: "UNSUPPORTED", message: `${req.method} ${url.pathname}` }] });

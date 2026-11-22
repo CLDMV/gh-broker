@@ -1,6 +1,6 @@
 # @cldmv/gh-broker
 
-**@cldmv/gh-broker** is a local **credential-routing MCP proxy** for GitHub. It lets an autonomous agent read and write issues, pull requests and more across several orgs **without ever holding a token**: the agent gets to *act*, never to *possess* the credential.
+**@cldmv/gh-broker** is a local **credential-routing MCP proxy** for GitHub. It lets an autonomous agent read and write issues, pull requests and more across several orgs **without ever holding a token**: the agent gets to _act_, never to _possess_ the credential.
 
 The hosted GitHub MCP authenticates with one token per server, so several orgs means several servers, and the token sits in a config file the agent can read. A classic PAT spans orgs but is coarse; a GitHub App acts as a bot and can't drive the MCP; `gh` and raw PATs are readable by the agent (`gh auth token`). gh-broker covers what none of them do together: the user's own identity, least privilege, several orgs, one server, and a secret the agent cannot exfiltrate.
 
@@ -196,7 +196,19 @@ The installer writes each agent's MCP config for its own socket ([deploy/README.
 
 ```json
 // result
-{ "pull": 35, "summary": { "passed": 6, "failed": 1, "pending": 0 }, "failures": [{ "workflow": "🧪 CI Tests & Build", "job": "Build & Test (22.12)", "runId": 34787050719, "runUrl": "https://github.com/CLDMV/droidsock/actions/runs/34787050719", "conclusion": "failure" }] }
+{
+	"pull": 35,
+	"summary": { "passed": 6, "failed": 1, "pending": 0 },
+	"failures": [
+		{
+			"workflow": "🧪 CI Tests & Build",
+			"job": "Build & Test (22.12)",
+			"runId": 34787050719,
+			"runUrl": "https://github.com/CLDMV/droidsock/actions/runs/34787050719",
+			"conclusion": "failure"
+		}
+	]
+}
 ```
 
 No token ever appears in the request, the response, or anywhere the agent can read. See [docs/TOOLS.md](docs/TOOLS.md) for every custom and augmented tool, with full parameter tables and real verified examples.
@@ -205,7 +217,7 @@ No token ever appears in the request, the response, or anywhere the agent can re
 
 ## 📁 Layout
 
-```
+```text
 src/
   index.ts          entry — resolve paths, load config + secrets, start server
   paths.ts          platform-neutral config/secrets path resolution

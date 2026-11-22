@@ -57,7 +57,11 @@ describe("the LockStateStore write-failure contract", () => {
 		writeFileSync(path, JSON.stringify({ ...emptyState(), lastAcceptedStep: 1 }));
 		const store: LockStateStore = new OtpStateFile(path);
 		store.read(); // caches the on-disk state
-		const attempted = { ...emptyState(), lastAcceptedStep: 42, users: { repo: { failures: 3, lockedUntil: null, lockouts: [], hardLock: null } } };
+		const attempted = {
+			...emptyState(),
+			lastAcceptedStep: 42,
+			users: { repo: { failures: 3, lockedUntil: null, lockouts: [], hardLock: null } }
+		};
 		// The injection: a read-only directory, so the temp-file open fails with EACCES.
 		// (Verified on this box: chmod 0500 blocks the owner's writes despite the ACLs.)
 		chmodSync(dir, 0o500);

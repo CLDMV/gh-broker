@@ -126,9 +126,11 @@ function validate(input: unknown) {
 	if (unknown.length) fail(`unknown argument(s): ${unknown.join(", ")} — expected ${[...INPUT_KEYS].join(", ")}`);
 	if (typeof a.owner !== "string" || !a.owner.trim()) fail('"owner" must be a non-empty string');
 	if (typeof a.repo !== "string" || !a.repo.trim()) fail('"repo" must be a non-empty string');
-	if (typeof a.issue_number !== "number" || !Number.isInteger(a.issue_number) || a.issue_number <= 0) fail('"issue_number" must be a positive integer');
+	if (typeof a.issue_number !== "number" || !Number.isInteger(a.issue_number) || a.issue_number <= 0)
+		fail('"issue_number" must be a positive integer');
 	if (a.create_missing !== undefined && typeof a.create_missing !== "boolean") fail('"create_missing" must be a boolean');
-	if (a.color !== undefined && (typeof a.color !== "string" || !/^#?[0-9a-f]{6}$/i.test(a.color))) fail('"color" must be a 6-digit hex color, e.g. "ededed"');
+	if (a.color !== undefined && (typeof a.color !== "string" || !/^#?[0-9a-f]{6}$/i.test(a.color)))
+		fail('"color" must be a 6-digit hex color, e.g. "ededed"');
 
 	const add = toList(a.add, "add");
 	const remove = toList(a.remove, "remove");
@@ -197,7 +199,9 @@ export async function issueLabels(octokit: Octokit, input: IssueLabelsInput): Pr
 		}
 	}
 	if (missing.length && !createMissing) {
-		fail(`label(s) not found in ${owner}/${repo}: ${missing.join(", ")} — nothing was changed. Check the spelling (list_label), or pass create_missing: true to create them.`);
+		fail(
+			`label(s) not found in ${owner}/${repo}: ${missing.join(", ")} — nothing was changed. Check the spelling (list_label), or pass create_missing: true to create them.`
+		);
 	}
 
 	// 2. Plan the removals: only labels actually on the issue, in the issue's own spelling.
@@ -324,6 +328,10 @@ export const ISSUE_LABELS_SCHEMA = {
 			default: false,
 			description: "create add-side labels that don't exist in the repo; without it an unknown name refuses the call and nothing changes"
 		},
-		color: { type: "string", pattern: "^#?[0-9a-fA-F]{6}$", description: `6-digit hex color (with or without #) for labels created via create_missing; default ${DEFAULT_COLOR}` }
+		color: {
+			type: "string",
+			pattern: "^#?[0-9a-fA-F]{6}$",
+			description: `6-digit hex color (with or without #) for labels created via create_missing; default ${DEFAULT_COLOR}`
+		}
 	}
 };

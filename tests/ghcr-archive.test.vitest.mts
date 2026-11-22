@@ -43,7 +43,8 @@ describe("indexTar", () => {
 		]);
 		withFd(buf, (fd, size) => {
 			const { files } = indexTar(fd, size);
-			for (const k of ["dir/a.txt", "dir/link", "dir/hard", "dir/chain"]) expect(readMember(fd, files.get(k)!, 100, k).toString()).toBe("alpha");
+			for (const k of ["dir/a.txt", "dir/link", "dir/hard", "dir/chain"])
+				expect(readMember(fd, files.get(k)!, 100, k).toString()).toBe("alpha");
 			expect(files.has("dir/dangling")).toBe(false);
 			expect(files.has("dir")).toBe(false);
 		});
@@ -89,7 +90,10 @@ describe("indexTar", () => {
 	});
 
 	it("stops reading a PAX header at a record with no length separator", () => {
-		const buf = tar([{ name: "p", type: "x", data: "nolengthhere" }, { name: "a", data: "x" }]);
+		const buf = tar([
+			{ name: "p", type: "x", data: "nolengthhere" },
+			{ name: "a", data: "x" }
+		]);
 		withFd(buf, (fd, size) => expect(indexTar(fd, size).files.has("a")).toBe(true));
 	});
 
@@ -123,12 +127,41 @@ describe("indexTar", () => {
 
 	it.each([
 		["a bad checksum", tar([{ name: "a", data: "x", badChecksum: true }]), /bad tar header checksum/],
-		["a non-octal checksum field", (() => { const b = tar([{ name: "a", data: "x" }]); b.write("zzzzzz\0 ", 148); return b; })(), /bad tar header checksum/],
+		[
+			"a non-octal checksum field",
+			(() => {
+				const b = tar([{ name: "a", data: "x" }]);
+				b.write("zzzzzz\0 ", 148);
+				return b;
+			})(),
+			/bad tar header checksum/
+		],
 		["a non-octal size", tar([{ name: "a", data: "x", sizeField: "99999999999" }]), /bad size field/],
 		["a member past the end", tar([{ name: "a", data: "x", sizeField: "00000077777" }], { end: false }), /runs past the end/],
-		["a bad PAX record", tar([{ name: "p", type: "x", data: "zz path=x\n" }, { name: "a", data: "x" }]), /bad PAX header record/],
-		["a bad PAX size", tar([{ name: "p", type: "x", data: paxRecord("size", "-1") }, { name: "a", data: "x" }]), /bad PAX size/],
-		["a link loop", tar([{ name: "a", type: "2", linkname: "b" }, { name: "b", type: "2", linkname: "a" }]), /link loop/]
+		[
+			"a bad PAX record",
+			tar([
+				{ name: "p", type: "x", data: "zz path=x\n" },
+				{ name: "a", data: "x" }
+			]),
+			/bad PAX header record/
+		],
+		[
+			"a bad PAX size",
+			tar([
+				{ name: "p", type: "x", data: paxRecord("size", "-1") },
+				{ name: "a", data: "x" }
+			]),
+			/bad PAX size/
+		],
+		[
+			"a link loop",
+			tar([
+				{ name: "a", type: "2", linkname: "b" },
+				{ name: "b", type: "2", linkname: "a" }
+			]),
+			/link loop/
+		]
 	])("refuses %s", (_label, buf, re) => {
 		withFd(buf, (fd, size) => expect(() => indexTar(fd, size)).toThrow(re));
 	});
@@ -137,7 +170,13 @@ describe("indexTar", () => {
 		const big = tar([{ name: "p", type: "x", data: Buffer.alloc(1024 * 1024 + 1, 0x41) }]);
 		withFd(big, (fd, size) => expect(() => indexTar(fd, size)).toThrow(/extended header too large/));
 		// The file shrank after it was stat-ed: the second header is cut short.
-		const two = tar([{ name: "a", data: "x" }, { name: "b", data: "y" }], { end: false });
+		const two = tar(
+			[
+				{ name: "a", data: "x" },
+				{ name: "b", data: "y" }
+			],
+			{ end: false }
+		);
 		withFd(two.subarray(0, 1100), (fd) => expect(() => indexTar(fd, two.length)).toThrow(/truncated at byte 1100/));
 	});
 
@@ -277,7 +316,9 @@ describe("planImage", () => {
 		const img = ociArchive({ gzip: true, annotations: { a: "b" } });
 		const p = plan(img.archive);
 		expect(p.format).toBe("oci-layout");
-		expect(p.layers.map((l) => [l.compress, l.mediaType, l.sourceDigest])).toEqual(img.layers.map((l) => [false, MEDIA.ociLayerGzip, sha(l)]));
+		expect(p.layers.map((l) => [l.compress, l.mediaType, l.sourceDigest])).toEqual(
+			img.layers.map((l) => [false, MEDIA.ociLayerGzip, sha(l)])
+		);
 		expect(p.verbatimManifest?.mediaType).toBe(MEDIA.ociManifest);
 		expect(p.config.digest).toBe(sha(img.config));
 		expect(p.annotations).toEqual({ a: "b" });
@@ -294,7 +335,12 @@ describe("planImage", () => {
 		expect(retyped.layers[0]!.mediaType).toBe(MEDIA.ociLayerGzip);
 		expect(retyped.verbatimManifest).toBeUndefined();
 		const docker = plan(
-			ociArchive({ gzip: true, layerMediaType: MEDIA.dockerLayerGzip, configMediaType: MEDIA.dockerConfig, manifestMediaType: MEDIA.dockerManifest }).archive
+			ociArchive({
+				gzip: true,
+				layerMediaType: MEDIA.dockerLayerGzip,
+				configMediaType: MEDIA.dockerConfig,
+				manifestMediaType: MEDIA.dockerManifest
+			}).archive
 		);
 		expect(docker.layers[0]!.mediaType).toBe(MEDIA.dockerLayerGzip);
 		expect(docker.verbatimManifest?.mediaType).toBe(MEDIA.dockerManifest);
@@ -308,13 +354,23 @@ describe("planImage", () => {
 	});
 
 	it("unwraps a nested index and skips attestation and unknown-platform entries", () => {
-		const attest = { mediaType: MEDIA.ociManifest, digest: sha("x"), size: 1, annotations: { "vnd.docker.reference.type": "attestation-manifest" } };
+		const attest = {
+			mediaType: MEDIA.ociManifest,
+			digest: sha("x"),
+			size: 1,
+			annotations: { "vnd.docker.reference.type": "attestation-manifest" }
+		};
 		const unknown = { mediaType: MEDIA.ociManifest, digest: sha("y"), size: 1, platform: { os: "unknown", architecture: "unknown" } };
 		expect(plan(ociArchive({ nested: true, extraIndexEntries: [attest, unknown] }).archive).format).toBe("oci-layout");
 	});
 
 	it("picks the one platform whose blobs were saved from a full multi-platform index (containerd store)", () => {
-		const notSaved = { mediaType: MEDIA.ociManifest, digest: sha("arm64 manifest"), size: 1, platform: { os: "linux", architecture: "arm64" } };
+		const notSaved = {
+			mediaType: MEDIA.ociManifest,
+			digest: sha("arm64 manifest"),
+			size: 1,
+			platform: { os: "linux", architecture: "arm64" }
+		};
 		expect(plan(ociArchive({ nested: true, extraIndexEntries: [notSaved] }).archive).format).toBe("oci-layout");
 		expect(plan(ociArchive({ extraIndexEntries: [notSaved, { ...notSaved, digest: "md5:x" }] }).archive).format).toBe("oci-layout");
 	});
@@ -333,18 +389,34 @@ describe("planImage", () => {
 		const img = ociArchive({ gzip: true });
 		const cfgName = `blobs/sha256/${sha(img.config).slice(7)}`;
 		expect(() => plan(ociArchive({ gzip: true, omit: [cfgName] }).archive)).toThrow(/image config sha256:.* is missing/);
-		expect(() => plan(ociArchive({ gzip: true, mutateManifest: (m) => (m.config.size = 1) }).archive)).toThrow(/config size does not match/);
-		expect(() => plan(ociArchive({ gzip: true, mutateManifest: (m) => (m.layers[0].size = 1) }).archive)).toThrow(/layer 1 size does not match/);
-		expect(() => plan(ociArchive({ gzip: true, mutateManifest: (m) => (m.layers[0].digest = "sha512:abc") }).archive)).toThrow(/only sha256/);
+		expect(() => plan(ociArchive({ gzip: true, mutateManifest: (m) => (m.config.size = 1) }).archive)).toThrow(
+			/config size does not match/
+		);
+		expect(() => plan(ociArchive({ gzip: true, mutateManifest: (m) => (m.layers[0].size = 1) }).archive)).toThrow(
+			/layer 1 size does not match/
+		);
+		expect(() => plan(ociArchive({ gzip: true, mutateManifest: (m) => (m.layers[0].digest = "sha512:abc") }).archive)).toThrow(
+			/only sha256/
+		);
 		expect(() => plan(ociArchive({ gzip: true, mutateManifest: (m) => delete m.layers }).archive)).toThrow(/no config or layers/);
 		expect(() => plan(ociArchive({ gzip: true, configMediaType: "application/x-cfg" }).archive)).toThrow(/config media type/);
-		expect(() => plan(ociArchive({ gzip: true, layerMediaType: "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip" }).archive)).toThrow(/non-distributable/);
-		expect(() => plan(ociArchive({ gzip: true, mutateManifest: (m) => (m.layers = Array.from({ length: MAX_LAYERS + 1 }, () => m.layers[0])) }).archive)).toThrow(/at most 256/);
+		expect(() =>
+			plan(ociArchive({ gzip: true, layerMediaType: "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip" }).archive)
+		).toThrow(/non-distributable/);
+		expect(() =>
+			plan(
+				ociArchive({ gzip: true, mutateManifest: (m) => (m.layers = Array.from({ length: MAX_LAYERS + 1 }, () => m.layers[0])) }).archive
+			)
+		).toThrow(/at most 256/);
 	});
 
 	it("refuses descriptors that carry no media type", () => {
-		expect(() => plan(ociArchive({ mutateManifest: (m) => delete m.mediaType }).archive)).toThrow(/manifest media type "undefined" is not supported/);
-		expect(() => plan(ociArchive({ mutateManifest: (m) => delete m.config.mediaType }).archive)).toThrow(/config media type "undefined" is not supported/);
+		expect(() => plan(ociArchive({ mutateManifest: (m) => delete m.mediaType }).archive)).toThrow(
+			/manifest media type "undefined" is not supported/
+		);
+		expect(() => plan(ociArchive({ mutateManifest: (m) => delete m.config.mediaType }).archive)).toThrow(
+			/config media type "undefined" is not supported/
+		);
 	});
 
 	it("refuses a nested index that holds more than one saved image", () => {
@@ -356,7 +428,10 @@ describe("planImage", () => {
 	it("refuses a docker-archive whose layer entry is not a file name", () => {
 		const config = Buffer.from(JSON.stringify({ rootfs: { diff_ids: [] } }));
 		const manifest = Buffer.from(JSON.stringify([{ Config: "cfg.json", Layers: [5] }]));
-		const buf = tar([{ name: "cfg.json", data: config }, { name: "manifest.json", data: manifest }]);
+		const buf = tar([
+			{ name: "cfg.json", data: config },
+			{ name: "manifest.json", data: manifest }
+		]);
 		expect(() => plan(buf)).toThrow(/layer 1 "5" is missing from the archive/);
 	});
 
@@ -399,8 +474,12 @@ describe("planImage", () => {
 		expect(() => plan(dockerArchive({ images: 2 }).archive)).toThrow(/holds 2 images/);
 		expect(() => plan(tar([{ name: "manifest.json", data: "{}" }]))).toThrow(/holds 0 images/);
 		expect(() => plan(tar([{ name: "manifest.json", data: "[{}]" }]))).toThrow(/no Config or Layers/);
-		expect(() => plan(tar([{ name: "manifest.json", data: '[{"Config":"c.json","Layers":["l.tar"]}]' }]))).toThrow(/image config "c.json" is missing/);
-		expect(() => plan(tar([{ name: "manifest.json", data: JSON.stringify([{ Config: "c.json", Layers: Array(257).fill("l") }]) }]))).toThrow(/at most 256/);
+		expect(() => plan(tar([{ name: "manifest.json", data: '[{"Config":"c.json","Layers":["l.tar"]}]' }]))).toThrow(
+			/image config "c.json" is missing/
+		);
+		expect(() =>
+			plan(tar([{ name: "manifest.json", data: JSON.stringify([{ Config: "c.json", Layers: Array(257).fill("l") }]) }]))
+		).toThrow(/at most 256/);
 		expect(() =>
 			plan(
 				tar([

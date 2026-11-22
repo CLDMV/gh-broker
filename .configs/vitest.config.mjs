@@ -43,7 +43,15 @@ export default defineConfig({
 			// src/cli/install.ts (the root-only installer run, step by step against the host)
 			// and src/cli/real-deps.ts (the real effects the tested CLI modules take as deps)
 			// are wiring; their logic lives in the measured src/cli modules.
-			exclude: ["tests/**", "**/*.json", "src/index.ts", "src/types.ts", "src/bin/gh-broker.ts", "src/cli/install.ts", "src/cli/real-deps.ts"],
+			exclude: [
+				"tests/**",
+				"**/*.json",
+				"src/index.ts",
+				"src/types.ts",
+				"src/bin/gh-broker.ts",
+				"src/cli/install.ts",
+				"src/cli/real-deps.ts"
+			],
 			reporter: ["text", "html", "json-summary", "json"]
 		}
 	}

@@ -27,7 +27,8 @@ vi.mock("node:fs", async (importOriginal) => {
 	return {
 		...actual,
 		chmodSync: (...args: Parameters<typeof actual.chmodSync>) => {
-			if (fsFail.chmod && String(args[0]).endsWith(".sock")) throw Object.assign(new Error("ENOENT: no such file or directory, chmod"), { code: "ENOENT" });
+			if (fsFail.chmod && String(args[0]).endsWith(".sock"))
+				throw Object.assign(new Error("ENOENT: no such file or directory, chmod"), { code: "ENOENT" });
 			return actual.chmodSync(...args);
 		}
 	};
@@ -35,7 +36,9 @@ vi.mock("node:fs", async (importOriginal) => {
 
 const root = join(process.cwd(), "tmp", "tests", "server");
 const fakeRouter: any = {
-	call: vi.fn(async (name: string, args: unknown, caller: { user: string }) => ({ content: [{ type: "text", text: `${caller.user}:${name}:${JSON.stringify(args)}` }] }))
+	call: vi.fn(async (name: string, args: unknown, caller: { user: string }) => ({
+		content: [{ type: "text", text: `${caller.user}:${name}:${JSON.stringify(args)}` }]
+	}))
 };
 const catalog: any[] = [{ name: "get_me", description: "me", inputSchema: { type: "object" } }];
 const sockets: Socket[] = [];
@@ -97,7 +100,9 @@ afterAll(() => {
 
 describe("startServer", () => {
 	it("rejects a listen value that isn't agents:<abs dir>", async () => {
-		await expect(startServer({ listen: "unix:/run/x.sock" } as any, fakeRouter, catalog)).rejects.toThrow('server: unsupported listen "unix:/run/x.sock" (expected "agents:<absolute dir>")');
+		await expect(startServer({ listen: "unix:/run/x.sock" } as any, fakeRouter, catalog)).rejects.toThrow(
+			'server: unsupported listen "unix:/run/x.sock" (expected "agents:<absolute dir>")'
+		);
 	});
 
 	it("listens on one socket per agent, 0660 in the agent's group, and tags each call with that agent", async () => {
@@ -112,7 +117,11 @@ describe("startServer", () => {
 		}
 
 		const repo = await client(join(h.dir, "repo.sock"));
-		const init = await repo.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "1" } });
+		const init = await repo.request("initialize", {
+			protocolVersion: "2024-11-05",
+			capabilities: {},
+			clientInfo: { name: "t", version: "1" }
+		});
 		expect(init.result.serverInfo.name).toBe("gh-broker");
 		expect(init.result.serverInfo.version).toBe(pkg.version);
 		expect((await repo.request("tools/list", {})).result.tools).toEqual(catalog);
@@ -172,7 +181,9 @@ describe("startServer", () => {
 		const st = statSync(join(h.dir, "repo.sock"));
 		expect(st.mode & 0o777).toBe(0o660);
 		expect(st.gid).not.toBe(0);
-		expect(err).toHaveBeenCalledWith(expect.stringMatching(/cannot give .*repo\.sock to group gh-broker-agent-repo \(.*\); repo can't connect/));
+		expect(err).toHaveBeenCalledWith(
+			expect.stringMatching(/cannot give .*repo\.sock to group gh-broker-agent-repo \(.*\); repo can't connect/)
+		);
 	});
 
 	it("rejects, and stops listening, when the socket can't be set to 0660", async () => {

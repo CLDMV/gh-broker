@@ -116,7 +116,9 @@ export async function startServer(config: Config, router: Router, catalog: Tool[
 		if (name.endsWith(".sock") && !wanted.has(name)) rmSync(join(dir, name), { force: true });
 	}
 	if (agents.length === 0) {
-		console.error("gh-broker: no agents registered (no gh-broker-agent-<user> group with members gh-broker and <user>); serving nothing. Add one with: sudo gh-broker agent add <user>");
+		console.error(
+			"gh-broker: no agents registered (no gh-broker-agent-<user> group with members gh-broker and <user>); serving nothing. Add one with: sudo gh-broker agent add <user>"
+		);
 		return [];
 	}
 	for (const agent of agents) await listenFor(join(dir, `${agent.user}.sock`), agent, router, catalog);

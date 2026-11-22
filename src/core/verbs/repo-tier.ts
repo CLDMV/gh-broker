@@ -49,7 +49,12 @@ export interface RepoTier {
 	};
 }
 
-async function getOrUndefined<T>(octokit: Octokit, budget: CallBudget, route: string, params: Record<string, unknown>): Promise<T | undefined> {
+async function getOrUndefined<T>(
+	octokit: Octokit,
+	budget: CallBudget,
+	route: string,
+	params: Record<string, unknown>
+): Promise<T | undefined> {
 	try {
 		return await reqOne<T>(octokit, budget, route, params);
 	} catch (err) {
@@ -60,9 +65,16 @@ async function getOrUndefined<T>(octokit: Octokit, budget: CallBudget, route: st
 }
 
 /** `knownDefaultBranch` lets a caller that already read the repo skip the extra GET. */
-export async function classifyRepo(octokit: Octokit, budget: CallBudget, owner: string, repo: string, knownDefaultBranch?: string): Promise<RepoTier> {
+export async function classifyRepo(
+	octokit: Octokit,
+	budget: CallBudget,
+	owner: string,
+	repo: string,
+	knownDefaultBranch?: string
+): Promise<RepoTier> {
 	const defaultBranch =
-		knownDefaultBranch ?? (await getOrUndefined<{ default_branch?: string }>(octokit, budget, "GET /repos/{owner}/{repo}", { owner, repo }))?.default_branch;
+		knownDefaultBranch ??
+		(await getOrUndefined<{ default_branch?: string }>(octokit, budget, "GET /repos/{owner}/{repo}", { owner, repo }))?.default_branch;
 	const workflow = await getOrUndefined<unknown>(octokit, budget, "GET /repos/{owner}/{repo}/contents/{path}", {
 		owner,
 		repo,
@@ -73,7 +85,11 @@ export async function classifyRepo(octokit: Octokit, budget: CallBudget, owner: 
 	if (!v4Workflow) return { tier: "non-v4", signals: { v4Workflow, ...(defaultBranch ? { defaultBranch } : {}) } };
 
 	const sha = async (branch: string): Promise<string | undefined> => {
-		const b = await getOrUndefined<{ commit?: { sha?: string } }>(octokit, budget, "GET /repos/{owner}/{repo}/branches/{branch}", { owner, repo, branch });
+		const b = await getOrUndefined<{ commit?: { sha?: string } }>(octokit, budget, "GET /repos/{owner}/{repo}/branches/{branch}", {
+			owner,
+			repo,
+			branch
+		});
 		return b?.commit?.sha;
 	};
 	const [defaultSha, nextSha, devSha] = await Promise.all([defaultBranch ? sha(defaultBranch) : undefined, sha("next"), sha("dev")]);

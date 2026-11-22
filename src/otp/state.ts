@@ -250,7 +250,11 @@ export interface UserStatus extends UserFacts {
  * package's describeUser over the user's machine record (padded by personOf); this wrapper
  * renames its `lockoutsInWindow` to the CLI's `lockoutsLast24h` and fills the daemon's limits.
  */
-export function describeUser(user: UserState, { maxFailures = DEFAULT_MAX_FAILURES, maxLockouts = DEFAULT_MAX_LOCKOUTS }: OtpLimits = {}, now = Date.now()): UserFacts {
+export function describeUser(
+	user: UserState,
+	{ maxFailures = DEFAULT_MAX_FAILURES, maxLockouts = DEFAULT_MAX_LOCKOUTS }: OtpLimits = {},
+	now = Date.now()
+): UserFacts {
 	const f = libDescribeUser(personOf(user), { maxFailures, maxLockouts, windowMs: DAY_MS }, now);
 	return {
 		locked: f.locked,
@@ -271,14 +275,42 @@ export function describeUsers({ status, state }: StateReading, users: string[], 
 	const names = [...new Set([...users, ...Object.keys(state.users)])].sort();
 	return names.map((user): UserStatus =>
 		status === "corrupt"
-			? { user, corrupt: true, locked: true, failures: null, maxFailures: limits.maxFailures ?? DEFAULT_MAX_FAILURES, lockedUntil: null, lockoutsLast24h: null, maxLockouts: limits.maxLockouts ?? DEFAULT_MAX_LOCKOUTS, hardLock: null }
+			? {
+					user,
+					corrupt: true,
+					locked: true,
+					failures: null,
+					maxFailures: limits.maxFailures ?? DEFAULT_MAX_FAILURES,
+					lockedUntil: null,
+					lockoutsLast24h: null,
+					maxLockouts: limits.maxLockouts ?? DEFAULT_MAX_LOCKOUTS,
+					hardLock: null
+				}
 			: { user, ...describeUser(userOf(state, user), limits, now) }
 	);
 }
 
 /** `d`'s facts in the package formatter's shape (it names the field `lockoutsInWindow`). */
-function asPersonStatus(d: UserStatus): { person: string; locked: boolean; failures: number; maxFailures: number; lockedUntil: string | null; lockoutsInWindow: number; maxLockouts: number; hardLock: UserState["hardLock"] } {
-	return { person: d.user, locked: d.locked, failures: d.failures!, maxFailures: d.maxFailures, lockedUntil: d.lockedUntil, lockoutsInWindow: d.lockoutsLast24h!, maxLockouts: d.maxLockouts, hardLock: d.hardLock };
+function asPersonStatus(d: UserStatus): {
+	person: string;
+	locked: boolean;
+	failures: number;
+	maxFailures: number;
+	lockedUntil: string | null;
+	lockoutsInWindow: number;
+	maxLockouts: number;
+	hardLock: UserState["hardLock"];
+} {
+	return {
+		person: d.user,
+		locked: d.locked,
+		failures: d.failures!,
+		maxFailures: d.maxFailures,
+		lockedUntil: d.lockedUntil,
+		lockoutsInWindow: d.lockoutsLast24h!,
+		maxLockouts: d.maxLockouts,
+		hardLock: d.hardLock
+	};
 }
 
 /**
@@ -298,8 +330,15 @@ export function formatStatus(
 		unlockCommand = "sudo gh-broker otp unlock"
 	}: { statePath: string; fileStatus: StateReading["status"]; configured: boolean; unlockCommand?: string }
 ): string[] {
-	const lines = [`OTP configured: ${configured ? "yes" : "no (re-run the installer to set it up)"}`, `state file: ${statePath} (${fileStatus})`];
-	if (fileStatus === "corrupt") lines.push("LOCKED: the state file is unreadable, so the broker treats every user as hard-locked.", `Clear it with: ${unlockCommand} --all`);
+	const lines = [
+		`OTP configured: ${configured ? "yes" : "no (re-run the installer to set it up)"}`,
+		`state file: ${statePath} (${fileStatus})`
+	];
+	if (fileStatus === "corrupt")
+		lines.push(
+			"LOCKED: the state file is unreadable, so the broker treats every user as hard-locked.",
+			`Clear it with: ${unlockCommand} --all`
+		);
 	if (users.length === 0) lines.push("no agents registered");
 	for (const d of users) {
 		if (d.corrupt) {
@@ -353,7 +392,9 @@ export class OtpStateFile implements LockStateStore {
 		}
 		if (state) return { ok: true, state };
 		const since = new Date(this.now()).toISOString();
-		console.error(`gh-broker: OTP state file ${this.path} is unreadable or corrupt (${why}); failing closed: every tool except otp_status is locked for every user until "gh-broker otp unlock" rewrites it`);
+		console.error(
+			`gh-broker: OTP state file ${this.path} is unreadable or corrupt (${why}); failing closed: every tool except otp_status is locked for every user until "gh-broker otp unlock" rewrites it`
+		);
 		return { ok: false, since };
 	}
 
@@ -386,7 +427,7 @@ export class OtpStateFile implements LockStateStore {
 				/* the temp file was never created */
 			}
 			this.sig = signature(this.path); // keep serving the in-memory state while the file is unchanged
-			throw new Error(`OTP state could not be saved to ${this.path}: ${(err as Error).message}`);
+			throw new Error(`OTP state could not be saved to ${this.path}: ${(err as Error).message}`, { cause: err });
 		}
 		this.sig = written;
 		syncDir(dirname(this.path));

@@ -74,7 +74,16 @@ async function main(): Promise<void> {
 		// it would attempt secret resolution and fail where it should report unchecked.
 		const secretsChecked = provider === "file" || Boolean(process.env.CREDENTIALS_DIRECTORY);
 		if (secretsChecked) loadSecretStore(config);
-		console.log(JSON.stringify({ event: "config-ok", config: configPath, provider, secretsChecked, owners: Object.keys(config.owners), tools: config.tools.length }));
+		console.log(
+			JSON.stringify({
+				event: "config-ok",
+				config: configPath,
+				provider,
+				secretsChecked,
+				owners: Object.keys(config.owners),
+				tools: config.tools.length
+			})
+		);
 		return;
 	}
 

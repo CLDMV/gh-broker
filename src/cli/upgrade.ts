@@ -87,7 +87,8 @@ export function parseUpgradeArgs(rest: string[]): UpgradeArgs {
 			// The version is handed to npm as a spec: anything but semver (a dist-tag, a URL, a
 			// git or file path) could make npm run arbitrary code as root, so it is refused here.
 			const v = a === "--version" ? rest[++i] : a.slice("--version=".length);
-			if (v === undefined || v.startsWith("-") || !SEMVER.test(v.replace(/^v/, ""))) throw new Error("--version takes a semantic version to install, e.g. --version 0.12.1");
+			if (v === undefined || v.startsWith("-") || !SEMVER.test(v.replace(/^v/, "")))
+				throw new Error("--version takes a semantic version to install, e.g. --version 0.12.1");
 			args.version = v.replace(/^v/, "");
 		} else if (a === "--wait" || a.startsWith("--wait=")) {
 			const v = a === "--wait" ? rest[++i] : a.slice("--wait=".length);
@@ -153,13 +154,18 @@ export function upgradeSteps(target: string, installFlags: string[], reconnect: 
 		{ name: "npm install", command: NPM_INSTALL_COMMAND.replace(/@latest$/, `@${target}`) },
 		{ name: "install", command: `sudo gh-broker install${flags}` }
 	];
-	if (reconnect) steps.push({ name: "agent reconnect", command: `sudo gh-broker agent reconnect${wait !== undefined ? ` --wait ${wait}` : ""}` });
+	if (reconnect)
+		steps.push({ name: "agent reconnect", command: `sudo gh-broker agent reconnect${wait !== undefined ? ` --wait ${wait}` : ""}` });
 	return steps;
 }
 
 /** The lines telling an operator step `failed` (0-based) didn't run and what to run to finish: that step's command, then the remaining ones. */
 export function finishLines(steps: UpgradeStep[], failed: number, why: string): string[] {
-	return [`step ${failed + 1}/${steps.length} (${steps[failed]!.name}) failed: ${why}`, "finish by running:", ...steps.slice(failed).map((s) => `  ${s.command}`)];
+	return [
+		`step ${failed + 1}/${steps.length} (${steps[failed]!.name}) failed: ${why}`,
+		"finish by running:",
+		...steps.slice(failed).map((s) => `  ${s.command}`)
+	];
 }
 
 /**
@@ -192,17 +198,21 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 				return parseArgs(pending);
 			} catch (err) {
 				const unknown = /unknown flag: (.+?) \(see --help\)$/.exec((err as Error).message)?.[1];
-				if (!unknown || !pending.includes(unknown)) throw new Error(`install flags: ${(err as Error).message}`);
+				if (!unknown || !pending.includes(unknown)) throw new Error(`install flags: ${(err as Error).message}`, { cause: err });
 				const name = unknown.includes("=") ? unknown.slice(0, unknown.indexOf("=")) : unknown;
 				const near = nearOwnFlag(name);
-				if (near) throw new Error(`unknown flag: ${unknown} — did you mean ${near}?`);
-				if (!unknown.includes("=")) throw new Error(`unknown flag: ${unknown} — pass flags the new release knows as --flag=value`);
+				if (near) throw new Error(`unknown flag: ${unknown} — did you mean ${near}?`, { cause: err });
+				if (!unknown.includes("="))
+					throw new Error(`unknown flag: ${unknown} — pass flags the new release knows as --flag=value`, { cause: err });
 				passThrough.push(unknown);
 			}
 		}
 	};
 	const installArgs = validated();
-	if (installArgs.positional.length) throw new Error(`upgrade takes only flags — "${installArgs.positional.join(" ")}" would be an install argument; pass --agent-user <name> instead`);
+	if (installArgs.positional.length)
+		throw new Error(
+			`upgrade takes only flags — "${installArgs.positional.join(" ")}" would be an install argument; pass --agent-user <name> instead`
+		);
 	const target = args.version ?? d.latestVersion() ?? "latest";
 	const installed = d.installedVersion();
 	const deployed = d.deployedVersion();
@@ -243,6 +253,8 @@ export function upgradeCommand(rest: string[], config: ConfigLayer, d: UpgradeDe
 			return 1;
 		}
 	}
-	d.log(`✅ gh-broker is at ${target}${installed === target && deployed === target ? " (reinstalled)" : ""}${args.noReconnect ? "; reconnect skipped" : reconnectSkipped ? "; some sessions not reconnected" : ""}`);
+	d.log(
+		`✅ gh-broker is at ${target}${installed === target && deployed === target ? " (reinstalled)" : ""}${args.noReconnect ? "; reconnect skipped" : reconnectSkipped ? "; some sessions not reconnected" : ""}`
+	);
 	return 0;
 }

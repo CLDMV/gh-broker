@@ -116,7 +116,10 @@ function yarnVersions(text: string, pkg: string): string[] {
 	for (const line of text.split(/\r?\n/)) {
 		if (line === "" || line.startsWith("#")) continue;
 		if (/^\S.*:$/.test(line)) {
-			const specs = line.slice(0, -1).split(/,\s*/).map((s) => s.trim().replace(/^"|"$/g, ""));
+			const specs = line
+				.slice(0, -1)
+				.split(/,\s*/)
+				.map((s) => s.trim().replace(/^"|"$/g, ""));
 			matching = specs.some((s) => s.slice(0, s.indexOf("@", 1)) === pkg);
 			continue;
 		}

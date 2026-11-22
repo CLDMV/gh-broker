@@ -74,7 +74,15 @@ describe("validState is parseState", () => {
 		expect(cli.validUser(user)).toBe(true);
 		expect(cli.validUser({ ...user, hardLock: { since: "2026-11-01T12:00:00Z", lockouts: 3 } })).toBe(true);
 		expect(cli.validUser(state.emptyUser())).toBe(true);
-		for (const v of [null, [], {}, { ...user, failures: -1 }, { ...user, lockedUntil: 5 }, { ...user, lockouts: [1] }, { ...user, hardLock: { since: 5, lockouts: 1 } }]) {
+		for (const v of [
+			null,
+			[],
+			{},
+			{ ...user, failures: -1 },
+			{ ...user, lockedUntil: 5 },
+			{ ...user, lockouts: [1] },
+			{ ...user, hardLock: { since: 5, lockouts: 1 } }
+		]) {
 			expect(cli.validUser(v)).toBe(false);
 		}
 	});
@@ -109,12 +117,26 @@ describe("the CLI status prose kept its exact shape at the shared home", () => {
 	});
 
 	it("formatStatus takes the same unlockCommand text", () => {
-		const lines = cli.formatStatus([{ user: "repo", locked: true, failures: 0, maxFailures: 5, lockedUntil: null, lockoutsLast24h: 3, maxLockouts: 3, hardLock: { since: "2026-11-01T12:00:00.000Z", lockouts: 3 } }], {
-			statePath: "/var/lib/gh-broker/otp-state.json",
-			fileStatus: "ok",
-			configured: true,
-			unlockCommand: "sudo gh-broker otp unlock"
-		});
+		const lines = cli.formatStatus(
+			[
+				{
+					user: "repo",
+					locked: true,
+					failures: 0,
+					maxFailures: 5,
+					lockedUntil: null,
+					lockoutsLast24h: 3,
+					maxLockouts: 3,
+					hardLock: { since: "2026-11-01T12:00:00.000Z", lockouts: 3 }
+				}
+			],
+			{
+				statePath: "/var/lib/gh-broker/otp-state.json",
+				fileStatus: "ok",
+				configured: true,
+				unlockCommand: "sudo gh-broker otp unlock"
+			}
+		);
 		expect(lines).toContain("  HARD LOCK since 2026-11-01T12:00:00.000Z after 3 lockouts. Clear it with: sudo gh-broker otp unlock repo");
 	});
 });
