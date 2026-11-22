@@ -19,17 +19,17 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.14.1 (November 2026)
+### Latest: v0.14.2 (November 2026)
 
-- **`agent reconnect` reaches your sessions.** It used to skip almost every pane: an idle session's dimmed prompt suggestion read as someone typing, and a working session was skipped as busy. Now it sends to idle and working sessions alike, and still skips panes with real text in the input box or a dialog on screen.
-- [View full v0.14.1 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.1.md)
+- **`agent reconnect` reads 24-bit colour sessions, and skipped panes don't fail `upgrade`.** A session drawn in 24-bit colour no longer reads as someone typing. `agent reconnect` exits 3 when it only skipped panes, and `upgrade` reports that as done with a note to rerun reconnect later, instead of a failed step.
+- [View full v0.14.2 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.2.md)
 
 ### Recent Releases
 
+- **v0.14.1** (November 2026) — `agent reconnect` sends to idle and working sessions; a dimmed prompt suggestion no longer reads as typing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.1.md))
 - **v0.14.0** (November 2026) — `report_custom_properties` reads repository custom property values, per repo or across an org ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.0.md))
 - **v0.13.1** (November 2026) — `report_release_changes` lists a commit's issue number as `not-a-pr` instead of failing on it ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.1.md))
 - **v0.13.0** (November 2026) — `sudo gh-broker upgrade` does the npm install, reinstall and agent reconnect in one go; `gh-broker agent reconnect` on its own; `npm_scaffold` reports an expired trusted publisher ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.0.md))
-- **v0.12.0** (November 2026) — the broker's core is a library: `createBroker` gives a host `invoke` and `run` with the daemon's policy, OTP and dispatch code ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.12.0.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
