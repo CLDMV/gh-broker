@@ -19,7 +19,9 @@ vi.mock("node:fs", () => ({
 	readdirSync: vi.fn(),
 	openSync: vi.fn(),
 	readSync: vi.fn(),
-	closeSync: vi.fn()
+	closeSync: vi.fn(),
+	fstatSync: vi.fn(),
+	constants: { O_RDONLY: 0, O_NOFOLLOW: 131072 }
 }));
 
 import * as fs from "node:fs";
