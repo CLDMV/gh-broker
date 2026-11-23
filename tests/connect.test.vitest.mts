@@ -298,7 +298,7 @@ describe("handshake replay after a restart", () => {
 		// and the bridge works again
 		b.stdin.write(`${req(2, "tools/list")}\n`);
 		await waitFor(() => broker.received.some((l) => l === req(2, "tools/list")));
-		await b.client.waitNext(isResponse(2));
+		await b.client.waitNext((l) => l === req(2, "tools/list")); // echoed back to the client
 		expect(b.logs).toContain(`bridge: connected to ${broker.path}`);
 		expect(b.logs).toContain("bridge: socket closed; retrying in 5ms");
 	});

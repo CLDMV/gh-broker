@@ -69,7 +69,9 @@ export function makeDeps(over: Record<string, unknown> = {}, files: Record<strin
 			stdout: new PassThrough(),
 			log: (m: string) => out.push(m),
 			connect: vi.fn(() => Promise.reject(new Error("ENOENT"))),
-			sleep: vi.fn(async () => {})
+			// a real (tiny) timer: a sleep that resolves on the microtask queue alone would let the
+			// bridge's retry loop starve the event loop, and the already-ended stdin's 'end' never fires
+			sleep: vi.fn((ms: number) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))))
 		},
 		...over
 	};
