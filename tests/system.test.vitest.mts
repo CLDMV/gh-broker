@@ -382,7 +382,10 @@ describe("broker node copy", () => {
 		// a newer candidate appears: replaced
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ NODE_FILE: "v24.11.0", "/new/node": "v26.1.0" }, { pathDirs: () => ["/new"] })
+			nodeDeps(
+				{ NODE_FILE: "v24.11.0", "/new/node": "v26.1.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v26.1.0" },
+				{ pathDirs: () => ["/new"] }
+			)
 		);
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/new/node");
 		expect(f.renameSync).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`, NODE_FILE);
