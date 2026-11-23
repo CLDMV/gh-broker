@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-22T21:35:54-08:00 (1795412154)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,7 +23,10 @@ import {
 	agentGroup,
 	agentsDir,
 	assertAgentName,
+	CLI_PATH,
 	registeredAgents,
+	NODE_PATH,
+	NPM_INSTALL_COMMAND,
 	socketPath,
 	versionWarning,
 	type Group,
@@ -59,6 +62,8 @@ export interface AgentDeps extends Pick<OtpDeps, "log" | "error" | "now" | "read
 	mcpIO: FolderIo;
 	writeConfig: (config: ConfigLayer) => void;
 	socketExists: (path: string) => boolean;
+	/** Whether an installed file (the bridge CLI, the node it runs on) is there. */
+	binaryExists: (path: string) => boolean;
 	smoke: (socketPath: string) => Promise<Pick<SmokeResult, "tools">>;
 }
 
@@ -138,6 +143,13 @@ export function configureMcp(user: string, config: ConfigLayer, d: AgentDeps, { 
 		d.log(JSON.stringify({ github: entry }, null, "\t"));
 		return "skipped";
 	}
+	// The entries run the global CLI on the maintained node; writing them without either binary
+	// would leave the agent a config that can't start its bridge.
+	const missing = [CLI_PATH, NODE_PATH].find((p) => !d.binaryExists(p));
+	if (missing !== undefined)
+		throw new Error(
+			`the MCP entry would run ${NODE_PATH} ${CLI_PATH} connect, but ${missing} is not there. Get one with: ${NPM_INSTALL_COMMAND}`
+		);
 	const home = configureFolder(user, { folder: info.home, saved: false }, info, dir, entry, d);
 	let worst = home;
 	for (const place of extraFolders(info, d, config, user)) {

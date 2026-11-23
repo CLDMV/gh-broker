@@ -79,6 +79,16 @@ describe("configureMcp", () => {
 		expect(out[0]).toContain("already up to date");
 	});
 
+	it("refuses to write an entry when the bridge binary is missing", () => {
+		const { d } = makeDeps({ binaryExists: (p: string) => p !== "/usr/local/bin/gh-broker" });
+		expect(() => configureMcp("repo", config, d)).toThrow(
+			/the MCP entry would run \/usr\/local\/bin\/node \/usr\/local\/bin\/gh-broker connect, but \/usr\/local\/bin\/gh-broker is not there/
+		);
+		expect(() => configureMcp("repo", config, d)).toThrow(/Get one with: sudo npm install -g/);
+		const { d: nodeMissing } = makeDeps({ binaryExists: (p: string) => p !== "/usr/local/bin/node" });
+		expect(() => configureMcp("repo", config, nodeMissing.d)).toThrow(/but \/usr\/local\/bin\/node is not there/);
+	});
+
 	it("prints the entry for an unparseable file and for a missing user", () => {
 		const bad = makeDeps({}, { [claude("repo")]: "{nope" });
 		expect(configureMcp("repo", config, bad.d)).toBe("unreadable");

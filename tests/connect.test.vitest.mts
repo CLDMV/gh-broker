@@ -3,7 +3,7 @@ import { createServer, connect as netConnect, type Server, type Socket } from "n
 import { PassThrough } from "node:stream";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { CONNECT_HELP, runBridge, type ConnectDeps } from "../src/cli/connect.ts";
+import { CONNECT_HELP, HELD_MAX_CHARS, runBridge, type ConnectDeps } from "../src/cli/connect.ts";
 
 // The bridge against a real Unix socket: a small line-framed fake broker (it answers initialize,
 // echoes everything else back, and can be told to kick the connection or refuse dials), driven
@@ -291,20 +291,24 @@ describe("pipe", () => {
 		expect(await b.client.waitNext((l) => l === line)).toBe(line);
 	});
 
-	it("moves a multi-megabyte line in both directions without rescanning the buffer", async () => {
+	it("moves a multi-megabyte line in both directions in bounded time", async () => {
 		const broker = await startBroker(nextSock());
 		broker.echo = false;
 		const b = startBridge(broker.path);
 		await waitFor(() => broker.connections === 1);
-		const line = JSON.stringify({ jsonrpc: "2.0", id: 9, method: "x", params: { blob: "a".repeat(2_000_000) } });
-		// client → server, arriving in many chunks: identical line out the other side
-		for (let i = 0; i < line.length; i += 20_000) b.stdin.write(line.slice(i, i + 20_000));
+		const line = JSON.stringify({ jsonrpc: "2.0", id: 9, method: "x", params: { blob: "a".repeat(10_000_000) } });
+		// client → server, in many small chunks: the bridge must stay linear in the line's size
+		let start = Date.now();
+		for (let i = 0; i < line.length; i += 16_000) b.stdin.write(line.slice(i, i + 16_000));
 		b.stdin.write("\n");
 		await waitFor(() => broker.received[0] === line);
-		// server → client, also in many chunks
+		expect(Date.now() - start).toBeLessThan(2000);
+		// server → client, also in many small chunks
 		const bytes = Buffer.from(`${line}\n`, "utf8");
-		for (let i = 0; i < bytes.length; i += 8_000) broker.writeRaw(bytes.subarray(i, i + 8_000));
+		start = Date.now();
+		for (let i = 0; i < bytes.length; i += 16_000) broker.writeRaw(bytes.subarray(i, i + 16_000));
 		expect(await b.client.waitNext((l) => l === line)).toBe(line);
+		expect(Date.now() - start).toBeLessThan(2000);
 	});
 
 	it("flushes a partial last line on stdin EOF and exits 0 with the socket closed", async () => {
@@ -460,23 +464,55 @@ describe("handshake replay after a restart", () => {
 		expect(b.client.lines.findIndex(isResponse(1))).toBeLessThan(b.client.lines.findIndex(isListChanged));
 	});
 
-	it("keeps pendingInitAnswer across a replay timeout, so the later answer is forwarded", async () => {
+	it("expires a pending initialize answer across a replay timeout instead of waiting forever", async () => {
 		const broker = await startBroker(nextSock());
 		const b = startBridge(broker.path, { holdMs: 40 });
 		await waitFor(() => broker.connections === 1);
-		broker.answerInitialize = false; // the client's initialize is never answered
+		broker.answerInitialize = false; // the client's initialize is never answered in time
 		b.stdin.write(`${initReq(1)}\n`);
 		await waitFor(() => broker.received.some((l) => l === initReq(1)));
-		broker.kick(); // the initialize is in flight at close: pendingInitAnswer is set
-		await waitFor(() => broker.received.filter((l) => l === initReq(1)).length >= 2); // connection 2's replay, unanswered
-		await waitFor(() => b.logs.some((l) => l === "bridge: no initialize response in 40ms; retrying"));
-		broker.answerInitialize = true; // a later connection answers: the flag must have survived the timeout
-		await b.client.waitNext(isResponse(1)); // FORWARDED, not swallowed
-		await b.client.waitNext(isListChanged);
-		expect(b.client.lines.filter(isResponse(1))).toHaveLength(1);
-		expect(b.client.lines.filter(isStale(1))).toHaveLength(0);
-		// the answer reaches the client before list_changed
-		expect(b.client.lines.findIndex(isResponse(1))).toBeLessThan(b.client.lines.findIndex(isListChanged));
+		broker.kick(); // the initialize is in flight at close: pendingInitAnswer is set, expiry scheduled
+		// The expiry (scheduled at the close) fires before the replay's own timeout, so the client
+		// gets its -32000 and stops waiting — the kept answer never outlives holdMs.
+		const stale = await b.client.waitNext(isStale(1), 2000);
+		expect(JSON.parse(stale)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "gh-broker restarted; retry" } });
+		await waitFor(() => b.logs.some((l) => l === "bridge: no initialize response in 40ms; retrying")); // the replay still timed out
+		// a later answering connection replays again — and now swallows: the client has been told
+		// to retry, so it gets no answer for an id it gave up on, and no second -32000
+		broker.answerInitialize = true;
+		await waitFor(() => broker.connections >= 3);
+		await realSleep(80);
+		expect(b.client.lines.filter(isResponse(1))).toHaveLength(0);
+		expect(b.client.lines.filter(isStale(1))).toHaveLength(1);
+	});
+
+	it("does not replay an initialize it never wrote to a socket", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path, { backoffStartMs: 150, backoffMaxMs: 300 });
+		await waitFor(() => broker.connections === 1);
+		broker.kick(); // the first connection drops before the client says anything
+		await waitFor(() => b.logs.some((l) => l.startsWith("bridge: socket closed")));
+		b.stdin.write(`${initReq(1)}\n${initNotify()}\n`); // held: never written to a socket
+		// the next connection forwards the held handshake live: the client gets its answer with no
+		// replay, no swallow, and no list_changed ahead of the handshake
+		await b.client.waitNext(isResponse(1));
+		expect(b.client.lines[0]).toContain('"result"');
+		expect(b.client.lines.filter(isListChanged)).toHaveLength(0);
+		expect(broker.received.filter((l) => l === initReq(1))).toHaveLength(1);
+		expect(broker.received.filter((l) => l === initNotify())).toHaveLength(1);
+	});
+
+	it("expires the pending initialize answer when no replay delivers it", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path, { holdMs: 40 });
+		await waitFor(() => broker.connections === 1);
+		broker.answerInitialize = false;
+		b.stdin.write(`${initReq(1)}\n`);
+		await waitFor(() => broker.received.some((l) => l === initReq(1)));
+		broker.kick();
+		await broker.stop(); // no reconnect: the kept answer must still expire like any held request
+		const stale = await b.client.waitNext(isStale(1), 2000);
+		expect(JSON.parse(stale)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "gh-broker restarted; retry" } });
 	});
 
 	it("exits 0 on stdin EOF during the replay wait", async () => {
@@ -587,8 +623,9 @@ describe("requests across a disconnect", () => {
 		await waitFor(() => b.logs.some((l) => l.startsWith("bridge: socket closed")));
 		const pad = (n: number) => JSON.stringify({ jsonrpc: "2.0", method: `n${n}`, params: { pad: "x".repeat(300_000) } });
 		for (const n of [1, 2, 3, 4]) b.stdin.write(`${pad(n)}\n`); // ~1.2 MB held: the ceiling drops the oldest
-		await waitFor(() => b.logs.some((l) => l.includes("held queue over the 1048576-byte ceiling")));
-		expect(b.logs.filter((l) => l.includes("held queue over"))).toHaveLength(1); // one line per drop
+		await waitFor(() => b.logs.some((l) => l.includes("held queue over the 1048576-char ceiling")));
+		expect(b.logs.filter((l) => l.includes("held queue over"))).toHaveLength(1); // one summary line per overflow event
+		expect(b.logs.some((l) => l.includes("dropped 1 line(s)"))).toBe(true);
 		// reconnect: the survivors are forwarded, the dropped one is not, and the bridge still works
 		await b.client.waitNext(isListChanged);
 		await waitFor(() => broker.received.some((l) => l.includes('"n4"')));
@@ -596,6 +633,27 @@ describe("requests across a disconnect", () => {
 		for (const n of [2, 3]) expect(broker.received.some((l) => l.includes(`"n${n}"`))).toBe(true);
 		b.stdin.write(`${req(2, "tools/list")}\n`);
 		await b.client.waitNext((l) => l === req(2, "tools/list")); // still functioning
+	});
+
+	it("errors a held request that the ceiling drops", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path, { backoffStartMs: 150, backoffMaxMs: 300 });
+		await waitFor(() => broker.connections === 1);
+		b.stdin.write(`${initReq(1)}\n`);
+		await b.client.waitNext(isResponse(1));
+		broker.kick();
+		await waitFor(() => b.logs.some((l) => l.startsWith("bridge: socket closed")));
+		b.stdin.write(`${req(5)}\n${req(6)}\n`); // two small held requests
+		const padLine = (n: number) => JSON.stringify({ jsonrpc: "2.0", method: "big", params: { pad: "x".repeat(n) } });
+		// over the ceiling with both requests held, under it once the oldest (a request) is dropped
+		const big = padLine(HELD_MAX_CHARS - 88 - padLine(0).length);
+		b.stdin.write(`${big}\n`);
+		const stale = await b.client.waitNext(isStale(5), 2000);
+		expect(JSON.parse(stale)).toEqual({ jsonrpc: "2.0", id: 5, error: { code: -32000, message: "gh-broker restarted; retry" } });
+		// the survivors are forwarded on reconnect and nothing else was errored
+		await b.client.waitNext(isListChanged);
+		await waitFor(() => broker.received.some((l) => l === req(6)) && broker.received.some((l) => l === big));
+		expect(b.client.lines.filter(isStale(6))).toHaveLength(0);
 	});
 });
 

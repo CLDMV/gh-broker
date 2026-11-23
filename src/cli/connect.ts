@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T21:08:26-08:00 (1795410506)
+ *	@Last modified time: 2026-11-22T21:35:55-08:00 (1795412155)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -83,8 +83,8 @@ const isResponseTo = (m: Rpc | undefined, id: unknown): boolean =>
 /** Sent to the client after a reconnect, so it re-lists the tools the restarted broker may have changed. */
 const LIST_CHANGED = '{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}';
 
-/** The most client traffic held while the socket is down (a safety valve; a single line over it is held alone). */
-const HELD_MAX_BYTES = 1024 * 1024;
+/** The most client traffic held while the socket is down, in string characters (a safety valve; a single line over it is held alone). */
+export const HELD_MAX_CHARS = 1024 * 1024;
 
 /**
  * Run the bridge for one `connect` invocation: `argv` is everything after `connect`.
@@ -107,16 +107,18 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 	let eof = false;
 	let dialing = false;
 	let everConnected = false;
-	let clientBuf = "";
-	let serverBuf = "";
-	/** How much of each partial-line buffer has already been searched for a newline, so a large line is not rescanned on every chunk. */
-	let clientScan = 0;
-	let serverScan = 0;
-	/** Whether the current connection has produced a server line: only then does it reset the backoff. */
+	// The partial line each side is assembling, as chunks: only the new chunk is searched for a
+	// newline (a newline can't straddle chunks, and earlier chunks had none), so a multi-megabyte
+	// line stays linear instead of rescanning a growing buffer on every chunk.
+	let clientPieces: string[] = [];
+	let serverPieces: string[] = [];
+	/** Whether the current connection has produced a server chunk: only then does it reset the backoff. */
 	let sawLine = false;
 	/** The client's first initialize request line, and the notifications/initialized line after it. */
 	let initLine: string | null = null;
 	let initializedLine: string | null = null;
+	/** Whether that initialize was actually written to a server: only then does a later connection replay it. */
+	let initSent = false;
 	/** Set when a disconnect left the client's initialize unanswered: the next replay forwards its answer instead of swallowing it. */
 	let pendingInitAnswer = false;
 	/** A replay in progress: waiting for the new socket's response to the initialize id. */
@@ -127,8 +129,8 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 	const inFlight = new Set<unknown>();
 	/** Client lines that arrived while the socket was down; forwarded on the next connection. */
 	let held: Array<{ line: string; id?: unknown }> = [];
-	/** Total bytes currently held (see HELD_MAX_BYTES). */
-	let heldBytes = 0;
+	/** Total characters currently held (see HELD_MAX_CHARS). */
+	let heldChars = 0;
 	// Holds the event loop open while the bridge runs (a backoff sleep doesn't: see realConnectDeps);
 	// cleared at EOF so the process exits as soon as the client is done.
 	const keepAlive = setInterval(() => {}, 1 << 30);
@@ -145,10 +147,10 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 		writeToClient(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "gh-broker restarted; retry" } }));
 	};
 
-	/** Remove one held entry, keeping the byte count right. */
+	/** Remove one held entry, keeping the character count right. */
 	const dropHeld = (entry: { line: string; id?: unknown }): void => {
 		held = held.filter((h) => h !== entry);
-		heldBytes -= entry.line.length;
+		heldChars -= entry.line.length;
 	};
 
 	/** A request held while down gets -32000 once it has waited holdMs, connected or not. */
@@ -169,16 +171,18 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 			holdExpires(entry);
 		}
 		// A ceiling keeps a client that queues megabytes while the broker is down from pinning them
-		// in memory forever: the oldest held line is dropped (a request gets its -32000 at once, so
-		// nothing hangs waiting for it).
-		while (held.length > 0 && heldBytes + line.length > HELD_MAX_BYTES) {
-			const oldest = held[0]!;
-			dropHeld(oldest);
-			d.log(`bridge: held queue over the ${HELD_MAX_BYTES}-byte ceiling; dropped its oldest line`);
+		// in memory forever: the oldest held lines are dropped (a request gets its -32000 at once,
+		// so nothing hangs waiting for it), with one log line for the overflow event.
+		let dropped = 0;
+		while (held.length > 0 && heldChars + line.length > HELD_MAX_CHARS) {
+			const oldest = held.shift()!;
+			heldChars -= oldest.line.length;
+			dropped++;
 			if (oldest.id !== undefined) staleError(oldest.id);
 		}
+		if (dropped > 0) d.log(`bridge: held queue over the ${HELD_MAX_CHARS}-char ceiling; dropped ${dropped} line(s)`);
 		held.push(entry);
-		heldBytes += line.length;
+		heldChars += line.length;
 	};
 
 	/** One line from the client: capture the handshake, forward it, or hold it. */
@@ -194,7 +198,11 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 			return;
 		}
 		socket.write(`${line}\n`);
-		if (isRequest(parsed)) inFlight.add(parsed.id);
+		if (isRequest(parsed)) {
+			inFlight.add(parsed.id);
+			// the initialize has reached a server: only now may a later connection replay it
+			if (parsed.method === "initialize") initSent = true;
+		}
 	};
 
 	/** One line from the server: answer-tracking, then straight to the client. */
@@ -219,7 +227,7 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 	const flushHeld = (): void => {
 		const q = held;
 		held = [];
-		heldBytes = 0;
+		heldChars = 0;
 		for (const h of q) deliverClientLine(h.line);
 	};
 
@@ -257,11 +265,17 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 			// connection replays again; no list_changed, nothing forwarded.
 			if (responseLine === null) return;
 			if (pendingInitAnswer) {
+				// The answer is the client's own initialize's: forward it, then the held lines
+				// (its notifications/initialized among them), and only then list_changed — the
+				// handshake completes before the tool-list nudge.
 				pendingInitAnswer = false;
 				deliverServerLine(responseLine);
+				flushHeld();
+				writeToClient(LIST_CHANGED);
+			} else {
+				writeToClient(LIST_CHANGED);
+				flushHeld();
 			}
-			writeToClient(LIST_CHANGED);
-			flushHeld();
 			const queued = replayQueue;
 			replayQueue = [];
 			for (const line of queued) if (line !== responseLine) deliverServerLine(line); // the swallowed one stays swallowed
@@ -272,35 +286,45 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 		// the socket is setEncoding("utf8") in onConnected, so a multi-byte character split across
 		// reads decodes correctly here and the line stays byte-identical for the client
 		// A connection that says nothing doesn't prove the broker is back: the backoff resets on the
-		// connection's first line, so an accept-and-close loop keeps backing off instead of
+		// connection's first chunk, so an accept-and-close loop keeps backing off instead of
 		// re-dialing every startMs forever.
 		if (!sawLine) {
 			sawLine = true;
 			backoff = startMs;
 		}
-		serverBuf += chunk;
-		for (let nl = serverBuf.indexOf("\n", serverScan); nl >= 0; nl = serverBuf.indexOf("\n", serverScan)) {
-			const line = serverBuf.slice(0, nl);
-			serverBuf = serverBuf.slice(nl + 1);
-			serverScan = 0; // what remains is the fresh partial tail
+		let at = 0; // everything before this in the chunk is already cut into lines
+		for (;;) {
+			const nl = chunk.indexOf("\n", at);
+			if (nl < 0) break;
+			serverPieces.push(chunk.slice(at, nl));
+			const line = serverPieces.join("");
+			serverPieces = [];
 			onSocketLine(line);
+			at = nl + 1;
 		}
-		serverScan = serverBuf.length;
+		if (at < chunk.length) serverPieces.push(chunk.slice(at));
 	};
 
 	const onSocketClosed = (): void => {
 		socket = null;
-		serverBuf = "";
-		serverScan = 0;
+		serverPieces = [];
 		replayQueue = [];
 		if (replay !== null) replay.resolve(null);
 		if (eof) return; // stdin already ended: nothing to tell the client, no retry
 		// If the client's initialize is still unanswered, the next replay will carry its answer:
 		// keep the client waiting for that one instead of failing it, and error everything else.
+		// The kept answer expires like any other request: if no replay has delivered it holdMs
+		// from now, the client gets its -32000 instead of waiting forever.
 		const initId = initLine === null ? undefined : tryParse(initLine)?.id;
 		if (initId !== undefined && inFlight.has(initId)) {
 			pendingInitAnswer = true;
 			inFlight.delete(initId);
+			void (async () => {
+				await d.sleep(holdMs);
+				if (eof || !pendingInitAnswer) return;
+				pendingInitAnswer = false;
+				staleError(initId);
+			})();
 		}
 		for (const id of inFlight) staleError(id);
 		inFlight.clear();
@@ -314,9 +338,8 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 			return;
 		}
 		socket = sock;
-		serverBuf = "";
-		serverScan = 0;
-		sawLine = false; // the backoff resets on the connection's first line, not on the accept
+		serverPieces = [];
+		sawLine = false; // the backoff resets on the connection's first chunk, not on the accept
 		sock.setEncoding("utf8"); // chunks arrive as strings, split multi-byte characters included
 		sock.on("data", onData);
 		sock.on("close", onSocketClosed);
@@ -327,8 +350,10 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 		everConnected = true;
 		d.log(`bridge: connected to ${socketPath}`);
 		// The first connection forwards the client's live handshake; every later one replays the
-		// recorded one and swallows its response, so the client sees its initialize answer once.
-		if (!first && initLine !== null) startReplay(sock);
+		// recorded one and swallows its response, so the client sees its initialize answer once —
+		// but only an initialize that actually reached a server: one still held from a connection
+		// that died early is forwarded fresh instead (no replay, no swallow, no list_changed yet).
+		if (!first && initSent) startReplay(sock);
 		if (replay === null) flushHeld();
 	};
 
@@ -359,29 +384,31 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 	const onEof = (): void => {
 		if (eof) return;
 		eof = true;
-		if (clientBuf !== "") deliverClientLine(clientBuf); // a partial last line still counts
-		clientBuf = "";
-		clientScan = 0;
+		if (clientPieces.length > 0) deliverClientLine(clientPieces.join("")); // a partial last line still counts
+		clientPieces = [];
 		const sock = socket;
 		socket = null;
 		if (sock !== null) sock.destroy();
 		clearInterval(keepAlive);
 		inFlight.clear();
 		held = [];
-		heldBytes = 0;
+		heldChars = 0;
 		resolveDone(0);
 	};
 
 	d.stdin.setEncoding("utf8");
 	d.stdin.on("data", (chunk) => {
-		clientBuf += typeof chunk === "string" ? chunk : String(chunk);
-		for (let nl = clientBuf.indexOf("\n", clientScan); nl >= 0; nl = clientBuf.indexOf("\n", clientScan)) {
-			const line = clientBuf.slice(0, nl);
-			clientBuf = clientBuf.slice(nl + 1);
-			clientScan = 0; // what remains is the fresh partial tail
+		let at = 0; // everything before this in the chunk is already cut into lines
+		for (;;) {
+			const nl = chunk.indexOf("\n", at);
+			if (nl < 0) break;
+			clientPieces.push(chunk.slice(at, nl));
+			const line = clientPieces.join("");
+			clientPieces = [];
 			deliverClientLine(line);
+			at = nl + 1;
 		}
-		clientScan = clientBuf.length;
+		if (at < chunk.length) clientPieces.push(chunk.slice(at));
 	});
 	d.stdin.on("end", onEof);
 	// A dead stdin (EIO, ECONNRESET) ends the bridge the same way a closed one does; without this

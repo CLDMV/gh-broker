@@ -32,6 +32,7 @@ export function makeDeps(over: Record<string, unknown> = {}, files: Record<strin
 			}
 		},
 		socketExists: vi.fn(() => true),
+		binaryExists: vi.fn(() => true),
 		smoke: vi.fn(async () => ({ tools: [1, 2, 3] })),
 		versions: () => ({ pkg: "1.0.0", deployed: "1.0.0" }),
 		readState: vi.fn(() => ({ status: "ok", state: emptyState() })),

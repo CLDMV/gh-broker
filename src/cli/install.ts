@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T21:08:26-08:00 (1795410506)
+ *	@Last modified time: 2026-11-22T21:35:55-08:00 (1795412155)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -79,7 +79,6 @@ import {
 	assertAgentName,
 	classifyInstall,
 	CLI_PATH,
-	NODE_PATH,
 	migrationPlan,
 	NPM_INSTALL_COMMAND,
 	parseGroups,
@@ -290,6 +289,11 @@ async function runInstall(argv: string[]): Promise<void> {
 		);
 	else if (where === "checkout" && !existsSync(CLI_PATH))
 		log(`  note: no global gh-broker command found. Get one with: ${NPM_INSTALL_COMMAND}`);
+	// The MCP entries run the global CLI; writing them without the binary would leave every agent
+	// a config that can't start its bridge. Refused before anything is deployed or restarted
+	// (--no-mcp-config writes no entries, so it needs neither).
+	if (!opts.noMcpConfig && !existsSync(CLI_PATH))
+		die(`the MCP entries would run ${CLI_PATH} connect, but it is not there. Get one with: ${NPM_INSTALL_COMMAND}`);
 
 	// --- the daemon bundle ---
 	// The package ships it prebuilt. A checkout builds it with the command itself
@@ -520,11 +524,6 @@ async function runInstall(argv: string[]): Promise<void> {
 
 	// --- each agent's MCP config, then a smoke test over its own socket ---
 	step("agents");
-	// The entries point at the global CLI on the maintained node; writing them without either
-	// binary would leave every agent a config that can't start its bridge. (--no-mcp-config
-	// writes nothing, so it needs neither.)
-	if (!opts.noMcpConfig && (!existsSync(CLI_PATH) || !existsSync(NODE_PATH)))
-		die(`the MCP entries would run ${NODE_PATH} ${CLI_PATH} connect, but the binary is not there. Get one with: ${NPM_INSTALL_COMMAND}`);
 	const dep = realDeps();
 	for (const name of agents) configureMcp(name, merged, dep, { noMcp: opts.noMcpConfig });
 	let smokeFailed = false;

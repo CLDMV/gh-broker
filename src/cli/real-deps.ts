@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T19:38:52-08:00 (1795405132)
+ *	@Last modified time: 2026-11-22T21:35:55-08:00 (1795412155)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -123,6 +123,7 @@ export function realDeps(): CliDeps {
 			return { ...io, scan: (home) => scanConfigFolders(home), sessions: (uid) => sessionConfigFolders(uid), pin: pinner(io) };
 		})(),
 		socketExists: existsSync,
+		binaryExists: existsSync,
 		smoke: smokeTest,
 		versions: () => ({ pkg: JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version, deployed: deployedVersion() }),
 		readState: (path) => states().read(path),
@@ -224,7 +225,7 @@ export function realDeps(): CliDeps {
 			// The NEW binary does the installing and the reconnecting: a child process, never this
 			// running CLI (which is still the old code until the process exits). stdio is
 			// inherited so its prompts work and its progress streams.
-			const r = spawnSync(CLI_PATH, args, { stdio: "inherit" });
+			const r = spawnSync(process.execPath, [CLI_PATH, ...args], { stdio: "inherit" });
 			if (r.error) throw new Error(`${CLI_PATH} ${args[0]}: ${r.error.message}`);
 			if (r.status !== 0)
 				throw Object.assign(new Error(`${CLI_PATH} ${args.join(" ")} exited ${r.status ?? `on signal ${r.signal}`}`), {
