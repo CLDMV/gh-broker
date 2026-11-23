@@ -545,14 +545,19 @@ describe("broker node copy", () => {
 	});
 
 	it("treats a MISSING ancestor as one the recursive mkdir will create, and carries on", async () => {
-		world([]);
+		world(["/opt/node/bin/node"]);
 		f.lstatSync.mockImplementation((p: string) => {
 			if (p === "/usr/local/lib") throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); // the parent chain is incomplete
 			if (p === NODE_DIR) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); // the dir too
+			if (p === "/opt/node/bin/node") return { uid: 0, gid: 0, mode: 0o100755, isFile: () => true, isDirectory: () => false };
 			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
 		});
-		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({}));
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps({ "/opt/node/bin/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" }, { pathDirs: () => ["/opt/node/bin"] })
+		);
 		expect(f.mkdirSync).toHaveBeenCalledWith(NODE_DIR, { recursive: true, mode: 0o755 }); // created over the gap
+		expect(f.renameSync).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`, NODE_FILE); // and the install completed
 	});
 
 	it("passes a stat error other than ENOENT through instead of creating the directory", async () => {
