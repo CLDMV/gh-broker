@@ -544,6 +544,17 @@ describe("broker node copy", () => {
 		expect(f.copyFileSync).not.toHaveBeenCalled();
 	});
 
+	it("treats a MISSING ancestor as one the recursive mkdir will create, and carries on", async () => {
+		world([]);
+		f.lstatSync.mockImplementation((p: string) => {
+			if (p === "/usr/local/lib") throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); // the parent chain is incomplete
+			if (p === NODE_DIR) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); // the dir too
+			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
+		});
+		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({}));
+		expect(f.mkdirSync).toHaveBeenCalledWith(NODE_DIR, { recursive: true, mode: 0o755 }); // created over the gap
+	});
+
 	it("passes a stat error other than ENOENT through instead of creating the directory", async () => {
 		f.realpathSync.mockReturnValue("/opt/node/bin/node");
 		f.lstatSync.mockImplementation(() => {
