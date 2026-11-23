@@ -374,7 +374,7 @@ describe("broker node copy", () => {
 		// existing v24; only older candidates around: kept, nothing copied
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ NODE_FILE: "v24.11.0", "/old/node": "v22.12.0" }, { pathDirs: () => ["/old"] })
+			nodeDeps({ [NODE_FILE]: "v24.11.0", "/old/node": "v22.12.0" }, { pathDirs: () => ["/old"] })
 		);
 		expect(f.copyFileSync).not.toHaveBeenCalled();
 		expect(f.renameSync).not.toHaveBeenCalled();
@@ -383,7 +383,7 @@ describe("broker node copy", () => {
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
 			nodeDeps(
-				{ NODE_FILE: "v24.11.0", "/new/node": "v26.1.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v26.1.0" },
+				{ [NODE_FILE]: "v24.11.0", "/new/node": "v26.1.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v26.1.0" },
 				{ pathDirs: () => ["/new"] }
 			)
 		);
@@ -397,7 +397,7 @@ describe("broker node copy", () => {
 		f.lstatSync.mockReturnValue(rootDir());
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ NODE_FILE: "v24.11.0", "/same/node": "v24.11.0" }, { pathDirs: () => ["/same"], sha256: async (p) => `sha(${p})` })
+			nodeDeps({ [NODE_FILE]: "v24.11.0", "/same/node": "v24.11.0" }, { pathDirs: () => ["/same"], sha256: async (p) => `sha(${p})` })
 		);
 		expect(f.copyFileSync).not.toHaveBeenCalled();
 		expect(logs).toEqual([`broker node: kept v24.11.0 (same version and sha256 as /same/node)`]);
@@ -405,7 +405,7 @@ describe("broker node copy", () => {
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
 			nodeDeps(
-				{ NODE_FILE: "v24.11.0", "/same/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" },
+				{ [NODE_FILE]: "v24.11.0", "/same/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" },
 				{ pathDirs: () => ["/same"], sha256: async () => "different" }
 			)
 		);
