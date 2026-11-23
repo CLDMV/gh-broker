@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T22:30:10-08:00 (1795415410)
+ *	@Last modified time: 2026-11-22T22:38:51-08:00 (1795415931)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -235,7 +235,8 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 	 * Wait out the replay (at most holdMs), then resume both directions. The replayed initialize's
 	 * response is swallowed — unless the client's own initialize never got its answer because the
 	 * socket closed first (pendingInitAnswer): then the replay's answer IS the client's answer and
-	 * is forwarded instead. Either way list_changed still goes: the tools may have changed.
+	 * is forwarded instead. list_changed goes only on the swallow path: in the pendingInitAnswer
+	 * arm the client has listed nothing yet.
 	 */
 	const startReplay = (sock: Socket): void => {
 		if (initLine === null) return;
