@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { join } from "node:path";
 
 // Every host-touching primitive is mocked: nothing here spawns a process or touches the real filesystem.
 const h = vi.hoisted(() => ({ spawnSync: vi.fn() }));
@@ -13,6 +14,7 @@ vi.mock("node:fs", () => ({
 	cpSync: vi.fn(),
 	rmSync: vi.fn(),
 	symlinkSync: vi.fn(),
+	renameSync: vi.fn(),
 	realpathSync: vi.fn()
 }));
 
@@ -265,29 +267,75 @@ describe("systemd-creds", () => {
 	});
 });
 
-describe("node symlinks", () => {
-	it("links only the binaries that exist next to the given node", () => {
-		f.existsSync.mockImplementation((p: string) => p !== "/opt/node/bin/npx");
-		expect(sys.pointNodeSymlinks("/opt/node/bin/node")).toEqual(["node", "npm"]);
-		expect(f.rmSync).toHaveBeenCalledWith("/usr/local/bin/node", { force: true });
-		expect(f.symlinkSync).toHaveBeenCalledWith("/opt/node/bin/node", "/usr/local/bin/node");
-		expect(f.symlinkSync).not.toHaveBeenCalledWith("/opt/node/bin/npx", "/usr/local/bin/npx");
+describe("broker node link", () => {
+	const NODE_DIR = "/usr/local/lib/gh-broker";
+	const rootDir = () => ({ uid: 0, gid: 0, mode: 0o100755, isDirectory: () => true });
+
+	it("creates a missing directory root:root 0755 and links the node atomically", () => {
+		f.realpathSync.mockReturnValue("/opt/node/bin/node");
+		f.lstatSync.mockImplementation(() => {
+			throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+		});
+		sys.ensureBrokerNodeLink("/opt/node/bin/node");
+		expect(f.mkdirSync).toHaveBeenCalledWith(NODE_DIR, { recursive: true, mode: 0o755 });
+		expect(f.chmodSync).toHaveBeenCalledWith(NODE_DIR, 0o755);
+		expect(f.chownSync).toHaveBeenCalledWith(NODE_DIR, 0, 0);
+		// the temp symlink lives in the SAME directory and is renamed over the final name
+		const [tempTarget, tempPath] = f.symlinkSync.mock.calls[0];
+		expect(tempTarget).toBe("/opt/node/bin/node");
+		expect(tempPath).toMatch(new RegExp(`^${NODE_DIR}/\\.tmp-\\d+-[a-z0-9]+$`));
+		expect(f.renameSync).toHaveBeenCalledWith(tempPath, "/usr/local/lib/gh-broker/node");
+		expect(f.rmSync).not.toHaveBeenCalled(); // success leaves no temp behind
 	});
 
-	it("never re-points a binary at itself: a real /usr/local/bin/node would be deleted", () => {
-		// the official tarball under /usr/local: every binary IS its own target
-		f.existsSync.mockReturnValue(true);
-		f.rmSync.mockClear();
-		f.symlinkSync.mockClear();
-		expect(sys.pointNodeSymlinks("/usr/local/bin/node")).toEqual([]);
-		expect(f.rmSync).not.toHaveBeenCalled();
+	it("re-points the link when the target changes, without touching /usr/local/bin", () => {
+		f.realpathSync.mockReturnValue("/usr/local/nvm/versions/node/v24/bin/node");
+		f.lstatSync.mockReturnValue(rootDir());
+		sys.ensureBrokerNodeLink("/usr/local/nvm/versions/node/v24/bin/node");
+		const [tempTarget, tempPath] = f.symlinkSync.mock.calls[0];
+		expect(tempTarget).toBe("/usr/local/nvm/versions/node/v24/bin/node");
+		expect(f.renameSync).toHaveBeenCalledWith(tempPath, "/usr/local/lib/gh-broker/node");
+		// nothing under /usr/local/bin, ever
+		const fsPaths = [...f.rmSync.mock.calls, ...f.symlinkSync.mock.calls.flat(), ...f.renameSync.mock.calls].filter(
+			(p: unknown) => typeof p === "string"
+		);
+		expect(fsPaths.filter((p: string) => p.startsWith("/usr/local/bin/"))).toEqual([]);
+	});
+
+	it("refuses an existing directory root did not create, naming the owner, the mode and the fix", () => {
+		f.realpathSync.mockReturnValue("/opt/node/bin/node");
+		f.lstatSync.mockReturnValue({ uid: 1000, gid: 1000, mode: 0o100775, isDirectory: () => true });
+		expect(() => sys.ensureBrokerNodeLink("/opt/node/bin/node")).toThrow(
+			/\/usr\/local\/lib\/gh-broker is owned by uid 1000\/gid 1000 with mode 775; the broker's node link must live in a root:root 0755 directory/
+		);
+		expect(() => sys.ensureBrokerNodeLink("/opt/node/bin/node")).toThrow(/sudo chown root:root/);
 		expect(f.symlinkSync).not.toHaveBeenCalled();
+		expect(f.renameSync).not.toHaveBeenCalled();
+	});
+
+	it("removes the temp symlink when the rename fails, and rethrows", () => {
+		f.realpathSync.mockReturnValue("/opt/node/bin/node");
+		f.lstatSync.mockReturnValue(rootDir());
+		f.renameSync.mockImplementation(() => {
+			throw new Error("EXDEV");
+		});
+		expect(() => sys.ensureBrokerNodeLink("/opt/node/bin/node")).toThrow("EXDEV");
+		const tempPath = f.symlinkSync.mock.calls[0]![1];
+		expect(f.rmSync).toHaveBeenCalledWith(tempPath, { force: true });
 	});
 
 	it("currentNodeBin resolves the running node's real path", () => {
 		f.realpathSync.mockReturnValue("/real/node");
 		expect(sys.currentNodeBin()).toBe("/real/node");
 		expect(f.realpathSync).toHaveBeenCalledWith(process.execPath);
+	});
+
+	it("the shipped unit runs the broker's node link", async () => {
+		// node:fs is mocked in this file; the shipped unit is a real file, so read it for real
+		const realFs = (await vi.importActual("node:fs")) as typeof import("node:fs");
+		const unit = realFs.readFileSync(join(import.meta.dirname, "..", "deploy", "gh-broker.service"), "utf8");
+		expect(unit).toContain("ExecStart=/usr/local/lib/gh-broker/node /opt/gh-broker/dist/index.mjs");
+		expect(unit).not.toContain("/usr/local/bin/node");
 	});
 });
 

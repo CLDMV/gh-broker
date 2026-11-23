@@ -31,13 +31,23 @@ const SOCAT = {
 	command: "sg",
 	args: ["gh-broker-agent-repo", "-c", "exec socat STDIO UNIX-CONNECT:/run/gh-broker/agents/repo.sock"]
 };
+/** The entry the #193 releases wrote (the bridge on /usr/local/bin/node): also out of date now (#253). */
+const BIN_NODE = {
+	type: "stdio",
+	command: "sg",
+	args: ["gh-broker-agent-repo", "-c", "exec /usr/local/bin/node /usr/local/bin/gh-broker connect /run/gh-broker/agents/repo.sock"]
+};
 
 describe("entry and key", () => {
-	it("builds the sg + connect entry, on the maintained node", () => {
+	it("builds the sg + connect entry, on the broker's own node link", () => {
 		expect(entry("repo")).toEqual({
 			type: "stdio",
 			command: "sg",
-			args: ["gh-broker-agent-repo", "-c", "exec /usr/local/bin/node /usr/local/bin/gh-broker connect /run/gh-broker/agents/repo.sock"]
+			args: [
+				"gh-broker-agent-repo",
+				"-c",
+				"exec /usr/local/lib/gh-broker/node /usr/local/bin/gh-broker connect /run/gh-broker/agents/repo.sock"
+			]
 		});
 	});
 
@@ -95,6 +105,17 @@ describe("mergeEntry", () => {
 		const out = JSON.parse(r.text);
 		expect(out.mcpServers.github).toEqual(entry("repo"));
 		expect(out.mcpServers.other).toEqual({ command: "npx" });
+	});
+
+	it("treats the /usr/local/bin/node entry as out of date too: exact equality rewrites any older shape", () => {
+		// no special-casing for the previous shape: freshness is exact equality against the current
+		// entry, so both the socat shape and the #193 /usr/local/bin/node shape read "points
+		// elsewhere" and get rewritten to the current one, keeping the key
+		expect(m.mcpStatus(JSON.stringify({ mcpServers: { github: BIN_NODE } }), "repo", DIR)).toBe("points elsewhere");
+		const r = m.mergeEntry(JSON.stringify({ mcpServers: { github: BIN_NODE } }), "repo", DIR) as any;
+		expect(r.status).toBe("changed");
+		expect(r.key).toBe("github");
+		expect(JSON.parse(r.text).mcpServers.github).toEqual(entry("repo"));
 	});
 
 	it("touches only the broker key and keeps the rest and the indentation", () => {

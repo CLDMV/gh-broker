@@ -93,7 +93,7 @@ describe("configureMcp", () => {
 			/the MCP entry would run \/usr\/local\/bin\/node \/usr\/local\/bin\/gh-broker connect, but \/usr\/local\/bin\/gh-broker is not there/
 		);
 		expect(() => configureMcp("repo", config, d)).toThrow(/Get one with: sudo npm install -g/);
-		const { d: nodeMissing } = makeDeps({ binaryExists: (p: string) => p !== "/usr/local/bin/node" });
+		const { d: nodeMissing } = makeDeps({ binaryExists: (p: string) => p !== "/usr/local/lib/gh-broker/node" });
 		expect(() => configureMcp("repo", config, nodeMissing)).toThrow(/but \/usr\/local\/bin\/node is not there/);
 	});
 

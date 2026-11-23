@@ -49,13 +49,13 @@ Only the Linux defaults are exercised today; the others are wired so a later pla
 
 ## Node runtime: a maintained symlink, no runtime resolution
 
-The service runs jailed (`ProtectHome`), so it cannot use a `/home` nvm, and there is no login shell at start. Rather than have the unit _resolve_ node at runtime, the installer maintains a **stable symlink** — `/usr/local/bin/node` → the chosen node — and the unit simply runs it:
+The service runs jailed (`ProtectHome`), so it cannot use a `/home` nvm, and there is no login shell at start. Rather than have the unit _resolve_ node at runtime, the installer maintains a **stable symlink** — `/usr/local/lib/gh-broker/node` → the chosen node, inside a root:root 0755 directory the service user cannot write (so it cannot swap the binary the bridges run) — and the unit simply runs it. The link is replaced atomically (a temp symlink renamed over the final name), so a running bridge never sees it missing. Anything already at `/usr/local/bin/{node,npm,npx}` from older installs is left alone:
 
 ```ini
-ExecStart=/usr/local/bin/node /opt/gh-broker/dist/index.mjs --config <resolved>
+ExecStart=/usr/local/lib/gh-broker/node /opt/gh-broker/dist/index.mjs --config <resolved>
 ```
 
-The symlink is the single indirection: the CLI (via `PATH`) and the service resolve the _same_ link, so "CLI node == service node" holds by construction. Bumping node is re-pointing the symlink — which is exactly the node step the installer runs on setup and on update, so it is not a special case. This removes `launch.sh` (a runtime nvm resolver that duplicated the symlink) and keeps the hardened unit free of a `bash`/`nvm` startup dependency.
+The symlink is the single indirection for the service and for every agent's bridge (the MCP entry prefixes it before the `gh-broker` binary, whose `#!/usr/bin/env node` would otherwise pick up whatever node the agent's PATH finds first). Bumping node is re-pointing the symlink — which is exactly the node step the installer runs on setup and on update, so it is not a special case. This removes `launch.sh` (a runtime nvm resolver that duplicated the symlink) and keeps the hardened unit free of a `bash`/`nvm` startup dependency.
 
 ## Tooling: Node, with one optional shell bootstrap
 
@@ -69,11 +69,11 @@ The only things that can't be Node are bootstrapping node itself and building a 
 
 1. detect platform + check prerequisites (`rsync`, `systemctl`, `sudo`),
 2. **register the agents** — migrate members of the old `gh-broker-clients` group, add the user named on the command line (creating it if asked), give each a `gh-broker-agent-<user>` group — hard stop if it can't (no silent warn-and-continue),
-3. ensure node on a stable path + the `/usr/local/bin/node` symlink,
+3. ensure node on a stable path + the `/usr/local/lib/gh-broker/node` link (root:root 0755 directory, atomic re-point; nothing under `/usr/local/bin` is touched),
 4. **regenerate the config** by layering the example, the deployed config, `--config` and the flags (a first install with no owner asks for one),
 5. **choose the secret backend and store the PATs** — keep existing, migrate a legacy `systemd-creds` token, or take it from `--secrets-file` / env / a prompt (see the Secrets section),
 6. validate the config with the real loader (`node dist/index.mjs --check`),
-7. deploy (unit → `/usr/local/bin/node`, `dist/` and a version marker in `/opt/gh-broker`, config, secrets), generating the OTP seed on the way if none is stored,
+7. deploy (unit → `/etc/systemd/system/gh-broker.service` running `/usr/local/lib/gh-broker/node`, `dist/` and a version marker in `/opt/gh-broker`, config, secrets), generating the OTP seed on the way if none is stored,
 8. write each agent's MCP config, then **smoke test** each agent's own socket — MCP `initialize` + one real read → ✅/❌.
 
 The same flow runs **fully unattended** via flags — `--agent-user`, `--secrets-provider`, `--secrets-file` / `GH_BROKER_SECRET_<NAME>`, `--create-agent-user`, `--non-interactive`, and the config flags (`--owner`, `--config`, ...); prompts are the default when flags are omitted. See [`../deploy/README.md`](../deploy/README.md) and `--help`.

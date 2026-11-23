@@ -7,15 +7,31 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T22:30:11-08:00 (1795415411)
+ *	@Last modified time: 2026-11-22T22:54:23-08:00 (1795416863)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from "node:child_process";
-import { existsSync, mkdirSync, chmodSync, chownSync, lstatSync, writeFileSync, cpSync, rmSync, symlinkSync, realpathSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	chmodSync,
+	chownSync,
+	lstatSync,
+	writeFileSync,
+	cpSync,
+	rmSync,
+	symlinkSync,
+	renameSync,
+	realpathSync
+} from "node:fs";
 import { join, dirname } from "node:path";
+import { NODE_PATH } from "./agents.ts";
+
+/** The directory the broker's node link (NODE_PATH) lives in: root:root 0755, never service-user-owned. */
+const NODE_LINK_DIR = dirname(NODE_PATH);
 
 /** spawnSync wrapper: throws on non-zero unless opts.allowFail. Returns the result. */
 /** Options for {@link run}: any spawnSync option, plus `allowFail`. */
@@ -165,21 +181,49 @@ export function removeCredsDropin(unitName = "gh-broker.service"): void {
 	}
 }
 
-/** Point /usr/local/bin/{node,npm,npx} at the given node binary's dir (the single indirection). */
-export function pointNodeSymlinks(nodeBin: string): string[] {
-	const binDir = dirname(nodeBin);
-	const linked: string[] = [];
-	for (const b of ["node", "npm", "npx"]) {
-		const src = join(binDir, b);
-		if (!existsSync(src)) continue;
-		// A binary already AT /usr/local/bin (the official tarball's layout) is its own target:
-		// rm'ing and symlinking it to itself would delete the real file.
-		if (src === `/usr/local/bin/${b}`) continue;
-		rmSync(`/usr/local/bin/${b}`, { force: true });
-		symlinkSync(src, `/usr/local/bin/${b}`);
-		linked.push(b);
+/**
+ * The broker's own node link (NODE_PATH, the one node every agent's bridge runs): ensure its
+ * directory is root:root 0755 — creating it when missing, refusing one root didn't create (its
+ * contents may be someone else's, and the service user must never be able to swap the binary the
+ * bridges run) — then point the link at the running node's real path, replacing it atomically so
+ * a running bridge never sees it missing. No self-target check is needed: if the running node IS
+ * an older link, realpath(process.execPath) resolves through it to the real binary, so the new
+ * target can never be the link itself. Nothing under /usr/local/bin is touched: links earlier
+ * installs managed there are left for whatever may rely on them.
+ */
+export function ensureBrokerNodeLink(nodeBin: string): void {
+	const real = realpathSync(nodeBin);
+	let dir: { uid: number; gid: number; mode: number; isDirectory: () => boolean } | undefined;
+	try {
+		dir = lstatSync(NODE_LINK_DIR);
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
 	}
-	return linked;
+	if (dir === undefined) {
+		mkdirSync(NODE_LINK_DIR, { recursive: true, mode: 0o755 });
+		chmodSync(NODE_LINK_DIR, 0o755); // mkdirSync's mode is umask-masked; this one is not
+		chownSync(NODE_LINK_DIR, 0, 0);
+	} else {
+		const mode = dir.mode & 0o777;
+		if (!dir.isDirectory())
+			throw new Error(
+				`${NODE_LINK_DIR} exists but is not a directory (mode ${mode.toString(8)}); it must be a root:root 0755 directory: sudo rm -rf ${NODE_LINK_DIR} && sudo mkdir -p ${NODE_LINK_DIR} && sudo chown root:root ${NODE_LINK_DIR} && sudo chmod 755 ${NODE_LINK_DIR}`
+			);
+		if (dir.uid !== 0 || dir.gid !== 0 || (mode & 0o022) !== 0)
+			throw new Error(
+				`${NODE_LINK_DIR} is owned by uid ${dir.uid}/gid ${dir.gid} with mode ${mode.toString(8)}; the broker's node link must live in a root:root 0755 directory (its contents may be someone else's). Fix it by hand: sudo chown root:root ${NODE_LINK_DIR} && sudo chmod 755 ${NODE_LINK_DIR}`
+			);
+	}
+	// Replace the link atomically: a temp symlink in the same directory, renamed over the final
+	// name, the temp removed if anything fails.
+	const temp = `${NODE_LINK_DIR}/.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+	try {
+		symlinkSync(real, temp);
+		renameSync(temp, NODE_PATH);
+	} catch (err) {
+		rmSync(temp, { force: true });
+		throw err;
+	}
 }
 
 /** The real path of the node running this installer — the node the service will use. */

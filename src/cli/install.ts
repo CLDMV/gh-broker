@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T22:30:10-08:00 (1795415410)
+ *	@Last modified time: 2026-11-22T22:54:22-08:00 (1795416862)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -43,7 +43,7 @@ import {
 	requireGid,
 	ensureServiceUser,
 	createAgentUser,
-	pointNodeSymlinks,
+	ensureBrokerNodeLink,
 	currentNodeBin,
 	ensureDirs,
 	installUnit,
@@ -80,6 +80,7 @@ import {
 	classifyInstall,
 	CLI_PATH,
 	migrationPlan,
+	NODE_PATH,
 	NPM_INSTALL_COMMAND,
 	parseGroups,
 	registeredAgents,
@@ -307,13 +308,13 @@ async function runInstall(argv: string[]): Promise<void> {
 	log(`  config:  ${paths.config}`);
 	log(`  secrets: ${paths.secrets}`);
 
-	// --- users, groups, dirs, node symlink ---
+	// --- users, groups, dirs, the broker's node link ---
 	step("service user, groups, directories");
 	ensureServiceUser(SVC_USER, SVC_GROUP);
 	for (const name of agents) ensureAgentGroup(name, SVC_USER);
 	ensureDirs(configDir, APP_DIR, SVC_USER, SVC_GROUP);
-	const linked = pointNodeSymlinks(currentNodeBin());
-	log(`  node symlink -> ${currentNodeBin()} (${linked.join(", ")})`);
+	ensureBrokerNodeLink(currentNodeBin());
+	log(`  node link: ${NODE_PATH} -> ${currentNodeBin()}`);
 
 	// --- config: merge(example, current) ---
 	step("config (example + deployed + --config + flags)");

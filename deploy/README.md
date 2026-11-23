@@ -4,10 +4,10 @@ One interactive installer does first-install and upgrade. Design and rationale: 
 
 ## 0. Host prerequisites
 
-- **Node ≥ 22** — the only real prerequisite; the installer runs under it (`sudo gh-broker install`). From a checkout, `sudo ./deploy/install.sh` sets up a system-wide nvm + node + the `/usr/local/bin/node` symlink if node isn't installed yet, builds the checkout as its owner, then hands off to the installer (`bin/gh-broker.mjs install`).
+- **Node ≥ 22** — the only real prerequisite; the installer runs under it (`sudo gh-broker install`). From a checkout, `sudo ./deploy/install.sh` sets up a system-wide nvm + node if node isn't installed yet (leaving anything already at `/usr/local/bin` alone), builds the checkout as its owner, then hands off to the installer (`bin/gh-broker.mjs install`).
 - **`rsync`** — used to sync the build (falls back to a plain copy if absent). **`systemd`** with `systemctl`. **`sudo`** — used internally to build as the checkout's own owner (see step 5 below), not just to invoke the installer itself. Install what's missing (`apt install rsync sudo` etc.). The agent's stdio↔socket bridge needs nothing extra: it is the `gh-broker` binary itself (`gh-broker connect`, [installed with the package](#2-install-first-install--and-upgrade-usually-as-gh-broker-upgrade)).
 
-The installer maintains `/usr/local/bin/node` as the single node indirection (CLI and service resolve the same link). Bumping node is re-pointing that symlink — which the installer does on every run.
+The installer maintains `/usr/local/lib/gh-broker/node` — one symlink to the running node, inside a root:root 0755 directory the service user cannot write — and re-points it atomically on every install. The service unit and every agent's bridge run that link, so CLI node == service node by construction, and bumping node needs no unit edit. Older installs' `/usr/local/bin/{node,npm,npx}` links are left exactly as they are (other things may rely on them); nothing is written under `/usr/local/bin` by the broker anymore.
 
 ## 1. Mint the two fine-grained PATs
 
@@ -46,7 +46,7 @@ which runs, in order and stopping at the first failure (reported, with the comma
 1. checks prerequisites,
 2. **registers the agents**: members of the old shared `gh-broker-clients` group become registered agents (the group itself is left alone), the user named on the command line is added (and created if missing), and each one gets its own group `gh-broker-agent-<user>`,
 3. creates the `gh-broker` service user and, when the config has a `ghcr` block, the GHCR drop directory (owned by the agent named on the command line, else the first registered one),
-4. points `/usr/local/bin/node` at the running node,
+4. points `/usr/local/lib/gh-broker/node` at the running node (a root:root 0755 directory, the link replaced atomically; anything already under `/usr/local/bin` is left alone),
 5. checks the daemon bundle `dist/index.mjs` is there (the npm package ships it; from a checkout, `deploy/install.sh` builds it first via `sudo -u '#<uid>'` as whoever owns the checkout's `package.json`, not as root, removing any `dist/`, `bin/` or `node_modules/` a root-run build left behind, so nothing root-owned stays in your checkout),
 6. regenerates the config (replacing an old `unix:` `listen` with `agents:/run/gh-broker/agents`) by layering `config.example.json`, whatever is deployed, your `--config` file and your flags (your data is preserved; allowlist changes from the repo arrive; see [Configuring the install](#configuring-the-install)); a first install with no owner asks for one,
 7. sets up the optional **npm integration** when asked (offered on a first install, or `--npm`): an npm web login it waits on, then the token it creates for `npm_scaffold` (see [npm integration](#npm-integration-npm_scaffold)),
@@ -153,7 +153,7 @@ sudo gh-broker agent reconnect [<user>] [--wait 5m] # /mcp reconnect <key> in th
 "github": {
 	"type": "stdio",
 	"command": "sg",
-	"args": ["gh-broker-agent-<user>", "-c", "exec /usr/local/bin/node /usr/local/bin/gh-broker connect /run/gh-broker/agents/<user>.sock"]
+	"args": ["gh-broker-agent-<user>", "-c", "exec /usr/local/lib/gh-broker/node /usr/local/bin/gh-broker connect /run/gh-broker/agents/<user>.sock"]
 }
 ```
 

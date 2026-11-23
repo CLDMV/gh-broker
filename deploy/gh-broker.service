@@ -21,13 +21,14 @@ Group=gh-broker
 RuntimeDirectory=gh-broker
 RuntimeDirectoryMode=0755
 
-# Node comes from the maintained /usr/local/bin/node symlink (the installer points
-# it at the chosen node and re-points it on a bump), so no node version is pinned
-# here and there is no nvm resolution at start. The symlink is the single source of
-# truth, so CLI node == service node by construction. See docs/deploy-architecture.md.
+# Node comes from the broker's own /usr/local/lib/gh-broker/node symlink (the installer
+# points it at the chosen node and re-points it on a bump, in a root:root directory the
+# service user cannot write), so no node version is pinned here and there is no nvm
+# resolution at start. The link is the single source of truth, so CLI node == service
+# node by construction. See docs/deploy-architecture.md.
 # The audit log (stdout) and `gh-broker otp unlock` both log as gh-broker: journalctl -t gh-broker
 SyslogIdentifier=gh-broker
-ExecStart=/usr/local/bin/node /opt/gh-broker/dist/index.mjs --config /etc/gh-broker/config.json
+ExecStart=/usr/local/lib/gh-broker/node /opt/gh-broker/dist/index.mjs --config /etc/gh-broker/config.json
 Restart=on-failure
 RestartSec=2
 
