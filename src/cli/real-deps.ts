@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-23T00:12:30-08:00 (1795421550)
+ *	@Last modified time: 2026-11-23T01:22:03-08:00 (1795425723)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -111,7 +111,7 @@ async function fetchText(url: string): Promise<string> {
 }
 
 /** Fetch a URL's body as bytes, with the same error handling. The tarball gets its own, long timeout (~30MB). */
-async function fetchBuffer(url: string, timeoutMs = 30_000): Promise<Buffer> {
+async function fetchBuffer(url: string, timeoutMs: number): Promise<Buffer> {
 	let res: Response;
 	try {
 		res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });

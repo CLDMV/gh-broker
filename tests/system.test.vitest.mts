@@ -422,7 +422,7 @@ describe("broker node copy", () => {
 		expect(logs.at(-1)).toBe("broker node: v26.1.0 from /new/node");
 	});
 
-	it("keeps an equal-version copy whatever its sha256, and replaces only a strictly newer one", async () => {
+	it("keeps an equal-version copy as is, and replaces only a strictly newer one", async () => {
 		world(["/same/node"]);
 		// the same version is kept as is — the maintainer's rule: update only on strictly newer
 		await sys.ensureBrokerNodeLink(
@@ -669,7 +669,7 @@ describe("broker node copy", () => {
 		expect(f.renameSync).not.toHaveBeenCalled();
 	});
 
-	it("refuses a downloaded copy that is odd, below the floor, or below the running copy", async () => {
+	it("refuses a downloaded copy that is odd or below the floor, and replaces an odd running copy", async () => {
 		const temp = `${NODE_DIR}/node.tmp-${process.pid}`;
 		world([]); // no candidates anywhere: the download path
 		// an odd major
@@ -686,17 +686,52 @@ describe("broker node copy", () => {
 				nodeDeps({ [temp]: "v20.15.0" }, { download: async () => "https://nodejs.org/dist/v20.15.0/node-v20.15.0-linux-x64.tar.xz" })
 			)
 		).rejects.toThrow(/the copied node is v20\.15\.0, below the 22\.0\.0 floor; not replacing it/);
-		// below the copy already running (an odd one — unusable, but never a downgrade)
-		await expect(
-			sys.ensureBrokerNodeLink(
-				"/installer/node",
-				nodeDeps(
-					{ [NODE_FILE]: "v23.6.0", [temp]: "v22.12.0" },
-					{ download: async () => "https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz" }
-				)
-			)
-		).rejects.toThrow(/the copied node is v22\.12\.0, below the running v23\.6\.0; not downgrading/);
 		expect(f.renameSync).not.toHaveBeenCalled();
+		// an operator-placed odd copy is REPLACED by the downloaded LTS: the running copy here is
+		// provably unusable, so nothing is "below" anything — the latest LTS wins
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps(
+				{ [NODE_FILE]: "v23.6.0", [temp]: "v24.11.0" },
+				{ download: async () => "https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.xz" }
+			)
+		);
+		expect(f.copyFileSync).not.toHaveBeenCalled(); // the download wrote the temp itself
+		expect(f.renameSync).toHaveBeenCalledWith(temp, NODE_FILE);
+		expect(logs.at(-1)).toBe("broker node: v24.11.0 downloaded (https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.xz)");
+	});
+
+	it("runs and copies the vetted real path, not an intermediate symlink", async () => {
+		// /link/node resolves to the real binary; the version dep only answers for the REAL path,
+		// so a run of the symlink path would fail the whole install — and the copy must come from
+		// the real path too, so re-pointing the intermediate symlink after the vet changes nothing.
+		world(["/link/node"]);
+		f.realpathSync.mockImplementation((p: string) => (p === "/link/node" ? "/real/node" : p));
+		f.lstatSync.mockImplementation((p: string) => {
+			if (p === NODE_DIR) return rootDir();
+			if (p === "/link/node" || p === "/real/node") return { uid: 0, gid: 0, mode: 0o100755, isFile: () => true, isDirectory: () => false };
+			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
+		});
+		const ran: string[] = [];
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps(
+				{ "/real/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" },
+				{
+					pathDirs: () => ["/link"],
+					version: async (bin: string) => {
+						ran.push(bin);
+						if (bin === "/real/node") return "v24.11.0";
+						if (bin === `${NODE_DIR}/node.tmp-${process.pid}`) return "v24.11.0";
+						throw new Error(`${bin} --version failed`);
+					}
+				}
+			)
+		);
+		expect(ran).toContain("/real/node"); // the vetted real was what ran
+		expect(ran).not.toContain("/link/node");
+		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/real/node"); // and what was copied
+		expect(logs.at(-1)).toBe("broker node: v24.11.0 from /link/node"); // the log keeps the human path
 	});
 
 	it("nodeFloorMin takes the minimum semver literal out of an engines range", () => {

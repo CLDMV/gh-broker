@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-23T00:46:05-08:00 (1795423565)
+ *	@Last modified time: 2026-11-23T01:22:03-08:00 (1795425723)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -271,7 +271,13 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 	// The directories ABOVE the node dir matter as much as the dir itself: a user-owned or
 	// group/world-writable /usr/local/lib would let its owner replace whatever we create inside.
 	for (let parent = dirname(NODE_LINK_DIR); ; parent = dirname(parent)) {
-		const d = lstatSync(parent);
+		let d: { uid: number; mode: number };
+		try {
+			d = lstatSync(parent);
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+			continue; // missing: the recursive mkdir below creates it root-owned
+		}
 		if (d.uid !== 0 || (d.mode & 0o022) !== 0)
 			throw new Error(
 				`${NODE_LINK_DIR} sits under ${parent}, owned by uid ${d.uid} with mode ${(d.mode & 0o777).toString(8)}; its parents must be root-owned and not group/world writable. Fix it by hand: sudo chown root:root ${parent} && sudo chmod 755 ${parent}`
@@ -306,13 +312,13 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 	 * Put a working node binary at NODE_PATH: write/copy to a temp file, prove it runs, rename it
 	 * over. `from` returns the one-line verdict's tail (the source). The copy must report exactly
 	 * `expected.version` when given (a swap between vetting and copying is refused), must be an
-	 * even (LTS) major at or above the floor, and must not be below `expected.existing` — a
-	 * running, usable copy is never downgraded, whatever slipped between the vet and the copy.
+	 * even (LTS) major at or above the floor, and — on the candidate paths, where the copy's
+	 * provenance is known — must not be below the running copy (`expected.existing`): a running,
+	 * usable copy is never downgraded, whatever slipped between the vet and the copy. The download
+	 * path passes no existing: the running copy there is provably unusable (a usable one is kept
+	 * or replaced by a candidate before download is ever reached).
 	 */
-	const install = async (
-		from: (dest: string) => Promise<string>,
-		expected: { version?: string; existing?: string } = {}
-	): Promise<void> => {
+	const install = async (from: (dest: string) => Promise<string>, expected: { version?: string } = {}): Promise<void> => {
 		const temp = `${NODE_LINK_DIR}/node.tmp-${process.pid}`;
 		try {
 			const why = await from(temp);
@@ -323,8 +329,6 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 			if (!isEvenMajor(v)) throw new Error(`broker node: the copied node is v${v}, an odd (non-LTS) major; not replacing it`);
 			if (compareVersions(v, deps.floor) < 0)
 				throw new Error(`broker node: the copied node is v${v}, below the ${deps.floor} floor; not replacing it`);
-			if (expected.existing !== undefined && compareVersions(v, expected.existing) < 0)
-				throw new Error(`broker node: the copied node is v${v}, below the running v${expected.existing}; not downgrading`);
 			renameSync(temp, NODE_PATH); // running bridges keep the old inode until this instant
 			deps.log(`broker node: v${v} ${why}`);
 		} catch (err) {
@@ -351,24 +355,28 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 	for (const d of deps.pathDirs()) push(`${d}/node`);
 	for (const n of deps.nvmDirs()) for (const v of deps.listVersions(`${n}/versions/node`)) push(`${n}/versions/node/${v}/bin/node`);
 	push(realpathSync(nodeBin));
-	const qualifying: Array<{ bin: string; version: string }> = [];
+	const qualifying: Array<{ bin: string; real: string; version: string }> = [];
 	for (const bin of candidates) {
+		let real: string;
 		try {
-			vetNodePath(bin); // BEFORE running it: root must not execute a user's binary to learn its version
+			// BEFORE running it: root must not execute a user's binary to learn its version. The
+			// vetted real path is what gets run and copied, so re-pointing an intermediate symlink
+			// between the vet and the run can only ever reach the path that was vetted.
+			real = vetNodePath(bin);
 		} catch (err) {
 			deps.log(`broker node: skipping ${bin}: ${(err as Error).message}`);
 			continue;
 		}
 		let v: string;
 		try {
-			v = normalizeVersion(await deps.version(bin));
+			v = normalizeVersion(await deps.version(real));
 			if (!isEvenMajor(v) || compareVersions(v, deps.floor) < 0) continue; // odd major or below the floor
 		} catch {
 			// fails to run, or prints something that is not a version (a stray wrapper on PATH):
 			// ignored, never fatal
 			continue;
 		}
-		qualifying.push({ bin, version: v });
+		qualifying.push({ bin, real, version: v });
 	}
 	qualifying.sort((a, b) => compareVersions(b.version, a.version)); // highest first (stable: PATH before nvm on ties)
 	const best = qualifying[0];
@@ -384,17 +392,18 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 		}
 		await install(
 			async (dest) => {
-				copyFileSync(best!.bin, dest);
+				copyFileSync(best!.real, dest);
 				return `from ${best!.bin}`;
 			},
-			{ version: best!.version, existing: existing! }
+			{ version: best!.version }
 		);
 		return;
 	}
-	// First install (no copy, or a broken, below-floor or odd one): the highest qualifying node, else download.
-	// The downloaded copy must not be below the one already running, whatever is wrong with it.
+	// First install (no copy, or a broken, below-floor or odd one): the highest qualifying node, else
+	// download. The running copy here is provably unusable, so whatever the download brings — even,
+	// at or above the floor — replaces it.
 	if (!best) {
-		await install(async (dest) => `downloaded (${await deps.download(dest)})`, existing !== undefined ? { existing } : {});
+		await install(async (dest) => `downloaded (${await deps.download(dest)})`);
 		return;
 	}
 	await install(
