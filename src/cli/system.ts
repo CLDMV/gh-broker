@@ -28,7 +28,9 @@ import {
 	copyFileSync,
 	openSync,
 	readSync,
-	closeSync
+	closeSync,
+	fstatSync,
+	constants
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { NODE_PATH } from "./agents.ts";
@@ -238,14 +240,16 @@ const isEvenMajor = (v: string): boolean => versionParts(v)[0]! % 2 === 0;
  */
 const vetNodePath = (bin: string): string => {
 	const real = realpathSync(bin);
-	const st = lstatSync(real);
-	if (!st.isFile()) throw new Error("not a regular file");
-	if (st.uid !== 0) throw new Error(`owned by uid ${st.uid}, not root`);
-	if ((st.mode & 0o022) !== 0) throw new Error("is group/world writable");
-	// and it must actually be an ELF binary: a root-owned shell wrapper could exec an unvetted
-	// node from anywhere
-	const fd = openSync(real, "r");
+	// Open before checking, O_NOFOLLOW: the descriptor pins the inode, so the file cannot be
+	// swapped between the checks and the ELF read, and a last-moment symlink swap is refused.
+	const fd = openSync(real, constants.O_RDONLY | constants.O_NOFOLLOW);
 	try {
+		const st = fstatSync(fd);
+		if (!st.isFile()) throw new Error("not a regular file");
+		if (st.uid !== 0) throw new Error(`owned by uid ${st.uid}, not root`);
+		if ((st.mode & 0o022) !== 0) throw new Error("is group/world writable");
+		// and it must actually be an ELF binary: a root-owned shell wrapper could exec an unvetted
+		// node from anywhere — read straight from the pinned descriptor
 		const magic = Buffer.alloc(4);
 		readSync(fd, magic, 0, 4, 0);
 		if (!magic.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) throw new Error("is not an ELF binary");
@@ -350,9 +354,15 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 	// means a later run that only ever moves forward.
 	let existing: string | undefined;
 	try {
-		// the same ownership rules as a candidate, before this binary is run too
-		const st = lstatSync(NODE_PATH);
-		if (!st.isFile() || st.uid !== 0 || (st.mode & 0o022) !== 0) throw new Error("not a root-owned regular binary");
+		// the same ownership rules as a candidate, before this binary is run too — and the same
+		// descriptor-based check, so nothing can swap it between the check and the run
+		const fd = openSync(NODE_PATH, constants.O_RDONLY | constants.O_NOFOLLOW);
+		try {
+			const st = fstatSync(fd);
+			if (!st.isFile() || st.uid !== 0 || (st.mode & 0o022) !== 0) throw new Error("not a root-owned regular binary");
+		} finally {
+			closeSync(fd);
+		}
 		existing = normalizeVersion(await deps.version(NODE_PATH));
 	} catch {
 		existing = undefined; // missing, broken, unrunnable, or not root's: replace it

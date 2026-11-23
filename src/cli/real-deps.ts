@@ -18,7 +18,7 @@
  * MCP config and smoke test. Wiring only: the logic is in the other files of src/cli/. Kept apart from
  * cli.ts so the installer can import it without pulling in the dispatcher.
  */
-import { readFileSync, existsSync, readdirSync, rmSync, renameSync, mkdtempSync, writeFileSync, copyFileSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, rmSync, renameSync, mkdtempSync, copyFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { hostname, userInfo as osUserInfo } from "node:os";
 import { join, dirname } from "node:path";
@@ -150,22 +150,24 @@ export async function downloadLatestLts(dest: string): Promise<string> {
 	}
 	const work = mkdtempSync(join(NODE_LINK_DIR, ".dl-")); // 0700, root-owned, inside the vetted dir
 	try {
-		const tarPath = join(work, name);
-		writeFileSync(tarPath, buf);
-		run("tar", ["-xJf", tarPath, "--no-same-owner", "-C", work, `${name}/bin/node`]);
-		const extracted = join(work, name, "bin", "node");
+		// The verified buffer goes to tar on STDIN — the tarball is never on disk at all (and there
+		// is no network-bytes-to-file write anywhere in this flow). The extracted binary is then
+		// re-hashed against the same member streamed from the SAME buffer, so the file copied to
+		// dest is byte-identical to the bin/node member of the SHASUMS-verified bytes.
 		const member = `${name}/bin/node`;
-		verifyExtracted(sha256Hex(readFileSync(extracted)), sha256Hex(tarMember(tarPath, member)), member);
+		run("tar", ["-xJf", "-", "--no-same-owner", "-C", work, member], { input: buf });
+		const extracted = join(work, name, "bin", "node");
+		verifyExtracted(sha256Hex(readFileSync(extracted)), sha256Hex(tarMember(buf, member)), member);
 		copyFileSync(extracted, dest);
 	} finally {
-		rmSync(work, { recursive: true, force: true }); // the tarball and the extract dir go with it
+		rmSync(work, { recursive: true, force: true }); // the extract tree goes with it
 	}
 	return tarball; // the source for the verdict line; the installed binary reports its own version
 }
 
-/** One member of a tarball, streamed to memory (no extraction), for the extracted-file re-hash. */
-function tarMember(tarPath: string, member: string): Buffer {
-	const r = spawnSync("tar", ["-xJOf", tarPath, member], { encoding: "buffer", maxBuffer: 1 << 30 });
+/** One member of the verified tarball buffer, streamed to memory (no extraction), for the extracted-file re-hash. */
+function tarMember(buf: Buffer, member: string): Buffer {
+	const r = spawnSync("tar", ["-xJOf", "-", member], { input: buf, encoding: "buffer", maxBuffer: 1 << 30 });
 	if (r.error) throw new Error(`node download: tar ${member}: ${r.error.message}`);
 	if (r.status !== 0) throw new Error(`node download: tar ${member} exited ${r.status ?? `on signal ${r.signal}`}`);
 	return r.stdout as Buffer;

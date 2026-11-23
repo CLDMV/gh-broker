@@ -299,21 +299,32 @@ describe("broker node copy", () => {
 	 * node dir's own stat can be overridden per test.
 	 */
 	const nodeFile = () => ({ uid: 0, gid: 0, mode: 0o100755, isFile: () => true, isDirectory: () => false });
+	/** Descriptor bookkeeping: openSync hands out fds and remembers each path; fstatSync answers per fd, so tests can shape any opened file's stat (default: a root-owned regular binary). */
+	const fdPaths: Record<number, string> = {};
+	const fileStats: Record<string, unknown> = {};
+	let nextFd = 11;
 	const world = (paths: string[], dirStat: unknown = rootDir()): void => {
+		for (const k of Object.keys(fdPaths)) delete fdPaths[k];
+		for (const k of Object.keys(fileStats)) delete fileStats[k];
+		nextFd = 11;
 		f.existsSync.mockImplementation((p: string) => paths.includes(p));
 		f.realpathSync.mockImplementation((p: string) => p);
 		f.lstatSync.mockImplementation((p: string) => {
 			if (p === NODE_DIR) return dirStat;
-			if (p === NODE_FILE) return nodeFile(); // the existing copy: vetted like a candidate
 			if (paths.includes(p)) return nodeFile();
 			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
 		});
+		f.openSync.mockImplementation((p: string) => {
+			fdPaths[nextFd] = p;
+			return nextFd++;
+		});
+		f.fstatSync.mockImplementation((fd: number) => fileStats[fdPaths[fd] ?? ""] ?? nodeFile());
 	};
 
 	beforeEach(() => {
 		logs.length = 0;
 		f.readSync.mockImplementation((_fd: number, buf: Buffer) => {
-			Buffer.from([0x7f, 0x45, 0x4c, 0x46]).copy(buf); // every candidate is an ELF binary unless a test says otherwise
+			Buffer.from([0x7f, 0x45, 0x4c, 0x46]).copy(buf); // every opened file is an ELF binary unless a test says otherwise
 			return 4;
 		});
 	});
@@ -791,14 +802,17 @@ describe("broker node copy", () => {
 
 	it("replaces an existing copy that is not a root-owned regular binary, without running it", async () => {
 		world(["/new/node"]);
-		// NODE_PATH is a symlink (isFile false): the ownership vet must refuse it BEFORE its
+		// NODE_PATH is a symlink: the descriptor-based vet (O_NOFOLLOW) must refuse it BEFORE its
 		// --version runs — otherwise the update path would keep whatever the symlink points at
-		f.lstatSync.mockImplementation((p: string) => {
-			if (p === NODE_DIR) return rootDir();
-			if (p === NODE_FILE) return { uid: 0, gid: 0, mode: 0o120777, isFile: () => false, isDirectory: () => false };
-			if (p === "/new/node") return nodeFile();
-			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
+		f.openSync.mockImplementation((p: string) => {
+			if (p === NODE_FILE) throw Object.assign(new Error("ELOOP"), { code: "ELOOP" });
+			fdPaths[nextFd] = p;
+			return nextFd++;
 		});
+		// and a world-writable NODE_FILE is refused the same way, through the descriptor's fstat
+		f.fstatSync.mockImplementation((fd: number) =>
+			fdPaths[fd] === NODE_FILE ? { uid: 0, gid: 0, mode: 0o100666, isFile: () => true, isDirectory: () => false } : nodeFile()
+		);
 		const ran: string[] = [];
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
@@ -826,14 +840,10 @@ describe("broker node copy", () => {
 			if (p === "/wrap/node" || p === "/good/node") return nodeFile();
 			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
 		});
-		let opened = "";
-		f.openSync.mockImplementation((p: string) => {
-			opened = p;
-			return 7;
-		});
-		f.readSync.mockImplementation((_fd: number, buf: Buffer) => {
+		fileStats["/wrap/node"] = { uid: 0, gid: 0, mode: 0o100755, isFile: () => true, isDirectory: () => false };
+		f.readSync.mockImplementation((fd: number, buf: Buffer) => {
 			// only the wrapper is a shell script; the good candidate is a real ELF binary
-			Buffer.from(opened === "/wrap/node" ? "#!/b" : "\u007fELF").copy(buf);
+			Buffer.from(fdPaths[fd] === "/wrap/node" ? "#!/b" : "\u007fELF").copy(buf);
 			return 4;
 		});
 		await sys.ensureBrokerNodeLink(

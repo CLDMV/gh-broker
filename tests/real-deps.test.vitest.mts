@@ -246,7 +246,11 @@ describe("downloadLatestLts", () => {
 		expect(f.mkdtempSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-`);
 		const tarArgs = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJf")![1] as string[];
 		expect(tarArgs).toContain("--no-same-owner");
-		expect(f.writeFileSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-abc123/${name}`, tarball);
+		// alert #12: the tarball is never written to disk — the verified buffer goes to tar on stdin
+		expect(f.writeFileSync).not.toHaveBeenCalled();
+		const extractCall = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJf")!;
+		expect(extractCall[1]).toEqual(["-xJf", "-", "--no-same-owner", "-C", "/usr/local/lib/gh-broker/.dl-abc123", `${name}/bin/node`]);
+		expect((extractCall[2] as { input: Buffer }).input).toEqual(tarball);
 		expect(f.copyFileSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-abc123/${name}/bin/node`, "/usr/local/lib/gh-broker/node.tmp-1");
 		// a stale .dl-* from a killed run is swept first, and the real node is never swept
 		expect(f.readdirSync).toHaveBeenCalledWith(NODE_LINK_DIR);
@@ -289,7 +293,7 @@ describe("downloadLatestLts", () => {
 		timeoutSpy.mockRestore();
 	});
 
-	it("removes the .dl- work dir (tarball included) even when the extraction fails", async () => {
+	it("removes the .dl- work dir even when the extraction fails (there is no tarball on disk)", async () => {
 		stubFetch();
 		h.spawnSync.mockImplementation((cmd: string, args: string[] = []) => {
 			const line = [cmd, ...args].join(" ");
