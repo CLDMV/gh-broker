@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-02T11:30:58-07:00 (1790965858)
+ *	@Last modified time: 2026-11-22T19:38:55-08:00 (1795405135)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -32,7 +32,7 @@ export interface ServerOptions {
 }
 
 /**
- * Each agent connection (a socat stdio bridge to that agent's own socket) gets its own MCP
+ * Each agent connection (the gh-broker connect stdio bridge to that agent's own socket) gets its own MCP
  * Server over a StdioServerTransport bound to that socket. `tools/list` returns the pre-built
  * catalog; `tools/call` delegates to the router with the socket's agent user as the caller
  * (allowlist + OTP + owner/mode → PAT + forward/dispatch). The token never crosses to this side.

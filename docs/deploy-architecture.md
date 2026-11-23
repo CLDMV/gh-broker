@@ -67,7 +67,7 @@ The only things that can't be Node are bootstrapping node itself and building a 
 
 `sudo gh-broker install` (the package bin `bin/gh-broker.mjs`, built from `src/bin/gh-broker.ts`, hands `install` to `src/cli/install.ts`) is idempotent — first install and later upgrade are one command:
 
-1. detect platform + check prerequisites (`socat`, `rsync`, `systemctl`, `sudo`),
+1. detect platform + check prerequisites (`rsync`, `systemctl`, `sudo`),
 2. **register the agents** — migrate members of the old `gh-broker-clients` group, add the user named on the command line (creating it if asked), give each a `gh-broker-agent-<user>` group — hard stop if it can't (no silent warn-and-continue),
 3. ensure node on a stable path + the `/usr/local/bin/node` symlink,
 4. **regenerate the config** by layering the example, the deployed config, `--config` and the flags (a first install with no owner asks for one),

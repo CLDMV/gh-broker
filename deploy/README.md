@@ -5,7 +5,7 @@ One interactive installer does first-install and upgrade. Design and rationale: 
 ## 0. Host prerequisites
 
 - **Node ≥ 22** — the only real prerequisite; the installer runs under it (`sudo gh-broker install`). From a checkout, `sudo ./deploy/install.sh` sets up a system-wide nvm + node + the `/usr/local/bin/node` symlink if node isn't installed yet, builds the checkout as its owner, then hands off to the installer (`bin/gh-broker.mjs install`).
-- **`socat`** — the agent's stdio↔socket bridge. **`rsync`** — used to sync the build (falls back to a plain copy if absent). **`systemd`** with `systemctl`. **`sudo`** — used internally to build as the checkout's own owner (see step 5 below), not just to invoke the installer itself. Install what's missing (`apt install socat rsync sudo` etc.).
+- **`rsync`** — used to sync the build (falls back to a plain copy if absent). **`systemd`** with `systemctl`. **`sudo`** — used internally to build as the checkout's own owner (see step 5 below), not just to invoke the installer itself. Install what's missing (`apt install rsync sudo` etc.). The agent's stdio↔socket bridge needs nothing extra: it is the `gh-broker` binary itself (`gh-broker connect`, [installed with the package](#2-install-first-install--and-upgrade-usually-as-gh-broker-upgrade)).
 
 The installer maintains `/usr/local/bin/node` as the single node indirection (CLI and service resolve the same link). Bumping node is re-pointing that symlink — which the installer does on every run.
 
@@ -153,7 +153,7 @@ sudo gh-broker agent reconnect [<user>] [--wait 5m] # /mcp reconnect <key> in th
 "github": {
 	"type": "stdio",
 	"command": "sg",
-	"args": ["gh-broker-agent-<user>", "-c", "exec socat STDIO UNIX-CONNECT:/run/gh-broker/agents/<user>.sock"]
+	"args": ["gh-broker-agent-<user>", "-c", "exec /usr/local/bin/gh-broker connect /run/gh-broker/agents/<user>.sock"]
 }
 ```
 

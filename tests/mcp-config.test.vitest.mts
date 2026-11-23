@@ -19,18 +19,25 @@ import { writeFileAtomic } from "../src/cli/otp.ts";
 
 const DIR = "/run/gh-broker/agents";
 const entry = (u: string) => m.mcpEntry(u, DIR);
+/** The pre-#143 entry (the old shared socket): still a broker entry, and rewritten. */
 const OLD = {
 	type: "stdio",
 	command: "sg",
 	args: ["gh-broker-clients", "-c", "exec socat STDIO UNIX-CONNECT:/run/gh-broker/gh-broker.sock"]
 };
+/** The entry the releases before #193 wrote (the socat bridge): out of date, rewritten in place. */
+const SOCAT = {
+	type: "stdio",
+	command: "sg",
+	args: ["gh-broker-agent-repo", "-c", "exec socat STDIO UNIX-CONNECT:/run/gh-broker/agents/repo.sock"]
+};
 
 describe("entry and key", () => {
-	it("builds the sg + socat entry", () => {
+	it("builds the sg + connect entry", () => {
 		expect(entry("repo")).toEqual({
 			type: "stdio",
 			command: "sg",
-			args: ["gh-broker-agent-repo", "-c", "exec socat STDIO UNIX-CONNECT:/run/gh-broker/agents/repo.sock"]
+			args: ["gh-broker-agent-repo", "-c", "exec /usr/local/bin/gh-broker connect /run/gh-broker/agents/repo.sock"]
 		});
 	});
 
@@ -60,6 +67,8 @@ describe("mcpStatus", () => {
 	it("reports ok / missing / points elsewhere / unreadable", () => {
 		expect(m.mcpStatus(file({ github: entry("repo") }), "repo", DIR)).toBe("ok");
 		expect(m.mcpStatus(file({ github: OLD }), "repo", DIR)).toBe("points elsewhere");
+		// the socat entry the previous releases wrote is out of date now (#193)
+		expect(m.mcpStatus(file({ github: SOCAT }), "repo", DIR)).toBe("points elsewhere");
 		expect(m.mcpStatus(file({ github: entry("other") }), "repo", DIR)).toBe("points elsewhere");
 		expect(m.mcpStatus(file({ x: { command: "npx" } }), "repo", DIR)).toBe("missing");
 		expect(m.mcpStatus("{}", "repo", DIR)).toBe("missing");
@@ -76,6 +85,16 @@ describe("mergeEntry", () => {
 		expect(r.status).toBe("changed");
 		expect(JSON.parse(r.text)).toEqual({ mcpServers: { github: entry("repo") } });
 		expect(r.text.endsWith("\n")).toBe(true);
+	});
+
+	it("rewrites the old socat entry in place, keeping its key and the rest of the file", () => {
+		const text = JSON.stringify({ mcpServers: { github: SOCAT, other: { command: "npx" } } }, null, "\t") + "\n";
+		const r = m.mergeEntry(text, "repo", DIR) as any;
+		expect(r.status).toBe("changed");
+		expect(r.key).toBe("github");
+		const out = JSON.parse(r.text);
+		expect(out.mcpServers.github).toEqual(entry("repo"));
+		expect(out.mcpServers.other).toEqual({ command: "npx" });
 	});
 
 	it("touches only the broker key and keeps the rest and the indentation", () => {

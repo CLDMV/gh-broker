@@ -5,6 +5,7 @@ import { emptyState, emptyUser } from "../src/cli/otp.ts";
 import { makeDeps, config, NOW } from "./helpers/cli-deps.mjs";
 
 const DIR = "/run/gh-broker/agents";
+/** The pre-#143 shared-socket entry, kept as a legacy fixture: it must still be recognized as the broker's and rewritten to the current shape. */
 const OLD = {
 	type: "stdio",
 	command: "sg",
