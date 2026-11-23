@@ -64,7 +64,7 @@ describe("agent add", () => {
 	it("refuses before registering when the bridge binary is missing", async () => {
 		const { d } = makeDeps({ binaryExists: () => false });
 		await expect(agentCommand("add", ["newbie"], config, d)).rejects.toThrow(
-			/the MCP entry would run \/usr\/local\/bin\/node \/usr\/local\/bin\/gh-broker connect, but \/usr\/local\/bin\/gh-broker is not there/
+			/the MCP entry would run \/usr\/local\/lib\/gh-broker\/node \/usr\/local\/bin\/gh-broker connect, but \/usr\/local\/bin\/gh-broker is not there/
 		);
 		expect(d.ensureGroup).not.toHaveBeenCalled(); // nothing half-registered
 	});
@@ -90,7 +90,7 @@ describe("configureMcp", () => {
 	it("refuses to write an entry when the bridge binary is missing", () => {
 		const { d } = makeDeps({ binaryExists: (p: string) => p !== "/usr/local/bin/gh-broker" });
 		expect(() => configureMcp("repo", config, d)).toThrow(
-			/the MCP entry would run \/usr\/local\/bin\/node \/usr\/local\/bin\/gh-broker connect, but \/usr\/local\/bin\/gh-broker is not there/
+			/the MCP entry would run \/usr\/local\/lib\/gh-broker\/node \/usr\/local\/bin\/gh-broker connect, but \/usr\/local\/bin\/gh-broker is not there/
 		);
 		expect(() => configureMcp("repo", config, d)).toThrow(/Get one with: sudo npm install -g/);
 		const { d: nodeMissing } = makeDeps({ binaryExists: (p: string) => p !== "/usr/local/lib/gh-broker/node" });
