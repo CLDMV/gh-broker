@@ -373,6 +373,24 @@ describe("broker node copy", () => {
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/second/node");
 	});
 
+	it("ignores a candidate that exits 0 with garbage instead of a version, and still installs", async () => {
+		world(["/garbage/node", "/second/node"]);
+		f.lstatSync.mockReturnValue(rootDir());
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps(
+				{
+					"/garbage/node": "nvm: command not found", // exits 0, prints garbage: skipped, never fatal
+					"/second/node": "v22.12.0",
+					[`${NODE_DIR}/node.tmp-${process.pid}`]: "v22.12.0"
+				},
+				{ pathDirs: () => ["/garbage", "/second"] }
+			)
+		);
+		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/second/node");
+		expect(logs).toEqual(["broker node: v22.12.0 from /second/node"]);
+	});
+
 	it("replaces a working copy only with a strictly newer candidate, and never downgrades", async () => {
 		world(["/new/node", "/old/node"]);
 		f.lstatSync.mockReturnValue(rootDir());

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T23:28:43-08:00 (1795418923)
+ *	@Last modified time: 2026-11-22T23:47:49-08:00 (1795420069)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -122,11 +122,6 @@ async function fetchBuffer(url: string): Promise<Buffer> {
 	return Buffer.from(await res.arrayBuffer());
 }
 
-/**
- * Download the latest LTS node from nodejs.org/dist, verify the tarball against that release's
- * SHASUMS256.txt, and extract only `bin/node` to `dest`. A checksum mismatch is a hard failure —
- * an unverified binary is never installed.
- */
 /**
  * Download the latest LTS node from nodejs.org/dist, verify the tarball against that release's
  * SHASUMS256.txt (fetched ONCE: the verified bytes are the bytes written), and extract only
