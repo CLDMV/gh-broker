@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-23T01:22:03-08:00 (1795425723)
+ *	@Last modified time: 2026-11-23T05:12:15-08:00 (1795439535)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -124,8 +124,8 @@ async function fetchBuffer(url: string, timeoutMs: number): Promise<Buffer> {
 
 /**
  * Download the latest LTS node from nodejs.org/dist, verify the tarball against that release's
- * SHASUMS256.txt (fetched ONCE: the verified bytes are the bytes written), and extract only
- * `bin/node` to `dest`. The extraction happens in a fresh mkdtemp directory (0700, root-owned,
+ * SHASUMS256.txt (fetched ONCE: the verified bytes are what goes to tar on stdin — the tarball is
+ * never written to disk), and extract only `bin/node` to `dest`. The extraction happens in a fresh mkdtemp directory (0700, root-owned,
  * random name — a pre-created or attacker-owned dir can never be adopted) with the archive's own
  * ownership discarded, and the file on disk is re-hashed against the member streamed straight out
  * of the verified tarball before it is copied: a swap in between is a hard failure. An unverified

@@ -793,11 +793,12 @@ describe("broker node copy", () => {
 		);
 		expect(ran).toContain("/real/node"); // the vetted real was what ran
 		expect(ran).not.toContain("/link/node");
+		expect(f.openSync).toHaveBeenCalledWith("/real/node", 0 | 131072); // the vet opened the real path O_NOFOLLOW
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/real/node"); // and what was copied
 		expect(logs.at(-1)).toBe("broker node: v24.11.0 from /link/node"); // the log keeps the human path
 	});
 
-	it("replaces an existing copy that is not a root-owned regular binary, without running it", async () => {
+	it("replaces an existing copy that is a symlink, without running it", async () => {
 		world(["/new/node"]);
 		// NODE_PATH is a symlink: the descriptor-based vet (O_NOFOLLOW) must refuse it BEFORE its
 		// --version runs — otherwise the update path would keep whatever the symlink points at
@@ -806,10 +807,6 @@ describe("broker node copy", () => {
 			fdPaths[nextFd] = p;
 			return nextFd++;
 		});
-		// and a world-writable NODE_FILE is refused the same way, through the descriptor's fstat
-		f.fstatSync.mockImplementation((fd: number) =>
-			fdPaths[fd] === NODE_FILE ? { uid: 0, gid: 0, mode: 0o100666, isFile: () => true, isDirectory: () => false } : nodeFile()
-		);
 		const ran: string[] = [];
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
@@ -826,6 +823,36 @@ describe("broker node copy", () => {
 				}
 			)
 		);
+		// the vet opened NODE_PATH with O_RDONLY | O_NOFOLLOW — the flag is the whole mechanism
+		expect(f.openSync).toHaveBeenCalledWith(NODE_FILE, 0 | 131072);
+		expect(f.openSync).toHaveBeenCalledWith("/new/node", 0 | 131072); // the candidate vet too
+		expect(ran).not.toContain(NODE_FILE); // never executed
+		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/new/node"); // replaced via the first-install branch
+	});
+
+	it("replaces an existing copy whose descriptor says world-writable, without running it", async () => {
+		world(["/new/node"]);
+		// the open succeeds, but the descriptor's fstat reports a group/world-writable binary:
+		// refused before its --version runs, exactly like the symlink case
+		fileStats[NODE_FILE] = { uid: 0, gid: 0, mode: 0o100666, isFile: () => true, isDirectory: () => false };
+		const ran: string[] = [];
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps(
+				{ [NODE_FILE]: "v24.11.0", "/new/node": "v26.1.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v26.1.0" },
+				{
+					pathDirs: () => ["/new"],
+					version: async (bin: string) => {
+						ran.push(bin);
+						if (bin === NODE_FILE) return "v24.11.0"; // would keep the old copy if it were ever run
+						if (bin === "/new/node" || bin === `${NODE_DIR}/node.tmp-${process.pid}`) return "v26.1.0";
+						throw new Error(`${bin} --version failed`);
+					}
+				}
+			)
+		);
+		const nodeFd = Number(Object.keys(fdPaths).find((k) => fdPaths[Number(k)] === NODE_FILE));
+		expect(f.fstatSync).toHaveBeenCalledWith(nodeFd); // the check went through the pinned descriptor
 		expect(ran).not.toContain(NODE_FILE); // never executed
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/new/node"); // replaced via the first-install branch
 	});

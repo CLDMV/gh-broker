@@ -251,6 +251,11 @@ describe("downloadLatestLts", () => {
 		const extractCall = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJf")!;
 		expect(extractCall[1]).toEqual(["-xJf", "-", "--no-same-owner", "-C", "/usr/local/lib/gh-broker/.dl-abc123", `${name}/bin/node`]);
 		expect((extractCall[2] as { input: Buffer }).input).toEqual(tarball);
+		// SF3: the re-hash stream reads the member from the same verified buffer on stdin — a
+		// regression back to a path argument would hard-fail every download (no tarball on disk)
+		const memberCall = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJOf")!;
+		expect(memberCall[1]).toEqual(["-xJOf", "-", `${name}/bin/node`]);
+		expect((memberCall[2] as { input: Buffer }).input).toEqual(tarball);
 		expect(f.copyFileSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-abc123/${name}/bin/node`, "/usr/local/lib/gh-broker/node.tmp-1");
 		// a stale .dl-* from a killed run is swept first, and the real node is never swept
 		expect(f.readdirSync).toHaveBeenCalledWith(NODE_LINK_DIR);

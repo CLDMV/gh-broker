@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-23T01:26:51-08:00 (1795426011)
+ *	@Last modified time: 2026-11-23T05:12:15-08:00 (1795439535)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -354,8 +354,9 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 	// means a later run that only ever moves forward.
 	let existing: string | undefined;
 	try {
-		// the same ownership rules as a candidate, before this binary is run too — and the same
-		// descriptor-based check, so nothing can swap it between the check and the run
+		// the same ownership rules as a candidate, before this binary is run too — descriptor-based
+		// like the candidate vet, while the swap window before the by-name version() run is closed
+		// by the root:root 0755 directory guard enforced earlier in this function
 		const fd = openSync(NODE_PATH, constants.O_RDONLY | constants.O_NOFOLLOW);
 		try {
 			const st = fstatSync(fd);
