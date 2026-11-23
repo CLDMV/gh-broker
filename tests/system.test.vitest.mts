@@ -652,6 +652,13 @@ describe("broker node copy", () => {
 			/sits under \/usr\/local\/lib, owned by uid 1000 with mode 755; its parents must be root-owned/
 		);
 		expect(f.mkdirSync).not.toHaveBeenCalled();
+		// a stat error other than ENOENT on an ancestor is not "missing": it propagates
+		f.lstatSync.mockImplementation((p: string) => {
+			if (p === "/usr/local/lib") throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
+		});
+		await expect(sys.ensureBrokerNodeLink("/installer/node", nodeDeps({}))).rejects.toThrow("EACCES");
+		expect(f.mkdirSync).not.toHaveBeenCalled();
 	});
 
 	it("refuses a copy that reports an older version than the vetted candidate (a swap)", async () => {
