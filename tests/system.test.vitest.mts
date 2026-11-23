@@ -826,8 +826,14 @@ describe("broker node copy", () => {
 			if (p === "/wrap/node" || p === "/good/node") return nodeFile();
 			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
 		});
+		let opened = "";
+		f.openSync.mockImplementation((p: string) => {
+			opened = p;
+			return 7;
+		});
 		f.readSync.mockImplementation((_fd: number, buf: Buffer) => {
-			Buffer.from("#!/b").copy(buf); // a shell wrapper, not an ELF binary
+			// only the wrapper is a shell script; the good candidate is a real ELF binary
+			Buffer.from(opened === "/wrap/node" ? "#!/b" : "\u007fELF").copy(buf);
 			return 4;
 		});
 		await sys.ensureBrokerNodeLink(

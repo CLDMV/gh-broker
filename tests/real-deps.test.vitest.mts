@@ -222,6 +222,7 @@ describe("downloadLatestLts", () => {
 
 	beforeEach(() => {
 		f.readFileSync.mockImplementation((p: string) => (String(p).includes("bin/node") ? member : "{}"));
+		f.readdirSync.mockReturnValue([]); // no stale .dl-* unless a test seeds one
 		f.mkdtempSync.mockReturnValue("/usr/local/lib/gh-broker/.dl-abc123");
 		h.spawnSync.mockImplementation((cmd: string, args: string[] = []) => {
 			const line = [cmd, ...args].join(" ");
@@ -233,6 +234,7 @@ describe("downloadLatestLts", () => {
 
 	it("downloads once, verifies, extracts into a fresh mkdtemp dir with the archive's ownership discarded, and re-hashes the extracted binary", async () => {
 		stubFetch();
+		f.readdirSync.mockReturnValue([".dl-stale"]); // litter from a killed run: swept first
 		await expect(downloadLatestLts("/usr/local/lib/gh-broker/node.tmp-1")).resolves.toBe(tarballUrl);
 		// S1: exactly one fetch of the tarball — the verified bytes are the bytes written
 		expect(fetched.filter((u) => u === tarballUrl)).toHaveLength(1);
