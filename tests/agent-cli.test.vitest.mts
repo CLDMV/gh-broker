@@ -60,6 +60,14 @@ describe("agent add", () => {
 		await expect(agentCommand("add", [], config, d)).rejects.toThrow(/name the agent user: sudo gh-broker agent add <user>/);
 		expect(d.ensureGroup).not.toHaveBeenCalled();
 	});
+
+	it("refuses before registering when the bridge binary is missing", async () => {
+		const { d } = makeDeps({ binaryExists: () => false });
+		await expect(agentCommand("add", ["newbie"], config, d)).rejects.toThrow(
+			/the MCP entry would run \/usr\/local\/bin\/node \/usr\/local\/bin\/gh-broker connect, but \/usr\/local\/bin\/gh-broker is not there/
+		);
+		expect(d.ensureGroup).not.toHaveBeenCalled(); // nothing half-registered
+	});
 });
 
 describe("configureMcp", () => {

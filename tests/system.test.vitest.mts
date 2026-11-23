@@ -274,6 +274,16 @@ describe("node symlinks", () => {
 		expect(f.symlinkSync).not.toHaveBeenCalledWith("/opt/node/bin/npx", "/usr/local/bin/npx");
 	});
 
+	it("never re-points a binary at itself: a real /usr/local/bin/node would be deleted", () => {
+		// the official tarball under /usr/local: every binary IS its own target
+		f.existsSync.mockReturnValue(true);
+		f.rmSync.mockClear();
+		f.symlinkSync.mockClear();
+		expect(sys.pointNodeSymlinks("/usr/local/bin/node")).toEqual([]);
+		expect(f.rmSync).not.toHaveBeenCalled();
+		expect(f.symlinkSync).not.toHaveBeenCalled();
+	});
+
 	it("currentNodeBin resolves the running node's real path", () => {
 		f.realpathSync.mockReturnValue("/real/node");
 		expect(sys.currentNodeBin()).toBe("/real/node");

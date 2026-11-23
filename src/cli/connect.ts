@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T21:35:55-08:00 (1795412155)
+ *	@Last modified time: 2026-11-22T22:30:10-08:00 (1795415410)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -265,13 +265,12 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 			// connection replays again; no list_changed, nothing forwarded.
 			if (responseLine === null) return;
 			if (pendingInitAnswer) {
-				// The answer is the client's own initialize's: forward it, then the held lines
-				// (its notifications/initialized among them), and only then list_changed — the
-				// handshake completes before the tool-list nudge.
+				// The answer is the client's own initialize's: forward it and then the held lines.
+				// No list_changed here: the client has not listed anything yet (it only sends
+				// notifications/initialized after this answer, and that answer is never held).
 				pendingInitAnswer = false;
 				deliverServerLine(responseLine);
 				flushHeld();
-				writeToClient(LIST_CHANGED);
 			} else {
 				writeToClient(LIST_CHANGED);
 				flushHeld();

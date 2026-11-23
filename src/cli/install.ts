@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T21:35:55-08:00 (1795412155)
+ *	@Last modified time: 2026-11-22T22:30:10-08:00 (1795415410)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -234,6 +234,11 @@ async function runInstall(argv: string[]): Promise<void> {
 	step("prerequisites");
 	for (const cmd of ["systemctl", "useradd", "getent", "sudo"]) if (!has(cmd)) die(`missing required command: ${cmd}`);
 	if (!has("rsync")) log(`  note: 'rsync' not found — will fall back to a plain copy`);
+	// The MCP entries run the global CLI; writing them without the binary would leave every agent
+	// a config that can't start its bridge. Refused here, before anything is created or deployed
+	// (--no-mcp-config writes no entries, so it needs neither).
+	if (!opts.noMcpConfig && !existsSync(CLI_PATH))
+		die(`the MCP entries would run ${CLI_PATH} connect, but it is not there. Get one with: ${NPM_INSTALL_COMMAND}`);
 
 	// --- agent users ---
 	// An agent is registered by the group gh-broker-agent-<user>. Upgrades keep the registered ones,
@@ -287,13 +292,9 @@ async function runInstall(argv: string[]): Promise<void> {
 		log(
 			`  warning: this package is installed under an nvm Node version folder; that copy breaks when Node is upgraded. Reinstall it globally: ${NPM_INSTALL_COMMAND}`
 		);
-	else if (where === "checkout" && !existsSync(CLI_PATH))
+	// Only reachable with the MCP config skipped: otherwise the prerequisites step already died.
+	else if (where === "checkout" && opts.noMcpConfig && !existsSync(CLI_PATH))
 		log(`  note: no global gh-broker command found. Get one with: ${NPM_INSTALL_COMMAND}`);
-	// The MCP entries run the global CLI; writing them without the binary would leave every agent
-	// a config that can't start its bridge. Refused before anything is deployed or restarted
-	// (--no-mcp-config writes no entries, so it needs neither).
-	if (!opts.noMcpConfig && !existsSync(CLI_PATH))
-		die(`the MCP entries would run ${CLI_PATH} connect, but it is not there. Get one with: ${NPM_INSTALL_COMMAND}`);
 
 	// --- the daemon bundle ---
 	// The package ships it prebuilt. A checkout builds it with the command itself

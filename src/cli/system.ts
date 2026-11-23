@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-19T21:50:49-08:00 (1795153849)
+ *	@Last modified time: 2026-11-22T22:30:11-08:00 (1795415411)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -171,11 +171,13 @@ export function pointNodeSymlinks(nodeBin: string): string[] {
 	const linked: string[] = [];
 	for (const b of ["node", "npm", "npx"]) {
 		const src = join(binDir, b);
-		if (existsSync(src)) {
-			rmSync(`/usr/local/bin/${b}`, { force: true });
-			symlinkSync(src, `/usr/local/bin/${b}`);
-			linked.push(b);
-		}
+		if (!existsSync(src)) continue;
+		// A binary already AT /usr/local/bin (the official tarball's layout) is its own target:
+		// rm'ing and symlinking it to itself would delete the real file.
+		if (src === `/usr/local/bin/${b}`) continue;
+		rmSync(`/usr/local/bin/${b}`, { force: true });
+		symlinkSync(src, `/usr/local/bin/${b}`);
+		linked.push(b);
 	}
 	return linked;
 }

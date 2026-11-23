@@ -39,6 +39,8 @@ class FakeBroker {
 	private sockets = new Set<Socket>();
 	readonly received: string[] = [];
 	connections = 0;
+	/** How many initialize answers this fake has sent (so tests can assert after the last one). */
+	initializeAnswers = 0;
 	/** Answer an initialize request with a result response (everything else is echoed verbatim). */
 	answerInitialize = true;
 	/** Echo non-initialize lines back. */
@@ -58,14 +60,21 @@ class FakeBroker {
 			this.connections++;
 			this.sockets.add(sock);
 			sock.setEncoding("utf8");
-			let buf = ""; // per connection: a partial line from a dropped one must not join the next
+			// framed like the bridge: chunks collected, only the new chunk searched, joined per line —
+			// a multi-megabyte line must not make the FAKE the quadratic thing under test
+			let pieces: string[] = []; // per connection: a partial line from a dropped one must not join the next
 			sock.on("data", (chunk: string) => {
-				buf += chunk;
-				for (let nl = buf.indexOf("\n"); nl >= 0; nl = buf.indexOf("\n")) {
-					const line = buf.slice(0, nl);
-					buf = buf.slice(nl + 1);
+				let at = 0; // everything before this in the chunk is already cut into lines
+				for (;;) {
+					const nl = chunk.indexOf("\n", at);
+					if (nl < 0) break;
+					pieces.push(chunk.slice(at, nl));
+					const line = pieces.join("");
+					pieces = [];
 					this.onLine(line, sock);
+					at = nl + 1;
 				}
+				if (at < chunk.length) pieces.push(chunk.slice(at));
 			});
 			sock.on("close", () => this.sockets.delete(sock));
 			sock.on("error", () => {}); // the bridge may destroy the socket mid-echo (EPIPE) — normal
@@ -88,6 +97,7 @@ class FakeBroker {
 			return;
 		}
 		if (msg.method === "initialize" && this.answerInitialize) {
+			this.initializeAnswers++;
 			sock.write(
 				`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "fake", version: "0.0.0" } } })}\n`
 			);
@@ -449,7 +459,7 @@ describe("handshake replay after a restart", () => {
 
 	it("delivers the replayed initialize's answer when the client's own never got one", async () => {
 		const broker = await startBroker(nextSock());
-		const b = startBridge(broker.path);
+		const b = startBridge(broker.path, { holdMs: 5000 }); // no expiry can race this test
 		await waitFor(() => broker.connections === 1);
 		broker.answerInitialize = false; // the client's initialize stays unanswered
 		b.stdin.write(`${initReq(1)}\n`);
@@ -457,11 +467,10 @@ describe("handshake replay after a restart", () => {
 		broker.kick(); // the initialize is in flight: the client must not get -32000 for it
 		broker.answerInitialize = true; // the next connection's replay carries the answer
 		await b.client.waitNext(isResponse(1)); // the replay's answer IS the client's answer
-		await b.client.waitNext(isListChanged);
 		expect(b.client.lines.filter(isStale(1))).toHaveLength(0);
 		expect(broker.received.filter((l) => l === initReq(1))).toHaveLength(2);
-		// the answer reaches the client before list_changed
-		expect(b.client.lines.findIndex(isResponse(1))).toBeLessThan(b.client.lines.findIndex(isListChanged));
+		// and no list_changed at all in this path: the client has listed nothing yet
+		expect(b.client.lines.filter(isListChanged)).toHaveLength(0);
 	});
 
 	it("expires a pending initialize answer across a replay timeout instead of waiting forever", async () => {
@@ -478,10 +487,12 @@ describe("handshake replay after a restart", () => {
 		expect(JSON.parse(stale)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "gh-broker restarted; retry" } });
 		await waitFor(() => b.logs.some((l) => l === "bridge: no initialize response in 40ms; retrying")); // the replay still timed out
 		// a later answering connection replays again — and now swallows: the client has been told
-		// to retry, so it gets no answer for an id it gave up on, and no second -32000
+		// to retry, so it gets no answer for an id it gave up on, and no second -32000. Asserted
+		// only once the fake has actually SENT that replay answer (not on a timer).
 		broker.answerInitialize = true;
 		await waitFor(() => broker.connections >= 3);
-		await realSleep(80);
+		await waitFor(() => broker.initializeAnswers >= 1);
+		await realSleep(20);
 		expect(b.client.lines.filter(isResponse(1))).toHaveLength(0);
 		expect(b.client.lines.filter(isStale(1))).toHaveLength(1);
 	});
@@ -654,6 +665,27 @@ describe("requests across a disconnect", () => {
 		await b.client.waitNext(isListChanged);
 		await waitFor(() => broker.received.some((l) => l === req(6)) && broker.received.some((l) => l === big));
 		expect(b.client.lines.filter(isStale(6))).toHaveLength(0);
+	});
+
+	it("drops several held lines in one overflow event behind a single summary", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path, { backoffStartMs: 150, backoffMaxMs: 300, holdMs: 5000 }); // no expiry can race this test
+		await waitFor(() => broker.connections === 1);
+		b.stdin.write(`${initReq(1)}\n`);
+		await b.client.waitNext(isResponse(1));
+		broker.kick();
+		await waitFor(() => b.logs.some((l) => l.startsWith("bridge: socket closed")));
+		const pad = (n: number) => JSON.stringify({ jsonrpc: "2.0", method: `n${n}`, params: { pad: "x".repeat(300_000) } });
+		b.stdin.write(`${pad(1)}\n${pad(2)}\n`); // two ~300KB notifications held
+		const big = JSON.stringify({ jsonrpc: "2.0", method: "big", params: { pad: "x".repeat(900_000) } });
+		b.stdin.write(`${big}\n`); // ~1.5MB total: both held lines drop in this one overflow event
+		await waitFor(() => b.logs.some((l) => l.includes("dropped 2 line(s)")));
+		expect(b.logs.filter((l) => l.includes("held queue over"))).toHaveLength(1); // one summary for the whole event
+		// reconnect: only the line that fit survives
+		await b.client.waitNext(isListChanged);
+		await waitFor(() => broker.received.some((l) => l === big));
+		expect(broker.received.some((l) => l.includes('"n1"'))).toBe(false);
+		expect(broker.received.some((l) => l.includes('"n2"'))).toBe(false);
 	});
 });
 
