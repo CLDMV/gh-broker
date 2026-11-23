@@ -321,6 +321,11 @@ describe("broker node copy", () => {
 		expect(f.chmodSync).toHaveBeenCalledWith(tempPath, 0o755);
 		expect(f.renameSync).toHaveBeenCalledWith(tempPath, NODE_FILE);
 		expect(f.rmSync).not.toHaveBeenCalled(); // success leaves no temp behind
+		// nothing under /usr/local/bin is ever touched by the broker's node work
+		const touched = [...f.rmSync.mock.calls, ...f.renameSync.mock.calls, ...f.copyFileSync.mock.calls]
+			.flat()
+			.filter((p: unknown) => typeof p === "string");
+		expect(touched.filter((p: string) => p.startsWith("/usr/local/bin/"))).toEqual([]);
 		expect(logs).toEqual(["broker node: v24.11.0 from /opt/node/bin/node"]);
 	});
 
@@ -351,7 +356,7 @@ describe("broker node copy", () => {
 				{ pathDirs: () => ["/first", "/second"], nvmDirs: () => ["/usr/local/nvm"] }
 			)
 		);
-		// the highest qualifying version wins; a tie (none here) would keep the PATH one first
+		// the highest qualifying version wins; /second/node and the nvm copy tie at v24.11.0 and the PATH entry wins the tie
 		const [src] = f.copyFileSync.mock.calls[0];
 		expect(src).toBe("/second/node");
 		expect(logs).toEqual(["broker node: v24.11.0 from /second/node"]);
@@ -428,15 +433,12 @@ describe("broker node copy", () => {
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/broken/node");
 		// nothing qualifies anywhere: the download fallback
 		f.copyFileSync.mockClear();
-		const download = vi.fn(async () => ({
-			version: "24.11.0",
-			source: "https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.xz"
-		}));
+		const download = vi.fn(async () => "https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.xz");
 		world([]); // nothing exists: no candidates at all
 		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({ [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" }, { download }));
 		expect(download).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`);
 		expect(f.renameSync).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`, NODE_FILE);
-		expect(logs.at(-1)).toBe("broker node: v24.11.0 downloaded (nodejs.org dist, latest LTS)");
+		expect(logs.at(-1)).toBe("broker node: v24.11.0 downloaded (https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.xz)");
 	});
 
 	it("removes the temp copy when anything fails, and rethrows", async () => {
@@ -488,6 +490,15 @@ describe("broker node copy", () => {
 		await expect(sys.ensureBrokerNodeLink("/opt/node/bin/node", nodeDeps({}))).rejects.toThrow(/sudo chown root:root/);
 		expect(f.copyFileSync).not.toHaveBeenCalled();
 		expect(f.renameSync).not.toHaveBeenCalled();
+	});
+
+	it("refuses a root:root 0750 directory: the service user could not traverse it", async () => {
+		f.realpathSync.mockReturnValue("/opt/node/bin/node");
+		f.lstatSync.mockReturnValue({ uid: 0, gid: 0, mode: 0o100750, isDirectory: () => true });
+		await expect(sys.ensureBrokerNodeLink("/opt/node/bin/node", nodeDeps({}))).rejects.toThrow(
+			/\/usr\/local\/lib\/gh-broker is owned by uid 0\/gid 0 with mode 750; the broker's node must live in a root:root 0755 directory/
+		);
+		expect(f.copyFileSync).not.toHaveBeenCalled();
 	});
 
 	it("passes a stat error other than ENOENT through instead of creating the directory", async () => {

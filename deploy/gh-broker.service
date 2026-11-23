@@ -22,7 +22,7 @@ RuntimeDirectory=gh-broker
 RuntimeDirectoryMode=0755
 
 # Node is the broker's own /usr/local/lib/gh-broker/node — a root-owned copy of a
-# qualifying node (the installer picks, vetts and replaces it on every install, in a
+# qualifying node (the installer picks, vets and replaces it on every install, in a
 # root:root directory the service user cannot write) — so no node version is pinned
 # here and there is no nvm resolution at start. CLI node == service node by
 # construction. See docs/deploy-architecture.md.

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T23:00:19-08:00 (1795417219)
+ *	@Last modified time: 2026-11-22T23:28:44-08:00 (1795418924)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -196,7 +196,7 @@ export interface NodeSourceDeps {
 	/** sha256 of a file. */
 	sha256: (path: string) => Promise<string>;
 	/** Download the latest LTS node into `dest` (verified against the release's SHASUMS256.txt) and report the version and source. */
-	download: (dest: string) => Promise<{ version: string; source: string }>;
+	download: (dest: string) => Promise<string>; // the source description for the one-line verdict; the binary itself reports its version
 	log: (m: string) => void;
 }
 
@@ -207,8 +207,12 @@ export function nodeFloorMin(range: string): string {
 	return m[0]!;
 }
 
-/** `v22.12.0` (or with surrounding whitespace) → `22.12.0`, as `--version` prints it. */
-const normalizeVersion = (v: string): string => v.trim().replace(/^v/, "");
+/** `v22.12.0` (or with surrounding whitespace) → `22.12.0`; anything else a node could print is rejected. */
+const normalizeVersion = (v: string): string => {
+	const m = /^v?(\d+\.\d+\.\d+)/.exec(v.trim());
+	if (!m) throw new Error(`not a node version: "${v}"`);
+	return m[1]!;
+};
 
 const versionParts = (v: string): [number, number, number] => {
 	const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(v);
@@ -255,17 +259,19 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 			throw new Error(
 				`${NODE_LINK_DIR} exists but is not a directory (mode ${mode.toString(8)}); it must be a root:root 0755 directory: sudo rm -rf ${NODE_LINK_DIR} && sudo mkdir -p ${NODE_LINK_DIR} && sudo chown root:root ${NODE_LINK_DIR} && sudo chmod 755 ${NODE_LINK_DIR}`
 			);
-		if (dir.uid !== 0 || dir.gid !== 0 || (mode & 0o022) !== 0)
+		// Exactly 0755: anything narrower (a 0750 or 0700 dir) would pass here and then stop the
+		// service user and every agent's sg bridge from traversing it.
+		if (dir.uid !== 0 || dir.gid !== 0 || mode !== 0o755)
 			throw new Error(
 				`${NODE_LINK_DIR} is owned by uid ${dir.uid}/gid ${dir.gid} with mode ${mode.toString(8)}; the broker's node must live in a root:root 0755 directory (its contents may be someone else's). Fix it by hand: sudo chown root:root ${NODE_LINK_DIR} && sudo chmod 755 ${NODE_LINK_DIR}`
 			);
 	}
 
-	/** Put a working node binary at NODE_PATH: write/copy to a temp file, prove it runs, rename it over. */
-	const install = async (from: (dest: string) => Promise<void>, why: string): Promise<void> => {
+	/** Put a working node binary at NODE_PATH: write/copy to a temp file, prove it runs, rename it over. `from` returns the one-line verdict's tail (the source). */
+	const install = async (from: (dest: string) => Promise<string>): Promise<void> => {
 		const temp = `${NODE_LINK_DIR}/node.tmp-${process.pid}`;
 		try {
-			await from(temp);
+			const why = await from(temp);
 			chmodSync(temp, 0o755); // root:root 0755, like the directory
 			const v = normalizeVersion(await deps.version(temp)); // the copy must actually run
 			renameSync(temp, NODE_PATH); // running bridges keep the old inode until this instant
@@ -299,10 +305,12 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 		let v: string;
 		try {
 			v = normalizeVersion(await deps.version(bin));
+			if (!isEvenMajor(v) || compareVersions(v, deps.floor) < 0) continue; // odd major or below the floor
 		} catch {
-			continue; // fails to run: not a candidate
+			// fails to run, or prints something that is not a version (a stray wrapper on PATH):
+			// ignored, never fatal
+			continue;
 		}
-		if (!isEvenMajor(v) || compareVersions(v, deps.floor) < 0) continue; // odd major or below the floor
 		qualifying.push({ bin, version: v });
 	}
 	qualifying.sort((a, b) => compareVersions(b.version, a.version)); // highest first (stable: PATH before nvm on ties)
@@ -319,16 +327,21 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 			deps.log(`broker node: kept v${existing} (same version and sha256 as ${best.bin})`);
 			return;
 		}
-		await install(async (dest) => copyFileSync(best.bin, dest), `from ${best.bin}`);
+		await install(async (dest) => {
+			copyFileSync(best.bin, dest);
+			return `from ${best.bin}`;
+		});
 		return;
 	}
 	// First install (no copy, or a broken or below-floor one): the highest qualifying node, else download.
 	if (!best) {
-		deps.log("broker node: no qualifying node on this box; downloading the latest LTS");
-		await install(async (dest) => void (await deps.download(dest)), "downloaded (nodejs.org dist, latest LTS)");
+		await install(async (dest) => `downloaded (${await deps.download(dest)})`);
 		return;
 	}
-	await install(async (dest) => copyFileSync(best.bin, dest), `from ${best.bin}`);
+	await install(async (dest) => {
+		copyFileSync(best.bin, dest);
+		return `from ${best.bin}`;
+	});
 }
 
 /** The real path of the node running this installer — the node the service will use. */

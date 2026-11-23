@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // The real effects behind the CLI, with their process and filesystem access mocked: nothing here
 // spawns npm or touches the filesystem.
@@ -21,6 +21,7 @@ vi.mock("node:fs", () => {
 		"fchmodSync",
 		"fchownSync",
 		"mkdirSync",
+		"mkdtempSync",
 		"cpSync",
 		"symlinkSync",
 		"realpathSync",
@@ -47,7 +48,8 @@ vi.mock("node:fs", () => {
 });
 
 import * as fs from "node:fs";
-import { realDeps } from "../src/cli/real-deps.ts";
+import { downloadLatestLts, realDeps } from "../src/cli/real-deps.ts";
+import { sha256Hex } from "../src/cli/node-dist.ts";
 
 const f = vi.mocked(fs) as any;
 const ok = (stdout = ""): { status: number; stdout: string; stderr: string } => ({ status: 0, stdout, stderr: "" });
@@ -174,5 +176,102 @@ describe("runNewBinary", () => {
 		expect(() => realDeps().runNewBinary(["install"])).toThrow("/usr/local/bin/gh-broker install exited on signal SIGTERM");
 		h.spawnSync.mockReturnValue({ error: new Error("EACCES"), status: null, stdout: "", stderr: "" });
 		expect(() => realDeps().runNewBinary(["install"])).toThrow("/usr/local/bin/gh-broker install: EACCES");
+	});
+});
+
+describe("downloadLatestLts", () => {
+	const INDEX = JSON.stringify([
+		{ version: "v25.0.0", lts: false },
+		{ version: "v24.11.0", lts: "jod" }
+	]);
+	const member = Buffer.from("the real node binary");
+	const tarball = Buffer.from("the verified tarball bytes");
+	const arch = process.arch === "x64" || process.arch === "arm64" ? process.arch : "x64";
+	const name = `node-v24.11.0-linux-${arch}.tar.xz`;
+	const tarballUrl = `https://nodejs.org/dist/v24.11.0/${name}`;
+	const fetched: string[] = [];
+
+	const stubFetch = (tarballBody: Buffer = tarball, sums = `${sha256Hex(tarball)}  ${name}\n`): void => {
+		fetched.length = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string | URL) => {
+				const u = String(url);
+				fetched.push(u);
+				if (u.endsWith("/index.json"))
+					return { ok: true, status: 200, text: async () => INDEX, arrayBuffer: async () => new ArrayBuffer(0) };
+				if (u.endsWith("SHASUMS256.txt"))
+					return { ok: true, status: 200, text: async () => sums, arrayBuffer: async () => new ArrayBuffer(0) };
+				return {
+					ok: true,
+					status: 200,
+					text: async () => "",
+					arrayBuffer: async () => tarballBody.buffer.slice(tarballBody.byteOffset, tarballBody.byteOffset + tarballBody.byteLength)
+				};
+			})
+		);
+	};
+
+	beforeEach(() => {
+		f.readFileSync.mockImplementation((p: string) => (String(p).includes("bin/node") ? member : "{}"));
+		f.mkdtempSync.mockReturnValue("/tmp/gh-broker-node-abc123");
+		h.spawnSync.mockImplementation((cmd: string, args: string[] = []) => {
+			const line = [cmd, ...args].join(" ");
+			if (line.startsWith("tar -xJOf")) return { status: 0, stdout: member, stderr: "" };
+			return { status: 0, stdout: "", stderr: "" };
+		});
+	});
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("downloads once, verifies, extracts into a fresh mkdtemp dir with the archive's ownership discarded, and re-hashes the extracted binary", async () => {
+		stubFetch();
+		await expect(downloadLatestLts("/usr/local/lib/gh-broker/node.tmp-1")).resolves.toBe(tarballUrl);
+		// S1: exactly one fetch of the tarball — the verified bytes are the bytes written
+		expect(fetched.filter((u) => u === tarballUrl)).toHaveLength(1);
+		expect(fetched.filter((u) => u.includes("node-v24.11.0-linux"))).toHaveLength(1);
+		// B1: a fresh 0700-root mkdtemp dir (never a predictable pid-named one), tar drops the
+		// archive's own ownership, and the extracted file is re-hashed against the member streamed
+		// from the same verified tarball
+		expect(f.mkdtempSync).toHaveBeenCalledWith(expect.stringMatching(/gh-broker-node-$/));
+		const tarArgs = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJf")![1] as string[];
+		expect(tarArgs).toContain("--no-same-owner");
+		expect(f.writeFileSync).toHaveBeenCalledWith(`/tmp/gh-broker-node-abc123/${name}`, tarball);
+		expect(f.copyFileSync).toHaveBeenCalledWith(`/tmp/gh-broker-node-abc123/${name}/bin/node`, "/usr/local/lib/gh-broker/node.tmp-1");
+	});
+
+	it("fails a checksum mismatch without extracting anything", async () => {
+		stubFetch(tarball, `deadbeef  ${name}\n`);
+		await expect(downloadLatestLts("/d/node")).rejects.toThrow(/checksum mismatch.*not installing an unverified binary/);
+		expect(f.writeFileSync).not.toHaveBeenCalled();
+		expect(f.copyFileSync).not.toHaveBeenCalled();
+	});
+
+	it("fails offline with a clear message", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new TypeError("fetch failed");
+			})
+		);
+		await expect(downloadLatestLts("/d/node")).rejects.toThrow(/cannot reach https:\/\/nodejs\.org\/dist\/index\.json/);
+	});
+
+	it("fails when the extracted file does not match the tarball's own member (a swap)", async () => {
+		stubFetch();
+		f.readFileSync.mockImplementation((p: string) => (String(p).includes("bin/node") ? Buffer.from("swapped binary") : "{}"));
+		await expect(downloadLatestLts("/d/node")).rejects.toThrow(/does not match the verified tarball/);
+		expect(f.copyFileSync).not.toHaveBeenCalled();
+	});
+
+	it("removes the work dir (tarball included) even when the extraction fails", async () => {
+		stubFetch();
+		h.spawnSync.mockImplementation((cmd: string, args: string[] = []) => {
+			const line = [cmd, ...args].join(" ");
+			if (line.startsWith("tar -xJf")) return { status: 2, stdout: "", stderr: "tar: error" };
+			if (line.startsWith("tar -xJOf")) return { status: 0, stdout: member, stderr: "" };
+			return { status: 0, stdout: "", stderr: "" };
+		});
+		await expect(downloadLatestLts("/d/node")).rejects.toThrow(/tar/);
+		expect(f.rmSync).toHaveBeenCalledWith("/tmp/gh-broker-node-abc123", { recursive: true, force: true });
 	});
 });
