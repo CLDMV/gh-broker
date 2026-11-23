@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-23T01:22:03-08:00 (1795425723)
+ *	@Last modified time: 2026-11-23T01:26:51-08:00 (1795426011)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -408,7 +408,7 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 	}
 	await install(
 		async (dest) => {
-			copyFileSync(best.bin, dest);
+			copyFileSync(best.real, dest);
 			return `from ${best.bin}`;
 		},
 		{ version: best.version } // the copy must still be the binary that was vetted
