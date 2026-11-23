@@ -497,6 +497,12 @@ describe("broker node copy", () => {
 		});
 		await expect(sys.ensureBrokerNodeLink("/opt/node/bin/node", nodeDeps({}))).rejects.toThrow("EACCES");
 		expect(f.mkdirSync).not.toHaveBeenCalled();
+		// and a non-directory at that path (a file, or a symlink — those are always 0777) is refused
+		f.lstatSync.mockReturnValue({ uid: 0, gid: 0, mode: 0o100777, isDirectory: () => false });
+		await expect(sys.ensureBrokerNodeLink("/opt/node/bin/node", nodeDeps({}))).rejects.toThrow(
+			/exists but is not a directory \(mode 777\)/
+		);
+		expect(f.mkdirSync).not.toHaveBeenCalled();
 	});
 
 	it("nodeFloorMin takes the minimum semver literal out of an engines range", () => {
