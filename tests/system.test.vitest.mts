@@ -16,7 +16,10 @@ vi.mock("node:fs", () => ({
 	renameSync: vi.fn(),
 	realpathSync: vi.fn(),
 	copyFileSync: vi.fn(),
-	readdirSync: vi.fn()
+	readdirSync: vi.fn(),
+	openSync: vi.fn(),
+	readSync: vi.fn(),
+	closeSync: vi.fn()
 }));
 
 import * as fs from "node:fs";
