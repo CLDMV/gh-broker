@@ -349,7 +349,6 @@ describe("broker node copy", () => {
 			`${nvm}/v24.11.0/bin/node`,
 			"/installer/node"
 		]);
-		f.lstatSync.mockReturnValue(rootDir());
 		f.readdirSync.mockReturnValue(["v21.7.3", "v22.12.0", "v24.11.0", "junk"]);
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
@@ -385,7 +384,6 @@ describe("broker node copy", () => {
 
 	it("ignores a candidate that exits 0 with garbage instead of a version, and still installs", async () => {
 		world(["/garbage/node", "/second/node"]);
-		f.lstatSync.mockReturnValue(rootDir());
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
 			nodeDeps(
@@ -403,7 +401,6 @@ describe("broker node copy", () => {
 
 	it("replaces a working copy only with a strictly newer candidate, and never downgrades", async () => {
 		world(["/new/node", "/old/node"]);
-		f.lstatSync.mockReturnValue(rootDir());
 		// existing v24; only older candidates around: kept, nothing copied
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
@@ -464,7 +461,6 @@ describe("broker node copy", () => {
 
 	it("replaces a broken copy like a first install, and downloads when nothing qualifies", async () => {
 		world(["/broken/node"]);
-		f.lstatSync.mockReturnValue(rootDir());
 		// the existing copy does not run: treated like a first install, highest qualifying wins
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
@@ -483,7 +479,6 @@ describe("broker node copy", () => {
 
 	it("removes the temp copy when anything fails, and rethrows", async () => {
 		world(["/bad/node"]);
-		f.lstatSync.mockReturnValue(rootDir());
 		// the copied binary does not run
 		await expect(
 			sys.ensureBrokerNodeLink(
