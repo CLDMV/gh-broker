@@ -56,6 +56,7 @@ vi.mock("node:fs", () => {
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { downloadLatestLts, nodeSourceDeps, realDeps } from "../src/cli/real-deps.ts";
+import { NODE_LINK_DIR } from "../src/cli/system.ts";
 import { sha256Hex } from "../src/cli/node-dist.ts";
 
 const f = vi.mocked(fs) as any;
@@ -221,7 +222,7 @@ describe("downloadLatestLts", () => {
 
 	beforeEach(() => {
 		f.readFileSync.mockImplementation((p: string) => (String(p).includes("bin/node") ? member : "{}"));
-		f.mkdtempSync.mockReturnValue("/tmp/gh-broker-node-abc123");
+		f.mkdtempSync.mockReturnValue("/usr/local/lib/gh-broker/.dl-abc123");
 		h.spawnSync.mockImplementation((cmd: string, args: string[] = []) => {
 			const line = [cmd, ...args].join(" ");
 			if (line.startsWith("tar -xJOf")) return { status: 0, stdout: member, stderr: "" };
@@ -236,14 +237,20 @@ describe("downloadLatestLts", () => {
 		// S1: exactly one fetch of the tarball — the verified bytes are the bytes written
 		expect(fetched.filter((u) => u === tarballUrl)).toHaveLength(1);
 		expect(fetched.filter((u) => u.includes("node-v24.11.0-linux"))).toHaveLength(1);
-		// B1: a fresh 0700-root mkdtemp dir (never a predictable pid-named one), tar drops the
+		// B1: a fresh 0700-root mkdtemp dir INSIDE the vetted broker dir — never $TMPDIR (a sudo -E
+		// TMPDIR on a non-sticky path would let another user swap the extraction) — tar drops the
 		// archive's own ownership, and the extracted file is re-hashed against the member streamed
 		// from the same verified tarball
-		expect(f.mkdtempSync).toHaveBeenCalledWith(expect.stringMatching(/gh-broker-node-$/));
+		expect(f.mkdtempSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-`);
 		const tarArgs = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJf")![1] as string[];
 		expect(tarArgs).toContain("--no-same-owner");
-		expect(f.writeFileSync).toHaveBeenCalledWith(`/tmp/gh-broker-node-abc123/${name}`, tarball);
-		expect(f.copyFileSync).toHaveBeenCalledWith(`/tmp/gh-broker-node-abc123/${name}/bin/node`, "/usr/local/lib/gh-broker/node.tmp-1");
+		expect(f.writeFileSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-abc123/${name}`, tarball);
+		expect(f.copyFileSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-abc123/${name}/bin/node`, "/usr/local/lib/gh-broker/node.tmp-1");
+		// a stale .dl-* from a killed run is swept first, and the real node is never swept
+		expect(f.readdirSync).toHaveBeenCalledWith(NODE_LINK_DIR);
+		expect(f.rmSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-stale`, { recursive: true, force: true });
+		expect(f.rmSync.mock.calls.map((c: any[]) => String(c[0]))).not.toContain(NODE_LINK_DIR + "/node");
+		f.readdirSync.mockReturnValue([]); // the later rmSync assertions see the sweep done
 	});
 
 	it("fails a checksum mismatch without extracting anything", async () => {
@@ -280,7 +287,7 @@ describe("downloadLatestLts", () => {
 		timeoutSpy.mockRestore();
 	});
 
-	it("removes the work dir (tarball included) even when the extraction fails", async () => {
+	it("removes the .dl- work dir (tarball included) even when the extraction fails", async () => {
 		stubFetch();
 		h.spawnSync.mockImplementation((cmd: string, args: string[] = []) => {
 			const line = [cmd, ...args].join(" ");
@@ -289,7 +296,7 @@ describe("downloadLatestLts", () => {
 			return { status: 0, stdout: "", stderr: "" };
 		});
 		await expect(downloadLatestLts("/d/node")).rejects.toThrow(/tar/);
-		expect(f.rmSync).toHaveBeenCalledWith("/tmp/gh-broker-node-abc123", { recursive: true, force: true });
+		expect(f.rmSync).toHaveBeenCalledWith("/usr/local/lib/gh-broker/.dl-abc123", { recursive: true, force: true });
 	});
 });
 

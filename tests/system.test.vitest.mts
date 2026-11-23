@@ -295,17 +295,25 @@ describe("broker node copy", () => {
 	 * other lstat is a root:root 0755 directory (the ancestors), realpath is the identity, and the
 	 * node dir's own stat can be overridden per test.
 	 */
+	const nodeFile = () => ({ uid: 0, gid: 0, mode: 0o100755, isFile: () => true, isDirectory: () => false });
 	const world = (paths: string[], dirStat: unknown = rootDir()): void => {
 		f.existsSync.mockImplementation((p: string) => paths.includes(p));
 		f.realpathSync.mockImplementation((p: string) => p);
 		f.lstatSync.mockImplementation((p: string) => {
 			if (p === NODE_DIR) return dirStat;
-			if (paths.includes(p)) return { uid: 0, gid: 0, mode: 0o100755, isFile: () => true, isDirectory: () => false };
+			if (p === NODE_FILE) return nodeFile(); // the existing copy: vetted like a candidate
+			if (paths.includes(p)) return nodeFile();
 			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
 		});
 	};
 
-	beforeEach(() => (logs.length = 0));
+	beforeEach(() => {
+		logs.length = 0;
+		f.readSync.mockImplementation((_fd: number, buf: Buffer) => {
+			Buffer.from([0x7f, 0x45, 0x4c, 0x46]).copy(buf); // every candidate is an ELF binary unless a test says otherwise
+			return 4;
+		});
+	});
 
 	it("creates a missing directory root:root 0755 and copies the chosen node atomically", async () => {
 		world(["/opt/node/bin/node"]);
@@ -627,14 +635,23 @@ describe("broker node copy", () => {
 			if (p === "/good/node") return { uid: 0, gid: 0, mode: 0o100755, isFile: () => true, isDirectory: () => false };
 			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
 		});
+		const ran: string[] = [];
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
 			nodeDeps(
 				{ "/good/node": "v22.12.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v22.12.0" },
-				{ pathDirs: () => ["/opt/node/bin", "/good"] }
+				{
+					pathDirs: () => ["/opt/node/bin", "/good"],
+					version: async (bin: string) => {
+						ran.push(bin);
+						if (bin === "/good/node" || bin === `${NODE_DIR}/node.tmp-${process.pid}`) return "v22.12.0";
+						throw new Error(`${bin} --version failed`);
+					}
+				}
 			)
 		);
 		expect(logs).toContain("broker node: skipping /opt/node/bin/node: sits under /opt/node, which is group/world writable");
+		expect(ran).not.toContain("/opt/node/bin/node"); // never executed
 		expect(logs.at(-1)).toBe("broker node: v22.12.0 from /good/node");
 	});
 
@@ -649,14 +666,23 @@ describe("broker node copy", () => {
 			if (p === "/good/node") return { uid: 0, gid: 0, mode: 0o100755, isFile: () => true, isDirectory: () => false };
 			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
 		});
+		const ran: string[] = [];
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
 			nodeDeps(
 				{ "/good/node": "v22.12.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v22.12.0" },
-				{ pathDirs: () => ["/usr/local/bin", "/good"] }
+				{
+					pathDirs: () => ["/usr/local/bin", "/good"],
+					version: async (bin: string) => {
+						ran.push(bin);
+						if (bin === "/good/node" || bin === `${NODE_DIR}/node.tmp-${process.pid}`) return "v22.12.0";
+						throw new Error(`${bin} --version failed`);
+					}
+				}
 			)
 		);
 		expect(logs).toContain("broker node: skipping /usr/local/bin/node: sits under /home/user, owned by uid 1000");
+		expect(ran).not.toContain("/usr/local/bin/node"); // never executed, in either name
 		expect(logs.at(-1)).toBe("broker node: v22.12.0 from /good/node");
 	});
 
@@ -758,6 +784,55 @@ describe("broker node copy", () => {
 		expect(ran).not.toContain("/link/node");
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/real/node"); // and what was copied
 		expect(logs.at(-1)).toBe("broker node: v24.11.0 from /link/node"); // the log keeps the human path
+	});
+
+	it("replaces an existing copy that is not a root-owned regular binary, without running it", async () => {
+		world(["/new/node"]);
+		// NODE_PATH is a symlink (isFile false): the ownership vet must refuse it BEFORE its
+		// --version runs — otherwise the update path would keep whatever the symlink points at
+		f.lstatSync.mockImplementation((p: string) => {
+			if (p === NODE_DIR) return rootDir();
+			if (p === NODE_FILE) return { uid: 0, gid: 0, mode: 0o120777, isFile: () => false, isDirectory: () => false };
+			if (p === "/new/node") return nodeFile();
+			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
+		});
+		const ran: string[] = [];
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps(
+				{ [NODE_FILE]: "v24.11.0", "/new/node": "v26.1.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v26.1.0" },
+				{
+					pathDirs: () => ["/new"],
+					version: async (bin: string) => {
+						ran.push(bin);
+						if (bin === NODE_FILE) return "v24.11.0"; // would keep the old copy if it were ever run
+						if (bin === "/new/node" || bin === `${NODE_DIR}/node.tmp-${process.pid}`) return "v26.1.0";
+						throw new Error(`${bin} --version failed`);
+					}
+				}
+			)
+		);
+		expect(ran).not.toContain(NODE_FILE); // never executed
+		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/new/node"); // replaced via the first-install branch
+	});
+
+	it("skips a root-owned shell wrapper: only an ELF binary is a candidate", async () => {
+		world(["/wrap/node", "/good/node"]);
+		f.lstatSync.mockImplementation((p: string) => {
+			if (p === NODE_DIR) return rootDir();
+			if (p === "/wrap/node" || p === "/good/node") return nodeFile();
+			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
+		});
+		f.readSync.mockImplementation((_fd: number, buf: Buffer) => {
+			Buffer.from("#!/b").copy(buf); // a shell wrapper, not an ELF binary
+			return 4;
+		});
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps({ "/good/node": "v22.12.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v22.12.0" }, { pathDirs: () => ["/wrap", "/good"] })
+		);
+		expect(logs).toContain("broker node: skipping /wrap/node: is not an ELF binary");
+		expect(logs.at(-1)).toBe("broker node: v22.12.0 from /good/node");
 	});
 
 	it("nodeFloorMin takes the minimum semver literal out of an engines range", () => {

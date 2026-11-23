@@ -25,13 +25,16 @@ import {
 	rmSync,
 	renameSync,
 	realpathSync,
-	copyFileSync
+	copyFileSync,
+	openSync,
+	readSync,
+	closeSync
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { NODE_PATH } from "./agents.ts";
 
-/** The directory the broker's node link (NODE_PATH) lives in: root:root 0755, never service-user-owned. */
-const NODE_LINK_DIR = dirname(NODE_PATH);
+/** The directory the broker's node (NODE_PATH) lives in: root:root 0755, never service-user-owned. */
+export const NODE_LINK_DIR = dirname(NODE_PATH);
 
 /** spawnSync wrapper: throws on non-zero unless opts.allowFail. Returns the result. */
 /** Options for {@link run}: any spawnSync option, plus `allowFail`. */
@@ -239,6 +242,16 @@ const vetNodePath = (bin: string): string => {
 	if (!st.isFile()) throw new Error("not a regular file");
 	if (st.uid !== 0) throw new Error(`owned by uid ${st.uid}, not root`);
 	if ((st.mode & 0o022) !== 0) throw new Error("is group/world writable");
+	// and it must actually be an ELF binary: a root-owned shell wrapper could exec an unvetted
+	// node from anywhere
+	const fd = openSync(real, "r");
+	try {
+		const magic = Buffer.alloc(4);
+		readSync(fd, magic, 0, 4, 0);
+		if (!magic.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) throw new Error("is not an ELF binary");
+	} finally {
+		closeSync(fd);
+	}
 	for (let dir = dirname(real); ; dir = dirname(dir)) {
 		const d = lstatSync(dir);
 		if (d.uid !== 0) throw new Error(`sits under ${dir}, owned by uid ${d.uid}`);
@@ -311,12 +324,8 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 	/**
 	 * Put a working node binary at NODE_PATH: write/copy to a temp file, prove it runs, rename it
 	 * over. `from` returns the one-line verdict's tail (the source). The copy must report exactly
-	 * `expected.version` when given (a swap between vetting and copying is refused), must be an
-	 * even (LTS) major at or above the floor, and — on the candidate paths, where the copy's
-	 * provenance is known — must not be below the running copy (`expected.existing`): a running,
-	 * usable copy is never downgraded, whatever slipped between the vet and the copy. The download
-	 * path passes no existing: the running copy there is provably unusable (a usable one is kept
-	 * or replaced by a candidate before download is ever reached).
+	 * `expected.version` when given (a swap between vetting and copying is refused) and must be an
+	 * even (LTS) major at or above the floor.
 	 */
 	const install = async (from: (dest: string) => Promise<string>, expected: { version?: string } = {}): Promise<void> => {
 		const temp = `${NODE_LINK_DIR}/node.tmp-${process.pid}`;
@@ -341,9 +350,12 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 	// means a later run that only ever moves forward.
 	let existing: string | undefined;
 	try {
+		// the same ownership rules as a candidate, before this binary is run too
+		const st = lstatSync(NODE_PATH);
+		if (!st.isFile() || st.uid !== 0 || (st.mode & 0o022) !== 0) throw new Error("not a root-owned regular binary");
 		existing = normalizeVersion(await deps.version(NODE_PATH));
 	} catch {
-		existing = undefined;
+		existing = undefined; // missing, broken, unrunnable, or not root's: replace it
 	}
 
 	// Candidates, in order: every node on PATH (all entries), the system nvm roots, the node

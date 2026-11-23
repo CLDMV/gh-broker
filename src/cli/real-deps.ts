@@ -20,13 +20,13 @@
  */
 import { readFileSync, existsSync, readdirSync, rmSync, renameSync, mkdtempSync, writeFileSync, copyFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { hostname, tmpdir, userInfo as osUserInfo } from "node:os";
+import { hostname, userInfo as osUserInfo } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connect as netConnect } from "node:net";
 import { CLI_PATH, parseGroups, parsePasswd } from "./agents.ts";
 import type { ConnectDeps } from "./connect.ts";
-import { nodeFloorMin, type NodeSourceDeps } from "./system.ts";
+import { nodeFloorMin, NODE_LINK_DIR, type NodeSourceDeps } from "./system.ts";
 import { distTarballName, expectedSha, latestLts, sha256Hex, verifyExtracted, verifyTarball } from "./node-dist.ts";
 import { SEMVER } from "./upgrade.ts";
 import { stateStore, writeFileAtomic, storeSeed } from "./otp.ts";
@@ -139,7 +139,16 @@ export async function downloadLatestLts(dest: string): Promise<string> {
 	const expected = expectedSha(await fetchText(`${base}/SHASUMS256.txt`), name);
 	const buf = await fetchBuffer(tarball, 300_000); // ~30MB: a short timeout would cut real downloads off
 	verifyTarball(buf, expected, name);
-	const work = mkdtempSync(join(tmpdir(), "gh-broker-node-")); // 0700, owned by root (the runner)
+	// The work dir lives in the broker's own root-only, vetted directory — NEVER $TMPDIR: with
+	// `sudo -E` a TMPDIR on a non-sticky, other-writable path would let another user rename the
+	// mkdtemp dir out from under root and plant a binary root then runs. Any stale .dl-* litter
+	// (a killed run) is swept first and can never be mistaken for the node (an exact name away).
+	try {
+		for (const e of readdirSync(NODE_LINK_DIR)) if (e.startsWith(".dl-")) rmSync(join(NODE_LINK_DIR, e), { recursive: true, force: true });
+	} catch {
+		// the dir may not exist yet on a first install; the mkdtemp below creates it
+	}
+	const work = mkdtempSync(join(NODE_LINK_DIR, ".dl-")); // 0700, root-owned, inside the vetted dir
 	try {
 		const tarPath = join(work, name);
 		writeFileSync(tarPath, buf);
