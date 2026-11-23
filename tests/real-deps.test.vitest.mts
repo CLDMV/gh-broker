@@ -155,8 +155,8 @@ describe("runNewBinary", () => {
 		h.spawnSync.mockReturnValue(ok());
 		realDeps().runNewBinary(["install", "--claude-config", "repo:/srv/x"]);
 		const [cmd, args, opts] = h.spawnSync.mock.calls[0]!;
-		expect(cmd).toBe("/usr/local/bin/gh-broker");
-		expect(args).toEqual(["install", "--claude-config", "repo:/srv/x"]);
+		expect(cmd).toBe(process.execPath); // the maintained node, not whatever the PATH shebang finds
+		expect(args).toEqual(["/usr/local/bin/gh-broker", "install", "--claude-config", "repo:/srv/x"]);
 		expect(opts).toEqual({ stdio: "inherit" });
 	});
 

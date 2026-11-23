@@ -86,7 +86,7 @@ describe("configureMcp", () => {
 		);
 		expect(() => configureMcp("repo", config, d)).toThrow(/Get one with: sudo npm install -g/);
 		const { d: nodeMissing } = makeDeps({ binaryExists: (p: string) => p !== "/usr/local/bin/node" });
-		expect(() => configureMcp("repo", config, nodeMissing.d)).toThrow(/but \/usr\/local\/bin\/node is not there/);
+		expect(() => configureMcp("repo", config, nodeMissing)).toThrow(/but \/usr\/local\/bin\/node is not there/);
 	});
 
 	it("prints the entry for an unparseable file and for a missing user", () => {
