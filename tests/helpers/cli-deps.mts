@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { PassThrough } from "node:stream";
 import { emptyState } from "../../src/cli/otp.ts";
 
 export const NOW = Date.parse("2026-11-01T12:05:00.000Z");
@@ -57,6 +58,19 @@ export function makeDeps(over: Record<string, unknown> = {}, files: Record<strin
 		qr: async () => "QR",
 		sudoUser: () => "admin",
 		audit: vi.fn(),
+		// The connect bridge's effects: a stdin that is already at EOF (so a dispatched `connect`
+		// runs and returns at once), dials that fail, and logs that go to the same `out`.
+		connectDeps: {
+			stdin: (() => {
+				const s = new PassThrough();
+				s.end();
+				return s;
+			})(),
+			stdout: new PassThrough(),
+			log: (m: string) => out.push(m),
+			connect: vi.fn(() => Promise.reject(new Error("ENOENT"))),
+			sleep: vi.fn(async () => {})
+		},
 		...over
 	};
 	return { d, out, err, files, writes };

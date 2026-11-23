@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:23:30-08:00 (1795292610)
+ *	@Last modified time: 2026-11-22T19:38:52-08:00 (1795405132)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,7 +23,9 @@ import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseGroups, parsePasswd } from "./agents.ts";
+import { connect as netConnect } from "node:net";
+import { CLI_PATH, parseGroups, parsePasswd } from "./agents.ts";
+import type { ConnectDeps } from "./connect.ts";
 import { SEMVER } from "./upgrade.ts";
 import { stateStore, writeFileAtomic, storeSeed } from "./otp.ts";
 import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./mcp-config.ts";
@@ -69,6 +71,28 @@ const deployedVersion = (): string | undefined => {
 	}
 };
 
+/** The real effects for the `connect` stdio bridge (src/cli/connect.ts): the process's own stdio, a real dial and a real timer. */
+export function realConnectDeps(): ConnectDeps {
+	return {
+		stdin: process.stdin,
+		stdout: process.stdout,
+		log: (m) => console.error(m),
+		connect: (path) =>
+			new Promise((resolve, reject) => {
+				const sock = netConnect(path);
+				sock.once("connect", () => resolve(sock));
+				sock.once("error", reject);
+			}),
+		// Unref'd: the bridge holds the event loop open itself (its keep-alive interval), so a
+		// pending backoff or hold sleep must not keep the process alive after stdin closes.
+		sleep: (ms) =>
+			new Promise((resolve) => {
+				const t = setTimeout(resolve, ms);
+				t.unref();
+			})
+	};
+}
+
 /** The real effects for src/cli/cli.ts `runCli` (also used by the installer for the MCP config and smoke test). */
 export function realDeps(): CliDeps {
 	let store: ReturnType<typeof stateStore> | undefined;
@@ -76,6 +100,7 @@ export function realDeps(): CliDeps {
 	return {
 		log: (m) => console.log(m),
 		error: (m) => console.error(m),
+		connectDeps: realConnectDeps(),
 		now: () => Date.now(),
 		isRoot,
 		host: () => hostname(),
@@ -199,10 +224,10 @@ export function realDeps(): CliDeps {
 			// The NEW binary does the installing and the reconnecting: a child process, never this
 			// running CLI (which is still the old code until the process exits). stdio is
 			// inherited so its prompts work and its progress streams.
-			const r = spawnSync("/usr/local/bin/gh-broker", args, { stdio: "inherit" });
-			if (r.error) throw new Error(`/usr/local/bin/gh-broker ${args[0]}: ${r.error.message}`);
+			const r = spawnSync(CLI_PATH, args, { stdio: "inherit" });
+			if (r.error) throw new Error(`${CLI_PATH} ${args[0]}: ${r.error.message}`);
 			if (r.status !== 0)
-				throw Object.assign(new Error(`/usr/local/bin/gh-broker ${args.join(" ")} exited ${r.status ?? `on signal ${r.signal}`}`), {
+				throw Object.assign(new Error(`${CLI_PATH} ${args.join(" ")} exited ${r.status ?? `on signal ${r.signal}`}`), {
 					status: r.status
 				});
 		},

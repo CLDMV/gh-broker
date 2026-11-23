@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-22T19:38:52-08:00 (1795405132)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -78,6 +78,7 @@ import { hostname } from "node:os";
 import {
 	assertAgentName,
 	classifyInstall,
+	CLI_PATH,
 	migrationPlan,
 	NPM_INSTALL_COMMAND,
 	parseGroups,
@@ -232,9 +233,7 @@ async function runInstall(argv: string[]): Promise<void> {
 
 	step("prerequisites");
 	for (const cmd of ["systemctl", "useradd", "getent", "sudo"]) if (!has(cmd)) die(`missing required command: ${cmd}`);
-	for (const cmd of ["socat", "rsync"])
-		if (!has(cmd))
-			log(`  note: '${cmd}' not found — ${cmd === "socat" ? "the agent socket bridge needs it" : "will fall back to a plain copy"}`);
+	if (!has("rsync")) log(`  note: 'rsync' not found — will fall back to a plain copy`);
 
 	// --- agent users ---
 	// An agent is registered by the group gh-broker-agent-<user>. Upgrades keep the registered ones,
@@ -288,7 +287,7 @@ async function runInstall(argv: string[]): Promise<void> {
 		log(
 			`  warning: this package is installed under an nvm Node version folder; that copy breaks when Node is upgraded. Reinstall it globally: ${NPM_INSTALL_COMMAND}`
 		);
-	else if (where === "checkout" && !existsSync("/usr/local/bin/gh-broker"))
+	else if (where === "checkout" && !existsSync(CLI_PATH))
 		log(`  note: no global gh-broker command found. Get one with: ${NPM_INSTALL_COMMAND}`);
 
 	// --- the daemon bundle ---

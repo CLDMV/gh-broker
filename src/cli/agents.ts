@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-22T19:38:51-08:00 (1795405131)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -149,3 +149,11 @@ export function versionWarning(pkgVersion: string | undefined, deployedVersion: 
 }
 
 export const NPM_INSTALL_COMMAND = "sudo npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker@latest";
+
+/**
+ * The installed CLI binary: the MCP entry's bridge command (`gh-broker connect <socket>`) and
+ * `upgrade`'s reinstall target. NPM_INSTALL_COMMAND pins the global prefix to /usr/local, so the
+ * location is architectural — one constant, used by mcpEntry, the installer's check and the
+ * upgrade re-run.
+ */
+export const CLI_PATH = "/usr/local/bin/gh-broker";

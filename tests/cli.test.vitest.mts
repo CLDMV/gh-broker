@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { runCli, USAGE } from "../src/cli/cli.ts";
 import { RECONNECT_HELP } from "../src/cli/reconnect.ts";
 import { UPGRADE_HELP } from "../src/cli/upgrade.ts";
+import { CONNECT_HELP } from "../src/cli/connect.ts";
 import { makeDeps } from "./helpers/cli-deps.mjs";
 
 describe("runCli dispatch", () => {
@@ -15,6 +16,7 @@ describe("runCli dispatch", () => {
 		expect(USAGE).toContain("agent reconnect [<user>]");
 		expect(USAGE).toContain("upgrade [flags]");
 		expect(USAGE).toContain("otp unlock <user>|--all");
+		expect(USAGE).toContain("connect <socket>");
 	});
 
 	it("refuses an unknown command", async () => {
@@ -51,6 +53,39 @@ describe("runCli dispatch", () => {
 		// --help anywhere among the flags: "upgrade --force --help" is a help request too
 		expect(await runCli(["upgrade", "--force", "--help"], d)).toBe(0);
 		expect(out[3]).toBe(UPGRADE_HELP);
+	});
+
+	it("prints connect help without root and without a readable config", async () => {
+		const { d, out } = makeDeps({
+			isRoot: () => false,
+			readConfig: () => {
+				throw new Error("ENOENT");
+			}
+		});
+		expect(await runCli(["connect", "-h"], d)).toBe(0);
+		expect(out[0]).toBe(CONNECT_HELP);
+		expect(await runCli(["connect", "/run/x.sock", "--help"], d)).toBe(0);
+		expect(out[1]).toBe(CONNECT_HELP);
+	});
+
+	it("runs connect before the root gate and without a config", async () => {
+		const { d, out, err } = makeDeps({
+			isRoot: () => false,
+			readConfig: () => {
+				throw new Error("ENOENT");
+			}
+		});
+		// the fake connectDeps' stdin is already at EOF, so the bridge starts, fails its first
+		// dial and returns at once — as the agent user would, with no config and no root
+		expect(await runCli(["connect", "/run/gh-broker/agents/repo.sock"], d)).toBe(0);
+		expect(out.join("\n")).toContain("bridge: cannot connect to /run/gh-broker/agents/repo.sock");
+		expect(err).toEqual([]);
+	});
+
+	it("hands a connect usage error to the bridge", async () => {
+		const { d, out } = makeDeps();
+		expect(await runCli(["connect"], d)).toBe(2);
+		expect(out).toContain(CONNECT_HELP);
 	});
 
 	it("reports an unreadable config", async () => {
