@@ -460,6 +460,25 @@ describe("handshake replay after a restart", () => {
 		expect(b.client.lines.findIndex(isResponse(1))).toBeLessThan(b.client.lines.findIndex(isListChanged));
 	});
 
+	it("keeps pendingInitAnswer across a replay timeout, so the later answer is forwarded", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path, { holdMs: 40 });
+		await waitFor(() => broker.connections === 1);
+		broker.answerInitialize = false; // the client's initialize is never answered
+		b.stdin.write(`${initReq(1)}\n`);
+		await waitFor(() => broker.received.some((l) => l === initReq(1)));
+		broker.kick(); // the initialize is in flight at close: pendingInitAnswer is set
+		await waitFor(() => broker.received.filter((l) => l === initReq(1)).length >= 2); // connection 2's replay, unanswered
+		await waitFor(() => b.logs.some((l) => l === "bridge: no initialize response in 40ms; retrying"));
+		broker.answerInitialize = true; // a later connection answers: the flag must have survived the timeout
+		await b.client.waitNext(isResponse(1)); // FORWARDED, not swallowed
+		await b.client.waitNext(isListChanged);
+		expect(b.client.lines.filter(isResponse(1))).toHaveLength(1);
+		expect(b.client.lines.filter(isStale(1))).toHaveLength(0);
+		// the answer reaches the client before list_changed
+		expect(b.client.lines.findIndex(isResponse(1))).toBeLessThan(b.client.lines.findIndex(isListChanged));
+	});
+
 	it("exits 0 on stdin EOF during the replay wait", async () => {
 		const broker = await startBroker(nextSock());
 		const b = startBridge(broker.path);
