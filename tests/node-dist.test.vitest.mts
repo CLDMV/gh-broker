@@ -55,14 +55,14 @@ describe("verifyTarball / verifyExtracted", () => {
 
 	it("fails a checksum mismatch with both hashes and the unverified-binary verdict", () => {
 		expect(() => verifyTarball(bytes, "deadbeef", "node-v24.11.0-linux-x64.tar.xz")).toThrow(
-			/checksum mismatch for node-v24\.11\.0-linux-x64\.tar\.xz: expected deadbeef, got 5f1[a-f0-9]+ — not installing an unverified binary/
+			`checksum mismatch for node-v24.11.0-linux-x64.tar.xz: expected deadbeef, got ${good} — not installing an unverified binary`
 		);
 	});
 
 	it("fails an extracted file that does not match the tarball's own member", () => {
 		expect(() => verifyExtracted(good, good, "bin/node")).not.toThrow();
 		expect(() => verifyExtracted("swapped", good, "bin/node")).toThrow(
-			/the extracted bin\/node does not match the verified tarball \(swapped != 5f1[a-f0-9]+\) — not installing it/
+			`the extracted bin/node does not match the verified tarball (swapped != ${good}) — not installing it`
 		);
 	});
 });

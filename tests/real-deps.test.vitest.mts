@@ -23,6 +23,7 @@ vi.mock("node:fs", () => {
 		"mkdirSync",
 		"mkdtempSync",
 		"cpSync",
+		"copyFileSync",
 		"symlinkSync",
 		"realpathSync",
 		"lstatSync",
