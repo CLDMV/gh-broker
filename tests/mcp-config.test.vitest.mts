@@ -33,11 +33,11 @@ const SOCAT = {
 };
 
 describe("entry and key", () => {
-	it("builds the sg + connect entry", () => {
+	it("builds the sg + connect entry, on the maintained node", () => {
 		expect(entry("repo")).toEqual({
 			type: "stdio",
 			command: "sg",
-			args: ["gh-broker-agent-repo", "-c", "exec /usr/local/bin/gh-broker connect /run/gh-broker/agents/repo.sock"]
+			args: ["gh-broker-agent-repo", "-c", "exec /usr/local/bin/node /usr/local/bin/gh-broker connect /run/gh-broker/agents/repo.sock"]
 		});
 	});
 

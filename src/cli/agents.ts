@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T19:38:51-08:00 (1795405131)
+ *	@Last modified time: 2026-11-22T21:08:26-08:00 (1795410506)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -157,3 +157,12 @@ export const NPM_INSTALL_COMMAND = "sudo npm install -g --prefix /usr/local --ig
  * upgrade re-run.
  */
 export const CLI_PATH = "/usr/local/bin/gh-broker";
+
+/**
+ * The node the bridge runs on: the entry prefixes it because `gh-broker` starts with
+ * `#!/usr/bin/env node`, and an agent with its own nvm or an old distro node earlier on PATH
+ * would run it on the wrong node (the package needs >= 22). pointNodeSymlinks (src/cli/system.ts)
+ * maintains /usr/local/bin/node as the single indirection, so the path is architectural like
+ * CLI_PATH.
+ */
+export const NODE_PATH = "/usr/local/bin/node";

@@ -153,7 +153,7 @@ sudo gh-broker agent reconnect [<user>] [--wait 5m] # /mcp reconnect <key> in th
 "github": {
 	"type": "stdio",
 	"command": "sg",
-	"args": ["gh-broker-agent-<user>", "-c", "exec /usr/local/bin/gh-broker connect /run/gh-broker/agents/<user>.sock"]
+	"args": ["gh-broker-agent-<user>", "-c", "exec /usr/local/bin/node /usr/local/bin/gh-broker connect /run/gh-broker/agents/<user>.sock"]
 }
 ```
 

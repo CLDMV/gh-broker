@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T20:05:36-08:00 (1795406736)
+ *	@Last modified time: 2026-11-22T21:08:26-08:00 (1795410506)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -83,6 +83,9 @@ const isResponseTo = (m: Rpc | undefined, id: unknown): boolean =>
 /** Sent to the client after a reconnect, so it re-lists the tools the restarted broker may have changed. */
 const LIST_CHANGED = '{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}';
 
+/** The most client traffic held while the socket is down (a safety valve; a single line over it is held alone). */
+const HELD_MAX_BYTES = 1024 * 1024;
+
 /**
  * Run the bridge for one `connect` invocation: `argv` is everything after `connect`.
  * @returns the exit code — 0 once the client's stdin closes, 2 for a usage error. It only
@@ -106,9 +109,16 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 	let everConnected = false;
 	let clientBuf = "";
 	let serverBuf = "";
+	/** How much of each partial-line buffer has already been searched for a newline, so a large line is not rescanned on every chunk. */
+	let clientScan = 0;
+	let serverScan = 0;
+	/** Whether the current connection has produced a server line: only then does it reset the backoff. */
+	let sawLine = false;
 	/** The client's first initialize request line, and the notifications/initialized line after it. */
 	let initLine: string | null = null;
 	let initializedLine: string | null = null;
+	/** Set when a disconnect left the client's initialize unanswered: the next replay forwards its answer instead of swallowing it. */
+	let pendingInitAnswer = false;
 	/** A replay in progress: waiting for the new socket's response to the initialize id. */
 	let replay: { id: unknown; promise: Promise<string | null>; resolve: (line: string | null) => void } | null = null;
 	/** Server lines that arrived while a replay was pending; forwarded after it completes. */
@@ -117,6 +127,8 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 	const inFlight = new Set<unknown>();
 	/** Client lines that arrived while the socket was down; forwarded on the next connection. */
 	let held: Array<{ line: string; id?: unknown }> = [];
+	/** Total bytes currently held (see HELD_MAX_BYTES). */
+	let heldBytes = 0;
 	// Holds the event loop open while the bridge runs (a backoff sleep doesn't: see realConnectDeps);
 	// cleared at EOF so the process exits as soon as the client is done.
 	const keepAlive = setInterval(() => {}, 1 << 30);
@@ -133,12 +145,18 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 		writeToClient(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "gh-broker restarted; retry" } }));
 	};
 
+	/** Remove one held entry, keeping the byte count right. */
+	const dropHeld = (entry: { line: string; id?: unknown }): void => {
+		held = held.filter((h) => h !== entry);
+		heldBytes -= entry.line.length;
+	};
+
 	/** A request held while down gets -32000 once it has waited holdMs, connected or not. */
 	const holdExpires = (entry: { line: string; id?: unknown }): void => {
 		void (async () => {
 			await d.sleep(holdMs);
 			if (eof || !held.includes(entry)) return;
-			held = held.filter((h) => h !== entry);
+			dropHeld(entry);
 			staleError(entry.id);
 		})();
 	};
@@ -150,7 +168,17 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 			entry.id = parsed.id;
 			holdExpires(entry);
 		}
+		// A ceiling keeps a client that queues megabytes while the broker is down from pinning them
+		// in memory forever: the oldest held line is dropped (a request gets its -32000 at once, so
+		// nothing hangs waiting for it).
+		while (held.length > 0 && heldBytes + line.length > HELD_MAX_BYTES) {
+			const oldest = held[0]!;
+			dropHeld(oldest);
+			d.log(`bridge: held queue over the ${HELD_MAX_BYTES}-byte ceiling; dropped its oldest line`);
+			if (oldest.id !== undefined) staleError(oldest.id);
+		}
 		held.push(entry);
+		heldBytes += line.length;
 	};
 
 	/** One line from the client: capture the handshake, forward it, or hold it. */
@@ -191,10 +219,16 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 	const flushHeld = (): void => {
 		const q = held;
 		held = [];
+		heldBytes = 0;
 		for (const h of q) deliverClientLine(h.line);
 	};
 
-	/** Wait out the replay, swallow the duplicate initialize response, then resume both directions. */
+	/**
+	 * Wait out the replay (at most holdMs), then resume both directions. The replayed initialize's
+	 * response is swallowed — unless the client's own initialize never got its answer because the
+	 * socket closed first (pendingInitAnswer): then the replay's answer IS the client's answer and
+	 * is forwarded instead. Either way list_changed still goes: the tools may have changed.
+	 */
 	const startReplay = (sock: Socket): void => {
 		if (initLine === null) return;
 		sock.write(`${initLine}\n`);
@@ -204,11 +238,28 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 		const w = { id: tryParse(initLine)?.id, promise, resolve };
 		replay = w;
 		void (async () => {
-			const responseLine = await promise;
+			// The server may never answer (a half-started daemon): the wait times out, one line is
+			// logged and the socket is dropped, so the close handler re-dials and the next
+			// connection replays again.
+			const timedOut = { timedOut: true as const };
+			const outcome: { line: string | null } | typeof timedOut = await Promise.race([
+				promise.then((line: string | null) => ({ line })),
+				d.sleep(holdMs).then((): typeof timedOut => timedOut)
+			]);
 			if (replay === w) replay = null;
+			if ("timedOut" in outcome) {
+				d.log(`bridge: no initialize response in ${holdMs}ms; retrying`);
+				sock.destroy();
+				return;
+			}
+			const responseLine = outcome.line;
 			// null: the socket closed mid-replay — the close handler has taken over and the next
 			// connection replays again; no list_changed, nothing forwarded.
 			if (responseLine === null) return;
+			if (pendingInitAnswer) {
+				pendingInitAnswer = false;
+				deliverServerLine(responseLine);
+			}
 			writeToClient(LIST_CHANGED);
 			flushHeld();
 			const queued = replayQueue;
@@ -220,20 +271,37 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 	const onData = (chunk: string): void => {
 		// the socket is setEncoding("utf8") in onConnected, so a multi-byte character split across
 		// reads decodes correctly here and the line stays byte-identical for the client
+		// A connection that says nothing doesn't prove the broker is back: the backoff resets on the
+		// connection's first line, so an accept-and-close loop keeps backing off instead of
+		// re-dialing every startMs forever.
+		if (!sawLine) {
+			sawLine = true;
+			backoff = startMs;
+		}
 		serverBuf += chunk;
-		for (let nl = serverBuf.indexOf("\n"); nl >= 0; nl = serverBuf.indexOf("\n")) {
+		for (let nl = serverBuf.indexOf("\n", serverScan); nl >= 0; nl = serverBuf.indexOf("\n", serverScan)) {
 			const line = serverBuf.slice(0, nl);
 			serverBuf = serverBuf.slice(nl + 1);
+			serverScan = 0; // what remains is the fresh partial tail
 			onSocketLine(line);
 		}
+		serverScan = serverBuf.length;
 	};
 
 	const onSocketClosed = (): void => {
 		socket = null;
 		serverBuf = "";
+		serverScan = 0;
 		replayQueue = [];
 		if (replay !== null) replay.resolve(null);
 		if (eof) return; // stdin already ended: nothing to tell the client, no retry
+		// If the client's initialize is still unanswered, the next replay will carry its answer:
+		// keep the client waiting for that one instead of failing it, and error everything else.
+		const initId = initLine === null ? undefined : tryParse(initLine)?.id;
+		if (initId !== undefined && inFlight.has(initId)) {
+			pendingInitAnswer = true;
+			inFlight.delete(initId);
+		}
 		for (const id of inFlight) staleError(id);
 		inFlight.clear();
 		d.log(`bridge: socket closed; retrying in ${backoff}ms`);
@@ -247,7 +315,8 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 		}
 		socket = sock;
 		serverBuf = "";
-		backoff = startMs; // a fresh connection restarts the backoff
+		serverScan = 0;
+		sawLine = false; // the backoff resets on the connection's first line, not on the accept
 		sock.setEncoding("utf8"); // chunks arrive as strings, split multi-byte characters included
 		sock.on("data", onData);
 		sock.on("close", onSocketClosed);
@@ -292,25 +361,32 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 		eof = true;
 		if (clientBuf !== "") deliverClientLine(clientBuf); // a partial last line still counts
 		clientBuf = "";
+		clientScan = 0;
 		const sock = socket;
 		socket = null;
 		if (sock !== null) sock.destroy();
 		clearInterval(keepAlive);
 		inFlight.clear();
 		held = [];
+		heldBytes = 0;
 		resolveDone(0);
 	};
 
 	d.stdin.setEncoding("utf8");
 	d.stdin.on("data", (chunk) => {
 		clientBuf += typeof chunk === "string" ? chunk : String(chunk);
-		for (let nl = clientBuf.indexOf("\n"); nl >= 0; nl = clientBuf.indexOf("\n")) {
+		for (let nl = clientBuf.indexOf("\n", clientScan); nl >= 0; nl = clientBuf.indexOf("\n", clientScan)) {
 			const line = clientBuf.slice(0, nl);
 			clientBuf = clientBuf.slice(nl + 1);
+			clientScan = 0; // what remains is the fresh partial tail
 			deliverClientLine(line);
 		}
+		clientScan = clientBuf.length;
 	});
 	d.stdin.on("end", onEof);
+	// A dead stdin (EIO, ECONNRESET) ends the bridge the same way a closed one does; without this
+	// the error would crash the process with a stack trace.
+	d.stdin.on("error", onEof);
 	// The client vanishing without an EOF must not take the bridge down with an unhandled error;
 	// its stdin closing ends the bridge normally.
 	d.stdout.on("error", () => {});

@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T19:38:52-08:00 (1795405132)
+ *	@Last modified time: 2026-11-22T21:08:26-08:00 (1795410506)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -79,6 +79,7 @@ import {
 	assertAgentName,
 	classifyInstall,
 	CLI_PATH,
+	NODE_PATH,
 	migrationPlan,
 	NPM_INSTALL_COMMAND,
 	parseGroups,
@@ -519,6 +520,11 @@ async function runInstall(argv: string[]): Promise<void> {
 
 	// --- each agent's MCP config, then a smoke test over its own socket ---
 	step("agents");
+	// The entries point at the global CLI on the maintained node; writing them without either
+	// binary would leave every agent a config that can't start its bridge. (--no-mcp-config
+	// writes nothing, so it needs neither.)
+	if (!opts.noMcpConfig && (!existsSync(CLI_PATH) || !existsSync(NODE_PATH)))
+		die(`the MCP entries would run ${NODE_PATH} ${CLI_PATH} connect, but the binary is not there. Get one with: ${NPM_INSTALL_COMMAND}`);
 	const dep = realDeps();
 	for (const name of agents) configureMcp(name, merged, dep, { noMcp: opts.noMcpConfig });
 	let smokeFailed = false;

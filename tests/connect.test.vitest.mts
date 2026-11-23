@@ -36,7 +36,6 @@ const isListChanged = (l: string): boolean => l.includes("notifications/tools/li
 /** A fake broker: line-framed JSON-RPC over a real Unix socket. */
 class FakeBroker {
 	private server: Server | null = null;
-	private buf = "";
 	private sockets = new Set<Socket>();
 	readonly received: string[] = [];
 	connections = 0;
@@ -49,16 +48,22 @@ class FakeBroker {
 
 	constructor(readonly path: string) {}
 
+	/** Connections the bridge currently holds open. */
+	activeSockets(): number {
+		return this.sockets.size;
+	}
+
 	async start(): Promise<void> {
 		const server = createServer((sock) => {
 			this.connections++;
 			this.sockets.add(sock);
 			sock.setEncoding("utf8");
+			let buf = ""; // per connection: a partial line from a dropped one must not join the next
 			sock.on("data", (chunk: string) => {
-				this.buf += chunk;
-				for (let nl = this.buf.indexOf("\n"); nl >= 0; nl = this.buf.indexOf("\n")) {
-					const line = this.buf.slice(0, nl);
-					this.buf = this.buf.slice(nl + 1);
+				buf += chunk;
+				for (let nl = buf.indexOf("\n"); nl >= 0; nl = buf.indexOf("\n")) {
+					const line = buf.slice(0, nl);
+					buf = buf.slice(nl + 1);
 					this.onLine(line, sock);
 				}
 			});
@@ -286,6 +291,22 @@ describe("pipe", () => {
 		expect(await b.client.waitNext((l) => l === line)).toBe(line);
 	});
 
+	it("moves a multi-megabyte line in both directions without rescanning the buffer", async () => {
+		const broker = await startBroker(nextSock());
+		broker.echo = false;
+		const b = startBridge(broker.path);
+		await waitFor(() => broker.connections === 1);
+		const line = JSON.stringify({ jsonrpc: "2.0", id: 9, method: "x", params: { blob: "a".repeat(2_000_000) } });
+		// client → server, arriving in many chunks: identical line out the other side
+		for (let i = 0; i < line.length; i += 20_000) b.stdin.write(line.slice(i, i + 20_000));
+		b.stdin.write("\n");
+		await waitFor(() => broker.received[0] === line);
+		// server → client, also in many chunks
+		const bytes = Buffer.from(`${line}\n`, "utf8");
+		for (let i = 0; i < bytes.length; i += 8_000) broker.writeRaw(bytes.subarray(i, i + 8_000));
+		expect(await b.client.waitNext((l) => l === line)).toBe(line);
+	});
+
 	it("flushes a partial last line on stdin EOF and exits 0 with the socket closed", async () => {
 		const broker = await startBroker(nextSock());
 		const b = startBridge(broker.path);
@@ -294,7 +315,7 @@ describe("pipe", () => {
 		b.stdin.end();
 		await waitFor(() => broker.received[0] === '{"jsonrpc":"2.0","id":5,"method":"to');
 		expect(await b.done).toBe(0);
-		await waitFor(() => broker.sockets.size === 0);
+		await waitFor(() => broker.activeSockets() === 0);
 	});
 });
 
@@ -405,6 +426,52 @@ describe("handshake replay after a restart", () => {
 		expect(broker.received.filter((l) => l === initNotify())).toHaveLength(0); // nothing to replay for it
 		expect(b.client.lines.filter(isResponse(1))).toHaveLength(1); // the replayed answer stays swallowed
 	});
+
+	it("times the replay wait out, drops the socket, and completes on a later connection", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path, { holdMs: 40 });
+		await waitFor(() => broker.connections === 1);
+		b.stdin.write(`${initReq(1)}\n${initNotify()}\n`);
+		await b.client.waitNext(isResponse(1));
+		broker.answerInitialize = false; // the replayed initialize is accepted but never answered
+		broker.kick();
+		await waitFor(() => broker.received.filter((l) => l === initReq(1)).length >= 2);
+		await waitFor(() => b.logs.some((l) => l === "bridge: no initialize response in 40ms; retrying"));
+		broker.answerInitialize = true; // the next connection answers: the flow completes
+		await waitFor(() => broker.connections >= 3);
+		await b.client.waitNext(isListChanged);
+		expect(b.client.lines.filter(isResponse(1))).toHaveLength(1); // still exactly the first answer
+	});
+
+	it("delivers the replayed initialize's answer when the client's own never got one", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path);
+		await waitFor(() => broker.connections === 1);
+		broker.answerInitialize = false; // the client's initialize stays unanswered
+		b.stdin.write(`${initReq(1)}\n`);
+		await waitFor(() => broker.received.some((l) => l === initReq(1)));
+		broker.kick(); // the initialize is in flight: the client must not get -32000 for it
+		broker.answerInitialize = true; // the next connection's replay carries the answer
+		await b.client.waitNext(isResponse(1)); // the replay's answer IS the client's answer
+		await b.client.waitNext(isListChanged);
+		expect(b.client.lines.filter(isStale(1))).toHaveLength(0);
+		expect(broker.received.filter((l) => l === initReq(1))).toHaveLength(2);
+		// the answer reaches the client before list_changed
+		expect(b.client.lines.findIndex(isResponse(1))).toBeLessThan(b.client.lines.findIndex(isListChanged));
+	});
+
+	it("exits 0 on stdin EOF during the replay wait", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path);
+		await waitFor(() => broker.connections === 1);
+		b.stdin.write(`${initReq(1)}\n${initNotify()}\n`);
+		await b.client.waitNext(isResponse(1));
+		broker.answerInitialize = false; // the replay wait stays open
+		broker.kick();
+		await waitFor(() => broker.received.filter((l) => l === initReq(1)).length >= 2);
+		b.stdin.end();
+		expect(await b.done).toBe(0); // no hang waiting for the answer
+	});
 });
 
 describe("requests across a disconnect", () => {
@@ -490,6 +557,27 @@ describe("requests across a disconnect", () => {
 		await realSleep(60); // past holdMs: the expiry must not write to the client after EOF
 		expect(b.client.lines).toEqual([]);
 	});
+
+	it("caps the held queue, dropping the oldest line when it overflows", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path, { backoffStartMs: 150, backoffMaxMs: 300 });
+		await waitFor(() => broker.connections === 1);
+		b.stdin.write(`${initReq(1)}\n`);
+		await b.client.waitNext(isResponse(1));
+		broker.kick();
+		await waitFor(() => b.logs.some((l) => l.startsWith("bridge: socket closed")));
+		const pad = (n: number) => JSON.stringify({ jsonrpc: "2.0", method: `n${n}`, params: { pad: "x".repeat(300_000) } });
+		for (const n of [1, 2, 3, 4]) b.stdin.write(`${pad(n)}\n`); // ~1.2 MB held: the ceiling drops the oldest
+		await waitFor(() => b.logs.some((l) => l.includes("held queue over the 1048576-byte ceiling")));
+		expect(b.logs.filter((l) => l.includes("held queue over"))).toHaveLength(1); // one line per drop
+		// reconnect: the survivors are forwarded, the dropped one is not, and the bridge still works
+		await b.client.waitNext(isListChanged);
+		await waitFor(() => broker.received.some((l) => l.includes('"n4"')));
+		expect(broker.received.some((l) => l.includes('"n1"'))).toBe(false);
+		for (const n of [2, 3]) expect(broker.received.some((l) => l.includes(`"n${n}"`))).toBe(true);
+		b.stdin.write(`${req(2, "tools/list")}\n`);
+		await b.client.waitNext((l) => l === req(2, "tools/list")); // still functioning
+	});
 });
 
 describe("dialing", () => {
@@ -504,17 +592,37 @@ describe("dialing", () => {
 		await b.client.waitNext(isResponse(1));
 	});
 
-	it("doubles the backoff, caps it, and resets it after a successful connection", async () => {
+	it("doubles the backoff, caps it, and resets it once a connection has spoken", async () => {
 		const path = nextSock();
 		const b = startBridge(path, { backoffStartMs: 5, backoffMaxMs: 12 });
 		await waitFor(() => b.sleeps.length >= 3);
 		expect(b.sleeps.slice(0, 3)).toEqual([5, 10, 12]);
 		const broker = await startBroker(path);
 		await waitFor(() => broker.connections === 1);
+		// a connection that says nothing does not reset the backoff: kick it untouched and the
+		// retry continues from where the failures left off
+		const untouched = b.sleeps.length;
+		broker.kick();
+		await waitFor(() => b.sleeps.length > untouched);
+		expect(b.sleeps[untouched]).toBe(12);
+		// once the connection has produced a server line, the next restart starts over
+		b.stdin.write(`${req(1)}\n`); // its echo is the connection's first server line
+		await b.client.waitNext((l) => l === req(1));
 		const before = b.sleeps.length;
 		broker.kick();
 		await waitFor(() => b.sleeps.length > before);
 		expect(b.sleeps[before]).toBe(5); // the restart's first retry is back at the start
+	});
+
+	it("keeps backing off when the broker accepts and closes without saying anything", async () => {
+		const path = nextSock();
+		const broker = new FakeBroker(path);
+		broker.onConnection = (sock) => sock.destroy(); // accept-and-immediate-close, forever
+		await broker.start();
+		brokers.push(broker);
+		const b = startBridge(path, { backoffStartMs: 5, backoffMaxMs: 20 });
+		await waitFor(() => b.sleeps.length >= 3);
+		expect(b.sleeps.slice(0, 3)).toEqual([5, 10, 20]); // grows to the cap, never stuck at the start
 	});
 
 	it("ignores a dial that resolves after stdin EOF, and exits anyway", async () => {
@@ -533,11 +641,11 @@ describe("dialing", () => {
 		});
 		await realSleep(30);
 		expect(b.logs.some((l) => l.startsWith("bridge: connected"))).toBe(false);
-		await waitFor(() => broker.sockets.size === 0); // the late socket was destroyed, not adopted
+		await waitFor(() => broker.activeSockets() === 0); // the late socket was destroyed, not adopted
 	});
 });
 
-describe("stdout", () => {
+describe("client stream edges", () => {
 	it("keeps running when the client's stdout errors", async () => {
 		const broker = await startBroker(nextSock());
 		const b = startBridge(broker.path);
@@ -547,6 +655,15 @@ describe("stdout", () => {
 		await waitFor(() => broker.received.some((l) => l === initReq(1)));
 		b.stdin.end();
 		expect(await b.done).toBe(0);
+	});
+
+	it("treats a stdin error like an EOF and exits 0", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path);
+		await waitFor(() => broker.connections === 1);
+		b.stdin.emit("error", new Error("EIO"));
+		expect(await b.done).toBe(0);
+		await waitFor(() => broker.activeSockets() === 0);
 	});
 });
 

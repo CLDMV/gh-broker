@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T19:38:55-08:00 (1795405135)
+ *	@Last modified time: 2026-11-22T21:08:29-08:00 (1795410509)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -38,7 +38,7 @@ export interface ServerOptions {
  * (allowlist + OTP + owner/mode → PAT + forward/dispatch). The token never crosses to this side.
  */
 function handleConnection(socket: Socket, router: Router, catalog: Tool[], user: string): void {
-	const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
+	const server = new Server(SERVER_INFO, { capabilities: { tools: { listChanged: true } } });
 
 	server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: catalog }));
 	server.setRequestHandler(CallToolRequestSchema, async (req) => {
