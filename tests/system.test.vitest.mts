@@ -490,6 +490,15 @@ describe("broker node copy", () => {
 		expect(f.renameSync).not.toHaveBeenCalled();
 	});
 
+	it("passes a stat error other than ENOENT through instead of creating the directory", async () => {
+		f.realpathSync.mockReturnValue("/opt/node/bin/node");
+		f.lstatSync.mockImplementation(() => {
+			throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+		});
+		await expect(sys.ensureBrokerNodeLink("/opt/node/bin/node", nodeDeps({}))).rejects.toThrow("EACCES");
+		expect(f.mkdirSync).not.toHaveBeenCalled();
+	});
+
 	it("nodeFloorMin takes the minimum semver literal out of an engines range", () => {
 		expect(sys.nodeFloorMin(">=22.0.0")).toBe("22.0.0");
 		expect(sys.nodeFloorMin("^22.0.0")).toBe("22.0.0");
