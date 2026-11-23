@@ -304,7 +304,10 @@ describe("broker node copy", () => {
 		f.lstatSync.mockImplementation(() => {
 			throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
 		});
-		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({ "/opt/node/bin/node": "v24.11.0" }, { pathDirs: () => ["/opt/node"] }));
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps({ "/opt/node/bin/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" }, { pathDirs: () => ["/opt/node/bin"] })
+		);
 		expect(f.mkdirSync).toHaveBeenCalledWith(NODE_DIR, { recursive: true, mode: 0o755 });
 		expect(f.chmodSync).toHaveBeenCalledWith(NODE_DIR, 0o755);
 		expect(f.chownSync).toHaveBeenCalledWith(NODE_DIR, 0, 0);
@@ -339,7 +342,8 @@ describe("broker node copy", () => {
 					[`${nvm}/v21.7.3/bin/node`]: "v21.7.3", // odd major: ignored
 					[`${nvm}/v22.12.0/bin/node`]: "v22.12.0",
 					[`${nvm}/v24.11.0/bin/node`]: "v24.11.0",
-					"/installer/node": "v23.6.0" // odd major: ignored even though it runs
+					"/installer/node": "v23.6.0", // odd major: ignored even though it runs
+					[`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" // the copy is proven to run before the rename
 				},
 				{ pathDirs: () => ["/first", "/second"], nvmDirs: () => ["/usr/local/nvm"] }
 			)
@@ -353,7 +357,10 @@ describe("broker node copy", () => {
 		f.copyFileSync.mockClear();
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ "/second/node": "v22.12.0", "/gone/node": undefined as unknown as string }, { pathDirs: () => ["/gone", "/second"] })
+			nodeDeps(
+				{ "/second/node": "v22.12.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v22.12.0" },
+				{ pathDirs: () => ["/gone", "/second"] }
+			)
 		);
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/second/node");
 	});
@@ -391,7 +398,10 @@ describe("broker node copy", () => {
 		// same version, different build: replaced
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ NODE_FILE: "v24.11.0", "/same/node": "v24.11.0" }, { pathDirs: () => ["/same"], sha256: async () => "different" })
+			nodeDeps(
+				{ NODE_FILE: "v24.11.0", "/same/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" },
+				{ pathDirs: () => ["/same"], sha256: async () => "different" }
+			)
 		);
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/same/node");
 		expect(logs.at(-1)).toBe("broker node: v24.11.0 from /same/node");
@@ -401,7 +411,10 @@ describe("broker node copy", () => {
 		world(["/broken/node"]);
 		f.lstatSync.mockReturnValue(rootDir());
 		// the existing copy does not run: treated like a first install, highest qualifying wins
-		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({ "/broken/node": "v22.12.0" }, { pathDirs: () => ["/broken"] }));
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps({ "/broken/node": "v22.12.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v22.12.0" }, { pathDirs: () => ["/broken"] })
+		);
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/broken/node");
 		// nothing qualifies anywhere: the download fallback
 		f.copyFileSync.mockClear();
@@ -410,7 +423,10 @@ describe("broker node copy", () => {
 			source: "https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.xz"
 		}));
 		world([]); // nothing exists: no candidates at all
-		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({}, { download }));
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps({ [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" }, { download })
+		);
 		expect(download).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`);
 		expect(f.renameSync).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`, NODE_FILE);
 		expect(logs.at(-1)).toBe("broker node: v24.11.0 downloaded (nodejs.org dist, latest LTS)");
@@ -427,8 +443,10 @@ describe("broker node copy", () => {
 					{ "/bad/node": "v24.11.0" },
 					{
 						pathDirs: () => ["/bad"],
-						version: async () => {
-							throw new Error("ENOEXEC");
+						// every binary under the broker dir (the temp copy) fails to run; real ones run
+						version: async (bin: string) => {
+							if (bin.startsWith(NODE_DIR)) throw new Error("ENOEXEC");
+							return "v24.11.0";
 						}
 					}
 				)
