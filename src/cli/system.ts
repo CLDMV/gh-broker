@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T22:54:23-08:00 (1795416863)
+ *	@Last modified time: 2026-11-22T23:00:19-08:00 (1795417219)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,9 +23,9 @@ import {
 	writeFileSync,
 	cpSync,
 	rmSync,
-	symlinkSync,
 	renameSync,
-	realpathSync
+	realpathSync,
+	copyFileSync
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { NODE_PATH } from "./agents.ts";
@@ -181,18 +181,64 @@ export function removeCredsDropin(unitName = "gh-broker.service"): void {
 	}
 }
 
+/** The effects for {@link ensureBrokerNodeLink}: where to look for nodes and how to run, hash and download one. Every network/process effect is injected so tests never touch either. */
+export interface NodeSourceDeps {
+	/** The minimum node version the package needs, parsed from engines.node by the caller. */
+	floor: string;
+	/** PATH directories, in order — ALL of them, not just the first hit. */
+	pathDirs: () => string[];
+	/** nvm roots to look under for `versions/node` version directories (`vX/bin/node`; $NVM_DIR, /usr/local/nvm, root's ~/.nvm — never other users' homes). */
+	nvmDirs: () => string[];
+	/** List a directory's entries (the nvm `v*` version directories); [] when it can't be read. */
+	listVersions: (dir: string) => string[];
+	/** Run a node binary's `--version` (short timeout); rejects when the binary fails to run. */
+	version: (bin: string) => Promise<string>;
+	/** sha256 of a file. */
+	sha256: (path: string) => Promise<string>;
+	/** Download the latest LTS node into `dest` (verified against the release's SHASUMS256.txt) and report the version and source. */
+	download: (dest: string) => Promise<{ version: string; source: string }>;
+	log: (m: string) => void;
+}
+
+/** One semver literal out of an engines range (">=22.0.0", "^22.0.0" → "22.0.0"; the first literal is the minimum). */
+export function nodeFloorMin(range: string): string {
+	const m = /\d+\.\d+\.\d+/.exec(range);
+	if (!m) throw new Error(`cannot parse a node version out of "${range}"`);
+	return m[0]!;
+}
+
+/** `v22.12.0` (or with surrounding whitespace) → `22.12.0`, as `--version` prints it. */
+const normalizeVersion = (v: string): string => v.trim().replace(/^v/, "");
+
+const versionParts = (v: string): [number, number, number] => {
+	const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(v);
+	if (!m) throw new Error(`not a node version: "${v}"`);
+	return [Number(m[1]!), Number(m[2]!), Number(m[3]!)];
+};
+const compareVersions = (a: string, b: string): number => {
+	const [a1, a2, a3] = versionParts(a);
+	const [b1, b2, b3] = versionParts(b);
+	return a1 - b1 || a2 - b2 || a3 - b3;
+};
+/** Only even (LTS) majors count; an odd major is ignored even when it is the highest. */
+const isEvenMajor = (v: string): boolean => versionParts(v)[0]! % 2 === 0;
+
 /**
- * The broker's own node link (NODE_PATH, the one node every agent's bridge runs): ensure its
+ * The broker's own node (NODE_PATH, the one binary every agent's bridge runs): ensure its
  * directory is root:root 0755 — creating it when missing, refusing one root didn't create (its
  * contents may be someone else's, and the service user must never be able to swap the binary the
- * bridges run) — then point the link at the running node's real path, replacing it atomically so
- * a running bridge never sees it missing. No self-target check is needed: if the running node IS
- * an older link, realpath(process.execPath) resolves through it to the real binary, so the new
- * target can never be the link itself. Nothing under /usr/local/bin is touched: links earlier
- * installs managed there are left for whatever may rely on them.
+ * bridges run) — then put a root-owned COPY of a qualifying node there, replacing it atomically
+ * (write to a temp file, run its --version, rename over the final name) so a running bridge keeps
+ * the old inode while the new one lands. A copy, not a symlink: a link into nvm is only as safe
+ * as whoever owns the target and dangles when that version is removed. Candidates, in order: every
+ * `node` on PATH (all PATH entries), the system nvm roots, the node running the installer;
+ * download is the fallback. Only even (LTS) majors at or above the floor count, and a candidate's
+ * version is read by RUNNING it, never from its path. An existing working copy is replaced only by
+ * a strictly newer version (same version only when its sha256 differs) — never a downgrade — and
+ * the copy is skipped entirely when the version and sha256 both match. Nothing under
+ * /usr/local/bin is touched: binaries there are left for whatever may rely on them.
  */
-export function ensureBrokerNodeLink(nodeBin: string): void {
-	const real = realpathSync(nodeBin);
+export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps): Promise<void> {
 	let dir: { uid: number; gid: number; mode: number; isDirectory: () => boolean } | undefined;
 	try {
 		dir = lstatSync(NODE_LINK_DIR);
@@ -211,19 +257,78 @@ export function ensureBrokerNodeLink(nodeBin: string): void {
 			);
 		if (dir.uid !== 0 || dir.gid !== 0 || (mode & 0o022) !== 0)
 			throw new Error(
-				`${NODE_LINK_DIR} is owned by uid ${dir.uid}/gid ${dir.gid} with mode ${mode.toString(8)}; the broker's node link must live in a root:root 0755 directory (its contents may be someone else's). Fix it by hand: sudo chown root:root ${NODE_LINK_DIR} && sudo chmod 755 ${NODE_LINK_DIR}`
+				`${NODE_LINK_DIR} is owned by uid ${dir.uid}/gid ${dir.gid} with mode ${mode.toString(8)}; the broker's node must live in a root:root 0755 directory (its contents may be someone else's). Fix it by hand: sudo chown root:root ${NODE_LINK_DIR} && sudo chmod 755 ${NODE_LINK_DIR}`
 			);
 	}
-	// Replace the link atomically: a temp symlink in the same directory, renamed over the final
-	// name, the temp removed if anything fails.
-	const temp = `${NODE_LINK_DIR}/.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+
+	/** Put a working node binary at NODE_PATH: write/copy to a temp file, prove it runs, rename it over. */
+	const install = async (from: (dest: string) => Promise<void>, why: string): Promise<void> => {
+		const temp = `${NODE_LINK_DIR}/node.tmp-${process.pid}`;
+		try {
+			await from(temp);
+			chmodSync(temp, 0o755); // root:root 0755, like the directory
+			const v = normalizeVersion(await deps.version(temp)); // the copy must actually run
+			renameSync(temp, NODE_PATH); // running bridges keep the old inode until this instant
+			deps.log(`broker node: v${v} ${why}`);
+		} catch (err) {
+			rmSync(temp, { force: true });
+			throw err;
+		}
+	};
+
+	// What runs today: missing or broken means a first install; a working at-or-above-floor copy
+	// means a later run that only ever moves forward.
+	let existing: string | undefined;
 	try {
-		symlinkSync(real, temp);
-		renameSync(temp, NODE_PATH);
-	} catch (err) {
-		rmSync(temp, { force: true });
-		throw err;
+		existing = normalizeVersion(await deps.version(NODE_PATH));
+	} catch {
+		existing = undefined;
 	}
+
+	// Candidates, in order: every node on PATH (all entries), the system nvm roots, the node
+	// running this installer. Deduped; each one's version is read by running it.
+	const candidates: string[] = [];
+	const push = (bin: string): void => {
+		if (!candidates.includes(bin) && existsSync(bin)) candidates.push(bin);
+	};
+	for (const d of deps.pathDirs()) push(`${d}/node`);
+	for (const n of deps.nvmDirs()) for (const v of deps.listVersions(`${n}/versions/node`)) push(`${n}/versions/node/${v}/bin/node`);
+	push(realpathSync(nodeBin));
+	const qualifying: Array<{ bin: string; version: string }> = [];
+	for (const bin of candidates) {
+		let v: string;
+		try {
+			v = normalizeVersion(await deps.version(bin));
+		} catch {
+			continue; // fails to run: not a candidate
+		}
+		if (!isEvenMajor(v) || compareVersions(v, deps.floor) < 0) continue; // odd major or below the floor
+		qualifying.push({ bin, version: v });
+	}
+	qualifying.sort((a, b) => compareVersions(b.version, a.version)); // highest first (stable: PATH before nvm on ties)
+	const best = qualifying[0];
+
+	if (existing !== undefined && compareVersions(existing, deps.floor) >= 0) {
+		// Later run: replace only on strictly newer — or the same version when the build differs —
+		// and never downgrade.
+		if (!best || compareVersions(best.version, existing) < 0) {
+			deps.log(`broker node: kept v${existing} (nothing newer on this box)`);
+			return;
+		}
+		if (compareVersions(best.version, existing) === 0 && (await deps.sha256(best.bin)) === (await deps.sha256(NODE_PATH))) {
+			deps.log(`broker node: kept v${existing} (same version and sha256 as ${best.bin})`);
+			return;
+		}
+		await install(async (dest) => copyFileSync(best.bin, dest), `from ${best.bin}`);
+		return;
+	}
+	// First install (no copy, or a broken or below-floor one): the highest qualifying node, else download.
+	if (!best) {
+		deps.log("broker node: no qualifying node on this box; downloading the latest LTS");
+		await install(async (dest) => void (await deps.download(dest)), "downloaded (nodejs.org dist, latest LTS)");
+		return;
+	}
+	await install(async (dest) => copyFileSync(best.bin, dest), `from ${best.bin}`);
 }
 
 /** The real path of the node running this installer — the node the service will use. */

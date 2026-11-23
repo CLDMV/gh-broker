@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T21:35:55-08:00 (1795412155)
+ *	@Last modified time: 2026-11-22T23:00:19-08:00 (1795417219)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -18,14 +18,16 @@
  * MCP config and smoke test. Wiring only: the logic is in the other files of src/cli/. Kept apart from
  * cli.ts so the installer can import it without pulling in the dispatcher.
  */
-import { readFileSync, existsSync, readdirSync, rmSync, renameSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, rmSync, renameSync, mkdirSync, writeFileSync, copyFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { hostname } from "node:os";
+import { hostname, homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connect as netConnect } from "node:net";
+import { createHash } from "node:crypto";
 import { CLI_PATH, parseGroups, parsePasswd } from "./agents.ts";
 import type { ConnectDeps } from "./connect.ts";
+import { nodeFloorMin, type NodeSourceDeps } from "./system.ts";
 import { SEMVER } from "./upgrade.ts";
 import { stateStore, writeFileAtomic, storeSeed } from "./otp.ts";
 import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./mcp-config.ts";
@@ -90,6 +92,101 @@ export function realConnectDeps(): ConnectDeps {
 				const t = setTimeout(resolve, ms);
 				t.unref();
 			})
+	};
+}
+
+/** The package's minimum node, parsed from its own engines.node range. */
+const nodeFloor = (): string => nodeFloorMin(String(JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).engines?.node ?? ""));
+
+/** Fetch a URL's body as text; a network failure or a non-200 is a clear error. */
+async function fetchText(url: string): Promise<string> {
+	let res: Response;
+	try {
+		res = await fetch(url);
+	} catch (err) {
+		throw new Error(`node download: cannot reach ${url}: ${(err as Error).message}`, { cause: err });
+	}
+	if (!res.ok) throw new Error(`node download: ${url} answered ${res.status}`);
+	return res.text();
+}
+
+/** Fetch a URL's body as bytes, with the same error handling. */
+async function fetchBuffer(url: string): Promise<Buffer> {
+	let res: Response;
+	try {
+		res = await fetch(url);
+	} catch (err) {
+		throw new Error(`node download: cannot reach ${url}: ${(err as Error).message}`, { cause: err });
+	}
+	if (!res.ok) throw new Error(`node download: ${url} answered ${res.status}`);
+	return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Download the latest LTS node from nodejs.org/dist, verify the tarball against that release's
+ * SHASUMS256.txt, and extract only `bin/node` to `dest`. A checksum mismatch is a hard failure —
+ * an unverified binary is never installed.
+ */
+async function downloadLatestLts(dest: string): Promise<{ version: string; source: string }> {
+	const arch = process.arch === "x64" || process.arch === "arm64" ? process.arch : undefined;
+	if (!arch) throw new Error(`node download: nodejs.org has no build for ${process.arch}`);
+	const index = JSON.parse(await fetchText("https://nodejs.org/dist/index.json")) as Array<{ version: string; lts: boolean | string }>;
+	const entry = index.find((e) => e.lts);
+	if (!entry) throw new Error("node download: no LTS release in nodejs.org/dist/index.json");
+	const base = `https://nodejs.org/dist/${entry.version}`;
+	const name = `node-${entry.version}-linux-${arch}.tar.xz`;
+	const tarball = `${base}/${name}`;
+	const sums = await fetchText(`${base}/SHASUMS256.txt`);
+	const expected = sums
+		.split("\n")
+		.map((l) => l.trim())
+		.find((l) => l.endsWith(` ${name}`))
+		?.split(/\s+/)[0];
+	if (!expected) throw new Error(`node download: ${name} is missing from ${base}/SHASUMS256.txt`);
+	const actual = createHash("sha256")
+		.update(await fetchBuffer(tarball))
+		.digest("hex");
+	if (actual !== expected)
+		throw new Error(
+			`node download: checksum mismatch for ${tarball}: expected ${expected}, got ${actual} — not installing an unverified binary`
+		);
+	const extract = join(tmpdir(), `gh-broker-node-${process.pid}`);
+	try {
+		mkdirSync(extract, { recursive: true });
+		const tarPath = `${dest}.tar.xz`;
+		writeFileSync(tarPath, await fetchBuffer(tarball));
+		run("tar", ["-xJf", tarPath, "-C", extract, `${name}/bin/node`]);
+		copyFileSync(join(extract, name, "bin", "node"), dest);
+		rmSync(tarPath, { force: true });
+	} finally {
+		rmSync(extract, { recursive: true, force: true });
+	}
+	return { version: entry.version.replace(/^v/, ""), source: tarball };
+}
+
+/** The real effects for ensureBrokerNodeLink: discover and vet the nodes on this box, hash and download. */
+export function nodeSourceDeps(log: (m: string) => void): NodeSourceDeps {
+	return {
+		floor: nodeFloor(),
+		pathDirs: () => (process.env.PATH ?? "").split(":").filter(Boolean),
+		nvmDirs: () => [process.env.NVM_DIR, "/usr/local/nvm", join(homedir(), ".nvm")].filter((d): d is string => Boolean(d)),
+		listVersions: (dir) => {
+			try {
+				return readdirSync(dir).filter((n) => /^v\d/.test(n));
+			} catch {
+				return []; // no such nvm root
+			}
+		},
+		// A candidate's version is read by running it (never from its path), at most 5s each.
+		version: (bin) => {
+			const r = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 5000 });
+			if (r.error) return Promise.reject(new Error(`${bin} --version: ${r.error.message}`));
+			if (r.status !== 0) return Promise.reject(new Error(`${bin} --version exited ${r.status ?? `on signal ${r.signal}`}`));
+			return Promise.resolve(r.stdout);
+		},
+		sha256: (path) => Promise.resolve(createHash("sha256").update(readFileSync(path)).digest("hex")),
+		download: (dest) => downloadLatestLts(dest),
+		log
 	};
 }
 

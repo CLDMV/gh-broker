@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T22:54:22-08:00 (1795416862)
+ *	@Last modified time: 2026-11-22T23:00:19-08:00 (1795417219)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -80,14 +80,13 @@ import {
 	classifyInstall,
 	CLI_PATH,
 	migrationPlan,
-	NODE_PATH,
 	NPM_INSTALL_COMMAND,
 	parseGroups,
 	registeredAgents,
 	LEGACY_CLIENTS_GROUP
 } from "./agents.ts";
 import { configureMcp, smokeAgent } from "./agent-cli.ts";
-import { realDeps } from "./real-deps.ts";
+import { realDeps, nodeSourceDeps } from "./real-deps.ts";
 
 // The package root: this module is bundled into bin/gh-broker.mjs.
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -308,13 +307,17 @@ async function runInstall(argv: string[]): Promise<void> {
 	log(`  config:  ${paths.config}`);
 	log(`  secrets: ${paths.secrets}`);
 
-	// --- users, groups, dirs, the broker's node link ---
+	// --- users, groups, dirs, the broker's own node ---
 	step("service user, groups, directories");
 	ensureServiceUser(SVC_USER, SVC_GROUP);
 	for (const name of agents) ensureAgentGroup(name, SVC_USER);
 	ensureDirs(configDir, APP_DIR, SVC_USER, SVC_GROUP);
-	ensureBrokerNodeLink(currentNodeBin());
-	log(`  node link: ${NODE_PATH} -> ${currentNodeBin()}`);
+	// A root-owned copy of a qualifying node at NODE_PATH (discovery, vetting, download and their
+	// one-line verdicts are inside; the effects are the real ones).
+	await ensureBrokerNodeLink(
+		currentNodeBin(),
+		nodeSourceDeps((m) => log(`  ${m}`))
+	);
 
 	// --- config: merge(example, current) ---
 	step("config (example + deployed + --config + flags)");

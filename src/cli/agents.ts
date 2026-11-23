@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T22:54:22-08:00 (1795416862)
+ *	@Last modified time: 2026-11-22T23:00:18-08:00 (1795417218)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -162,9 +162,11 @@ export const CLI_PATH = "/usr/local/bin/gh-broker";
  * The node the bridge runs on: the entry prefixes it because `gh-broker` starts with
  * `#!/usr/bin/env node`, and an agent with its own nvm or an old distro node earlier on PATH
  * would run it on the wrong node (the package needs >= 22). ensureBrokerNodeLink
- * (src/cli/system.ts) maintains this one symlink — in a root:root 0755 directory, so the service
- * user cannot swap the binary every agent's bridge runs — and re-points it on every install.
- * Deliberately NOT under /opt/gh-broker (service-user-owned) and NOT /usr/local/bin/node, which
- * older installs managed: existing links there are left alone.
+ * (src/cli/system.ts) keeps a root-owned COPY of a qualifying node here — in a root:root 0755
+ * directory, so the service user cannot swap the binary every agent's bridge runs — and replaces
+ * it on every install when a strictly newer qualifying node turns up. A copy, not a symlink: a
+ * link into nvm is only as safe as whoever owns the target and dangles when that version is
+ * removed. Deliberately NOT under /opt/gh-broker (service-user-owned) and NOT /usr/local/bin/node,
+ * which older installs managed: existing links there are left alone.
  */
 export const NODE_PATH = "/usr/local/lib/gh-broker/node";
