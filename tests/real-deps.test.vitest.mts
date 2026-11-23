@@ -299,7 +299,9 @@ describe("nodeSourceDeps", () => {
 	});
 
 	it("enumerates nvm roots in order, taking root's home from the passwd entry, never $HOME", () => {
-		vi.mocked(os.userInfo).mockReturnValue({ homedir: "/root", uid: 0, gid: 0, username: "root" } as unknown as ReturnType<typeof import("node:os").userInfo>);
+		vi.mocked(os.userInfo).mockReturnValue({ homedir: "/root", uid: 0, gid: 0, username: "root" } as unknown as ReturnType<
+			typeof import("node:os").userInfo
+		>);
 		delete process.env.NVM_DIR;
 		process.env.HOME = "/home/attacker"; // a sudo -E session must not point root's nvm here
 		expect(nodeSourceDeps(() => {}).nvmDirs()).toEqual(["/usr/local/nvm", "/root/.nvm"]);
