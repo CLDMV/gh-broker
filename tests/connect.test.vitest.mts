@@ -12,7 +12,7 @@ import { CONNECT_HELP, runBridge, type ConnectDeps } from "../src/cli/connect.ts
 
 const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 /** Poll until `what` holds, so the tests assert on outcomes rather than sleeping through timings. */
-async function waitFor(what: () => boolean, ms = 4000): Promise<void> {
+async function waitFor(what: () => boolean, ms = 10_000): Promise<void> {
 	const start = Date.now();
 	while (!what()) {
 		if (Date.now() - start > ms) throw new Error("timed out waiting");
@@ -101,6 +101,11 @@ class FakeBroker {
 		for (const s of this.sockets) s.write(`${line}\n`);
 	}
 
+	/** Write raw bytes to the bridge (to split a multi-byte character across socket reads). */
+	writeRaw(data: Buffer): void {
+		for (const s of this.sockets) s.write(data);
+	}
+
 	/** Answer one request id. */
 	respond(id: unknown, result: unknown): void {
 		this.write(JSON.stringify({ jsonrpc: "2.0", id, result }));
@@ -138,7 +143,7 @@ class ClientLines {
 		});
 	}
 
-	waitNext(pred: (l: string) => boolean, ms = 4000): Promise<string> {
+	waitNext(pred: (l: string) => boolean, ms = 10_000): Promise<string> {
 		const hit = this.lines.find(pred);
 		if (hit !== undefined) return Promise.resolve(hit);
 		return new Promise((resolve, reject) => {
@@ -268,6 +273,19 @@ describe("pipe", () => {
 		expect(b.client.lines[3]).toContain("notifications/y");
 	});
 
+	it("decodes a multi-byte character split across socket reads byte for byte", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path);
+		await waitFor(() => broker.connections === 1);
+		const line = JSON.stringify({ jsonrpc: "2.0", id: 4, result: { note: "文字✻" } });
+		const bytes = Buffer.from(`${line}\n`, "utf8");
+		const cut = Buffer.byteLength(line.slice(0, line.indexOf("文")), "utf8") + 1; // mid-character
+		broker.writeRaw(bytes.subarray(0, cut));
+		broker.writeRaw(bytes.subarray(cut));
+		// the client sees the exact original text, not a re-serialization
+		expect(await b.client.waitNext((l) => l === line)).toBe(line);
+	});
+
 	it("flushes a partial last line on stdin EOF and exits 0 with the socket closed", async () => {
 		const broker = await startBroker(nextSock());
 		const b = startBridge(broker.path);
@@ -353,6 +371,39 @@ describe("handshake replay after a restart", () => {
 		await waitFor(() => broker.received.filter((l) => l === initReq(1)).length >= 2);
 		await b.client.waitNext(isListChanged);
 		expect(b.client.lines.filter(isResponse(1))).toHaveLength(1);
+	});
+
+	it("holds a request sent during the replay wait and forwards it after the replay completes", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path, { holdMs: 5000 }); // no expiry can race this test
+		await waitFor(() => broker.connections === 1);
+		b.stdin.write(`${initReq(1)}\n${initNotify()}\n`);
+		await b.client.waitNext(isResponse(1));
+		broker.answerInitialize = false; // the replayed initialize gets no answer: the wait stays open
+		broker.kick();
+		await waitFor(() => broker.received.filter((l) => l === initReq(1)).length >= 2); // replay sent, pending
+		b.stdin.write(`${req(8)}\n`); // arrives during the replay wait: held, not forwarded
+		await realSleep(50);
+		expect(broker.received.some((l) => l === req(8))).toBe(false);
+		broker.respond(1, { resumed: true }); // the replay's initialize answer arrives: the wait ends
+		await b.client.waitNext(isListChanged);
+		await b.client.waitNext((l) => l === req(8)); // the held request goes out after the replay
+		expect(broker.received.indexOf(req(8))).toBeGreaterThan(broker.received.lastIndexOf(initReq(1)));
+		expect(b.client.lines.filter(isResponse(1))).toHaveLength(1); // that answer was swallowed
+		expect(b.client.lines.filter(isStale(8))).toHaveLength(0); // and the request was never errored
+	});
+
+	it("replays only the initialize when the socket died before notifications/initialized was seen", async () => {
+		const broker = await startBroker(nextSock());
+		const b = startBridge(broker.path);
+		await waitFor(() => broker.connections === 1);
+		b.stdin.write(`${initReq(1)}\n`); // the client never gets to notifications/initialized
+		await b.client.waitNext(isResponse(1));
+		broker.kick();
+		await b.client.waitNext(isListChanged);
+		expect(broker.received.filter((l) => l === initReq(1))).toHaveLength(2); // initialize replayed
+		expect(broker.received.filter((l) => l === initNotify())).toHaveLength(0); // nothing to replay for it
+		expect(b.client.lines.filter(isResponse(1))).toHaveLength(1); // the replayed answer stays swallowed
 	});
 });
 

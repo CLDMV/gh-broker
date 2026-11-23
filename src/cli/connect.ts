@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T19:41:40-08:00 (1795405300)
+ *	@Last modified time: 2026-11-22T20:05:36-08:00 (1795406736)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -217,8 +217,10 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 		})();
 	};
 
-	const onData = (chunk: Buffer | string): void => {
-		serverBuf += chunk.toString("utf8");
+	const onData = (chunk: string): void => {
+		// the socket is setEncoding("utf8") in onConnected, so a multi-byte character split across
+		// reads decodes correctly here and the line stays byte-identical for the client
+		serverBuf += chunk;
 		for (let nl = serverBuf.indexOf("\n"); nl >= 0; nl = serverBuf.indexOf("\n")) {
 			const line = serverBuf.slice(0, nl);
 			serverBuf = serverBuf.slice(nl + 1);
@@ -246,6 +248,7 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 		socket = sock;
 		serverBuf = "";
 		backoff = startMs; // a fresh connection restarts the backoff
+		sock.setEncoding("utf8"); // chunks arrive as strings, split multi-byte characters included
 		sock.on("data", onData);
 		sock.on("close", onSocketClosed);
 		sock.on("error", () => {
