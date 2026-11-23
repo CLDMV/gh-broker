@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T23:28:44-08:00 (1795418924)
+ *	@Last modified time: 2026-11-23T00:12:31-08:00 (1795421551)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -193,8 +193,6 @@ export interface NodeSourceDeps {
 	listVersions: (dir: string) => string[];
 	/** Run a node binary's `--version` (short timeout); rejects when the binary fails to run. */
 	version: (bin: string) => Promise<string>;
-	/** sha256 of a file. */
-	sha256: (path: string) => Promise<string>;
 	/** Download the latest LTS node into `dest` (verified against the release's SHASUMS256.txt) and report the version and source. */
 	download: (dest: string) => Promise<string>; // the source description for the one-line verdict; the binary itself reports its version
 	log: (m: string) => void;
@@ -228,6 +226,29 @@ const compareVersions = (a: string, b: string): number => {
 const isEvenMajor = (v: string): boolean => versionParts(v)[0]! % 2 === 0;
 
 /**
+ * A candidate must be a root-owned, non-group/world-writable REGULAR file, and every directory
+ * from it up to / must be root-owned and not group/world writable: the installer runs the
+ * candidate as root (its --version) and installs it as the broker's node, so a user-writable
+ * binary or ancestor would hand the broker's node to whoever owns the directory. The realpath is
+ * checked, so a symlink resolving into a user's home is caught by its ancestor. Throws with the
+ * reason; the caller skips the candidate with one logged line.
+ */
+const vetNodePath = (bin: string): string => {
+	const real = realpathSync(bin);
+	const st = lstatSync(real);
+	if (!st.isFile()) throw new Error("not a regular file");
+	if (st.uid !== 0) throw new Error(`owned by uid ${st.uid}, not root`);
+	if ((st.mode & 0o022) !== 0) throw new Error("is group/world writable");
+	for (let dir = dirname(real); ; dir = dirname(dir)) {
+		const d = lstatSync(dir);
+		if (d.uid !== 0) throw new Error(`sits under ${dir}, owned by uid ${d.uid}`);
+		if ((d.mode & 0o022) !== 0) throw new Error(`sits under ${dir}, which is group/world writable`);
+		if (dir === "/") break;
+	}
+	return real;
+};
+
+/**
  * The broker's own node (NODE_PATH, the one binary every agent's bridge runs): ensure its
  * directory is root:root 0755 — creating it when missing, refusing one root didn't create (its
  * contents may be someone else's, and the service user must never be able to swap the binary the
@@ -237,12 +258,26 @@ const isEvenMajor = (v: string): boolean => versionParts(v)[0]! % 2 === 0;
  * as whoever owns the target and dangles when that version is removed. Candidates, in order: every
  * `node` on PATH (all PATH entries), the system nvm roots, the node running the installer;
  * download is the fallback. Only even (LTS) majors at or above the floor count, and a candidate's
- * version is read by RUNNING it, never from its path. An existing working copy is replaced only by
- * a strictly newer version (same version only when its sha256 differs) — never a downgrade — and
- * the copy is skipped entirely when the version and sha256 both match. Nothing under
- * /usr/local/bin is touched: binaries there are left for whatever may rely on them.
+ * version is read by RUNNING it, never from its path — and never before the candidate has been
+ * vetted: every candidate is a root-owned, non-group/world-writable regular file under root-owned,
+ * non-group/world-writable directories all the way to /, or it is skipped with a logged reason
+ * (root must not execute a user's binary to learn its version). An existing working copy is
+ * replaced only by a strictly newer version — the same version is kept whatever its sha256 — and
+ * the copy itself is re-checked before the rename: exactly the expected version, an even major,
+ * at or above the floor, never below a running copy. Nothing under /usr/local/bin is touched:
+ * binaries there are left for whatever may rely on them.
  */
 export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps): Promise<void> {
+	// The directories ABOVE the node dir matter as much as the dir itself: a user-owned or
+	// group/world-writable /usr/local/lib would let its owner replace whatever we create inside.
+	for (let parent = dirname(NODE_LINK_DIR); ; parent = dirname(parent)) {
+		const d = lstatSync(parent);
+		if (d.uid !== 0 || (d.mode & 0o022) !== 0)
+			throw new Error(
+				`${NODE_LINK_DIR} sits under ${parent}, owned by uid ${d.uid} with mode ${(d.mode & 0o777).toString(8)}; its parents must be root-owned and not group/world writable. Fix it by hand: sudo chown root:root ${parent} && sudo chmod 755 ${parent}`
+			);
+		if (parent === "/") break;
+	}
 	let dir: { uid: number; gid: number; mode: number; isDirectory: () => boolean } | undefined;
 	try {
 		dir = lstatSync(NODE_LINK_DIR);
@@ -267,13 +302,29 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 			);
 	}
 
-	/** Put a working node binary at NODE_PATH: write/copy to a temp file, prove it runs, rename it over. `from` returns the one-line verdict's tail (the source). */
-	const install = async (from: (dest: string) => Promise<string>): Promise<void> => {
+	/**
+	 * Put a working node binary at NODE_PATH: write/copy to a temp file, prove it runs, rename it
+	 * over. `from` returns the one-line verdict's tail (the source). The copy must report exactly
+	 * `expected.version` when given (a swap between vetting and copying is refused), must be an
+	 * even (LTS) major at or above the floor, and must not be below `expected.existing` — a
+	 * running, usable copy is never downgraded, whatever slipped between the vet and the copy.
+	 */
+	const install = async (
+		from: (dest: string) => Promise<string>,
+		expected: { version?: string; existing?: string } = {}
+	): Promise<void> => {
 		const temp = `${NODE_LINK_DIR}/node.tmp-${process.pid}`;
 		try {
 			const why = await from(temp);
 			chmodSync(temp, 0o755); // root:root 0755, like the directory
 			const v = normalizeVersion(await deps.version(temp)); // the copy must actually run
+			if (expected.version !== undefined && v !== expected.version)
+				throw new Error(`broker node: the copied node reports v${v}, expected v${expected.version}; not replacing it`);
+			if (!isEvenMajor(v)) throw new Error(`broker node: the copied node is v${v}, an odd (non-LTS) major; not replacing it`);
+			if (compareVersions(v, deps.floor) < 0)
+				throw new Error(`broker node: the copied node is v${v}, below the ${deps.floor} floor; not replacing it`);
+			if (expected.existing !== undefined && compareVersions(v, expected.existing) < 0)
+				throw new Error(`broker node: the copied node is v${v}, below the running v${expected.existing}; not downgrading`);
 			renameSync(temp, NODE_PATH); // running bridges keep the old inode until this instant
 			deps.log(`broker node: v${v} ${why}`);
 		} catch (err) {
@@ -302,6 +353,12 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 	push(realpathSync(nodeBin));
 	const qualifying: Array<{ bin: string; version: string }> = [];
 	for (const bin of candidates) {
+		try {
+			vetNodePath(bin); // BEFORE running it: root must not execute a user's binary to learn its version
+		} catch (err) {
+			deps.log(`broker node: skipping ${bin}: ${(err as Error).message}`);
+			continue;
+		}
 		let v: string;
 		try {
 			v = normalizeVersion(await deps.version(bin));
@@ -316,24 +373,25 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 	qualifying.sort((a, b) => compareVersions(b.version, a.version)); // highest first (stable: PATH before nvm on ties)
 	const best = qualifying[0];
 
-	if (existing !== undefined && compareVersions(existing, deps.floor) >= 0) {
-		// Later run: replace only on strictly newer — or the same version when the build differs —
-		// and never downgrade.
-		if (!best || compareVersions(best.version, existing) < 0) {
+	// A working, even, at-or-above-floor copy is only ever replaced by a strictly newer one: the
+	// same version is kept as is, whatever its sha256. A missing, broken, below-floor or odd copy
+	// is unusable and falls through to the first-install choice.
+	const existingUsable = existing !== undefined && isEvenMajor(existing) && compareVersions(existing, deps.floor) >= 0;
+	if (existingUsable) {
+		if (!best || compareVersions(best.version, existing!) <= 0) {
 			deps.log(`broker node: kept v${existing} (nothing newer on this box)`);
 			return;
 		}
-		if (compareVersions(best.version, existing) === 0 && (await deps.sha256(best.bin)) === (await deps.sha256(NODE_PATH))) {
-			deps.log(`broker node: kept v${existing} (same version and sha256 as ${best.bin})`);
-			return;
-		}
-		await install(async (dest) => {
-			copyFileSync(best.bin, dest);
-			return `from ${best.bin}`;
-		});
+		await install(
+			async (dest) => {
+				copyFileSync(best!.bin, dest);
+				return `from ${best!.bin}`;
+			},
+			{ version: best!.version, existing: existing! }
+		);
 		return;
 	}
-	// First install (no copy, or a broken or below-floor one): the highest qualifying node, else download.
+	// First install (no copy, or a broken, below-floor or odd one): the highest qualifying node, else download.
 	if (!best) {
 		await install(async (dest) => `downloaded (${await deps.download(dest)})`);
 		return;

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T23:47:49-08:00 (1795420069)
+ *	@Last modified time: 2026-11-23T00:12:30-08:00 (1795421550)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -20,7 +20,7 @@
  */
 import { readFileSync, existsSync, readdirSync, rmSync, renameSync, mkdtempSync, writeFileSync, copyFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { hostname, homedir, tmpdir } from "node:os";
+import { hostname, tmpdir, userInfo as osUserInfo } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connect as netConnect } from "node:net";
@@ -110,11 +110,11 @@ async function fetchText(url: string): Promise<string> {
 	return res.text();
 }
 
-/** Fetch a URL's body as bytes, with the same error handling and timeout. */
-async function fetchBuffer(url: string): Promise<Buffer> {
+/** Fetch a URL's body as bytes, with the same error handling. The tarball gets its own, long timeout (~30MB). */
+async function fetchBuffer(url: string, timeoutMs = 30_000): Promise<Buffer> {
 	let res: Response;
 	try {
-		res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+		res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
 	} catch (err) {
 		throw new Error(`node download: cannot reach ${url}: ${(err as Error).message}`, { cause: err });
 	}
@@ -137,7 +137,7 @@ export async function downloadLatestLts(dest: string): Promise<string> {
 	const base = `https://nodejs.org/dist/${version}`;
 	const tarball = `${base}/${name}`;
 	const expected = expectedSha(await fetchText(`${base}/SHASUMS256.txt`), name);
-	const buf = await fetchBuffer(tarball);
+	const buf = await fetchBuffer(tarball, 300_000); // ~30MB: a short timeout would cut real downloads off
 	verifyTarball(buf, expected, name);
 	const work = mkdtempSync(join(tmpdir(), "gh-broker-node-")); // 0700, owned by root (the runner)
 	try {
@@ -166,8 +166,19 @@ function tarMember(tarPath: string, member: string): Buffer {
 export function nodeSourceDeps(log: (m: string) => void): NodeSourceDeps {
 	return {
 		floor: nodeFloor(),
-		pathDirs: () => (process.env.PATH ?? "").split(":").filter(Boolean),
-		nvmDirs: () => [process.env.NVM_DIR, "/usr/local/nvm", join(homedir(), ".nvm")].filter((d): d is string => Boolean(d)),
+		// only absolute entries: a relative PATH entry would resolve against the installer's cwd
+		pathDirs: () => (process.env.PATH ?? "").split(":").filter((d) => d.startsWith("/")),
+		nvmDirs: () => {
+			// root's home comes from the passwd entry (getpwuid via userInfo), never $HOME: a
+			// sudo -E session would otherwise point root's nvm at the invoking user's home.
+			let rootHome = "/root";
+			try {
+				rootHome = osUserInfo().homedir;
+			} catch {
+				// no passwd entry for this uid: the conventional root home
+			}
+			return [process.env.NVM_DIR, "/usr/local/nvm", join(rootHome, ".nvm")].filter((d): d is string => Boolean(d));
+		},
 		listVersions: (dir) => {
 			try {
 				return readdirSync(dir).filter((n) => /^v\d/.test(n));
@@ -182,7 +193,6 @@ export function nodeSourceDeps(log: (m: string) => void): NodeSourceDeps {
 			if (r.status !== 0) return Promise.reject(new Error(`${bin} --version exited ${r.status ?? `on signal ${r.signal}`}`));
 			return Promise.resolve(r.stdout);
 		},
-		sha256: (path) => Promise.resolve(sha256Hex(readFileSync(path))),
 		download: (dest) => downloadLatestLts(dest),
 		log
 	};

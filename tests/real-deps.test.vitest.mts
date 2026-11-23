@@ -4,6 +4,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // spawns npm or touches the filesystem.
 const h = vi.hoisted(() => ({ spawnSync: vi.fn() }));
 vi.mock("node:child_process", () => ({ spawnSync: h.spawnSync }));
+vi.mock("node:os", () => ({
+	hostname: vi.fn(() => "box"),
+	tmpdir: vi.fn(() => "/tmp"),
+	userInfo: vi.fn(() => ({ homedir: "/root", uid: 0, gid: 0, username: "root" }))
+}));
 vi.mock("node:fs", () => {
 	const fns = [
 		"writeFileSync",
@@ -264,6 +269,16 @@ describe("downloadLatestLts", () => {
 		expect(f.copyFileSync).not.toHaveBeenCalled();
 	});
 
+	it("gives the tarball its own long timeout, short ones for index and SHASUMS", async () => {
+		stubFetch();
+		const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+		await downloadLatestLts("/d/node");
+		const calls = timeoutSpy.mock.calls.map((c) => c[0]);
+		expect(calls.filter((ms) => ms === 30_000)).toHaveLength(2); // index.json + SHASUMS256.txt
+		expect(calls).toContain(300_000); // the ~30MB tarball
+		timeoutSpy.mockRestore();
+	});
+
 	it("removes the work dir (tarball included) even when the extraction fails", async () => {
 		stubFetch();
 		h.spawnSync.mockImplementation((cmd: string, args: string[] = []) => {
@@ -274,5 +289,40 @@ describe("downloadLatestLts", () => {
 		});
 		await expect(downloadLatestLts("/d/node")).rejects.toThrow(/tar/);
 		expect(f.rmSync).toHaveBeenCalledWith("/tmp/gh-broker-node-abc123", { recursive: true, force: true });
+	});
+});
+
+describe("nodeSourceDeps", () => {
+	beforeEach(() => {
+		f.readFileSync.mockReturnValue(JSON.stringify({ engines: { node: ">=22.0.0" } }));
+		f.readdirSync.mockReturnValue(["v22.12.0", "junk", ".stash", "v24.11.0"]);
+	});
+
+	it("enumerates nvm roots in order, taking root's home from the passwd entry, never $HOME", () => {
+		f.userInfo.mockReturnValue({ homedir: "/root" });
+		delete process.env.NVM_DIR;
+		process.env.HOME = "/home/attacker"; // a sudo -E session must not point root's nvm here
+		expect(nodeSourceDeps(() => {}).nvmDirs()).toEqual(["/usr/local/nvm", "/root/.nvm"]);
+		process.env.NVM_DIR = "/custom/nvm";
+		expect(nodeSourceDeps(() => {}).nvmDirs()).toEqual(["/custom/nvm", "/usr/local/nvm", "/root/.nvm"]);
+		delete process.env.NVM_DIR;
+		delete process.env.HOME;
+	});
+
+	it("ignores non-absolute PATH entries", () => {
+		process.env.PATH = "/bin:rel/bin:/usr/bin";
+		expect(nodeSourceDeps(() => {}).pathDirs()).toEqual(["/bin", "/usr/bin"]);
+		delete process.env.PATH;
+	});
+
+	it("lists only the nvm version directories", () => {
+		expect(nodeSourceDeps(() => {}).listVersions("/nvm/versions/node")).toEqual(["v22.12.0", "v24.11.0"]);
+	});
+
+	it("version() rejects a non-zero exit and a spawn error (the 5s timeout shape)", async () => {
+		h.spawnSync.mockReturnValue({ status: 1, stdout: "", stderr: "" });
+		await expect(nodeSourceDeps(() => {}).version("/x/node")).rejects.toThrow(/--version exited 1/);
+		h.spawnSync.mockReturnValue({ status: null, signal: "SIGTERM", stdout: "", stderr: "", error: new Error("ETIMEDOUT") });
+		await expect(nodeSourceDeps(() => {}).version("/x/node")).rejects.toThrow(/--version: ETIMEDOUT/);
 	});
 });
