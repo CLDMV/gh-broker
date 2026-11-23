@@ -306,7 +306,10 @@ describe("broker node copy", () => {
 		});
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ "/opt/node/bin/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" }, { pathDirs: () => ["/opt/node/bin"] })
+			nodeDeps(
+				{ "/opt/node/bin/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" },
+				{ pathDirs: () => ["/opt/node/bin"] }
+			)
 		);
 		expect(f.mkdirSync).toHaveBeenCalledWith(NODE_DIR, { recursive: true, mode: 0o755 });
 		expect(f.chmodSync).toHaveBeenCalledWith(NODE_DIR, 0o755);
@@ -423,10 +426,7 @@ describe("broker node copy", () => {
 			source: "https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.xz"
 		}));
 		world([]); // nothing exists: no candidates at all
-		await sys.ensureBrokerNodeLink(
-			"/installer/node",
-			nodeDeps({ [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" }, { download })
-		);
+		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({ [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" }, { download }));
 		expect(download).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`);
 		expect(f.renameSync).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`, NODE_FILE);
 		expect(logs.at(-1)).toBe("broker node: v24.11.0 downloaded (nodejs.org dist, latest LTS)");
