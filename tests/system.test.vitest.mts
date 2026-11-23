@@ -608,11 +608,11 @@ describe("broker node copy", () => {
 
 	it("skips a candidate owned by a non-root user, with one logged line", async () => {
 		world(["/user/node", "/good/node"]);
+		fileStats["/user/node"] = { uid: 1000, gid: 1000, mode: 0o100755, isFile: () => true, isDirectory: () => false };
 		f.lstatSync.mockImplementation((p: string) => {
 			if (p === NODE_DIR) return rootDir();
-			if (p === "/user/node") return { uid: 1000, gid: 1000, mode: 0o100755, isFile: () => true, isDirectory: () => false };
 			if (p === "/user") return { uid: 1000, gid: 1000, mode: 0o040755, isFile: () => false, isDirectory: () => true };
-			if (p === "/good/node") return { uid: 0, gid: 0, mode: 0o100755, isFile: () => true, isDirectory: () => false };
+			if (p === "/good/node") return nodeFile();
 			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
 		});
 		await sys.ensureBrokerNodeLink(
@@ -625,12 +625,7 @@ describe("broker node copy", () => {
 
 	it("skips a group/world-writable candidate", async () => {
 		world(["/writable/node", "/good/node"]);
-		f.lstatSync.mockImplementation((p: string) => {
-			if (p === NODE_DIR) return rootDir();
-			if (p === "/writable/node") return { uid: 0, gid: 0, mode: 0o100666, isFile: () => true, isDirectory: () => false };
-			if (p === "/good/node") return { uid: 0, gid: 0, mode: 0o100755, isFile: () => true, isDirectory: () => false };
-			return { uid: 0, gid: 0, mode: 0o040755, isFile: () => false, isDirectory: () => true };
-		});
+		fileStats["/writable/node"] = { uid: 0, gid: 0, mode: 0o100666, isFile: () => true, isDirectory: () => false };
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
 			nodeDeps(
