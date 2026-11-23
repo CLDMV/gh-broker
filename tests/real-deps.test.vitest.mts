@@ -54,7 +54,8 @@ vi.mock("node:fs", () => {
 });
 
 import * as fs from "node:fs";
-import { downloadLatestLts, realDeps } from "../src/cli/real-deps.ts";
+import * as os from "node:os";
+import { downloadLatestLts, nodeSourceDeps, realDeps } from "../src/cli/real-deps.ts";
 import { sha256Hex } from "../src/cli/node-dist.ts";
 
 const f = vi.mocked(fs) as any;

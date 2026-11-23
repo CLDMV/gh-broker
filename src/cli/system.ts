@@ -396,10 +396,13 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 		await install(async (dest) => `downloaded (${await deps.download(dest)})`);
 		return;
 	}
-	await install(async (dest) => {
-		copyFileSync(best.bin, dest);
-		return `from ${best.bin}`;
-	});
+	await install(
+		async (dest) => {
+			copyFileSync(best.bin, dest);
+			return `from ${best.bin}`;
+		},
+		{ version: best.version } // the copy must still be the binary that was vetted
+	);
 }
 
 /** The real path of the node running this installer — the node the service will use. */
