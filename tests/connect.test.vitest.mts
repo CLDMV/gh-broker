@@ -488,7 +488,7 @@ describe("handshake replay after a restart", () => {
 
 	it("does not replay an initialize it never wrote to a socket", async () => {
 		const broker = await startBroker(nextSock());
-		const b = startBridge(broker.path, { backoffStartMs: 150, backoffMaxMs: 300 });
+		const b = startBridge(broker.path, { backoffStartMs: 150, backoffMaxMs: 300, holdMs: 5000 }); // no expiry can race this test
 		await waitFor(() => broker.connections === 1);
 		broker.kick(); // the first connection drops before the client says anything
 		await waitFor(() => b.logs.some((l) => l.startsWith("bridge: socket closed")));
@@ -637,7 +637,7 @@ describe("requests across a disconnect", () => {
 
 	it("errors a held request that the ceiling drops", async () => {
 		const broker = await startBroker(nextSock());
-		const b = startBridge(broker.path, { backoffStartMs: 150, backoffMaxMs: 300 });
+		const b = startBridge(broker.path, { backoffStartMs: 150, backoffMaxMs: 300, holdMs: 5000 }); // no expiry can race this test
 		await waitFor(() => broker.connections === 1);
 		b.stdin.write(`${initReq(1)}\n`);
 		await b.client.waitNext(isResponse(1));
