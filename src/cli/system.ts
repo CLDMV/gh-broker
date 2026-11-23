@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-23T00:12:31-08:00 (1795421551)
+ *	@Last modified time: 2026-11-23T00:46:05-08:00 (1795423565)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -392,8 +392,9 @@ export async function ensureBrokerNodeLink(nodeBin: string, deps: NodeSourceDeps
 		return;
 	}
 	// First install (no copy, or a broken, below-floor or odd one): the highest qualifying node, else download.
+	// The downloaded copy must not be below the one already running, whatever is wrong with it.
 	if (!best) {
-		await install(async (dest) => `downloaded (${await deps.download(dest)})`);
+		await install(async (dest) => `downloaded (${await deps.download(dest)})`, existing !== undefined ? { existing } : {});
 		return;
 	}
 	await install(

@@ -669,6 +669,36 @@ describe("broker node copy", () => {
 		expect(f.renameSync).not.toHaveBeenCalled();
 	});
 
+	it("refuses a downloaded copy that is odd, below the floor, or below the running copy", async () => {
+		const temp = `${NODE_DIR}/node.tmp-${process.pid}`;
+		world([]); // no candidates anywhere: the download path
+		// an odd major
+		await expect(
+			sys.ensureBrokerNodeLink(
+				"/installer/node",
+				nodeDeps({ [temp]: "v23.6.0" }, { download: async () => "https://nodejs.org/dist/v23.6.0/node-v23.6.0-linux-x64.tar.xz" })
+			)
+		).rejects.toThrow(/the copied node is v23\.6\.0, an odd \(non-LTS\) major; not replacing it/);
+		// below the floor
+		await expect(
+			sys.ensureBrokerNodeLink(
+				"/installer/node",
+				nodeDeps({ [temp]: "v20.15.0" }, { download: async () => "https://nodejs.org/dist/v20.15.0/node-v20.15.0-linux-x64.tar.xz" })
+			)
+		).rejects.toThrow(/the copied node is v20\.15\.0, below the 22\.0\.0 floor; not replacing it/);
+		// below the copy already running (an odd one — unusable, but never a downgrade)
+		await expect(
+			sys.ensureBrokerNodeLink(
+				"/installer/node",
+				nodeDeps(
+					{ [NODE_FILE]: "v23.6.0", [temp]: "v22.12.0" },
+					{ download: async () => "https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz" }
+				)
+			)
+		).rejects.toThrow(/the copied node is v22\.12\.0, below the running v23\.6\.0; not downgrading/);
+		expect(f.renameSync).not.toHaveBeenCalled();
+	});
+
 	it("nodeFloorMin takes the minimum semver literal out of an engines range", () => {
 		expect(sys.nodeFloorMin(">=22.0.0")).toBe("22.0.0");
 		expect(sys.nodeFloorMin("^22.0.0")).toBe("22.0.0");
