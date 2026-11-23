@@ -395,9 +395,10 @@ describe("broker node copy", () => {
 	it("skips the copy when the existing file's version and sha256 both match, replaces on a sha difference", async () => {
 		world(["/same/node"]);
 		f.lstatSync.mockReturnValue(rootDir());
+		// identical version AND identical sha256: kept, nothing copied
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ [NODE_FILE]: "v24.11.0", "/same/node": "v24.11.0" }, { pathDirs: () => ["/same"], sha256: async (p) => `sha(${p})` })
+			nodeDeps({ [NODE_FILE]: "v24.11.0", "/same/node": "v24.11.0" }, { pathDirs: () => ["/same"], sha256: async () => "same-sha" })
 		);
 		expect(f.copyFileSync).not.toHaveBeenCalled();
 		expect(logs).toEqual([`broker node: kept v24.11.0 (same version and sha256 as /same/node)`]);
@@ -406,7 +407,10 @@ describe("broker node copy", () => {
 			"/installer/node",
 			nodeDeps(
 				{ [NODE_FILE]: "v24.11.0", "/same/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" },
-				{ pathDirs: () => ["/same"], sha256: async () => "different" }
+				{
+					pathDirs: () => ["/same"],
+					sha256: async (p: string) => (p === NODE_FILE ? "old-build" : "new-build")
+				}
 			)
 		);
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/same/node");
