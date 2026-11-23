@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T19:38:52-08:00 (1795405132)
+ *	@Last modified time: 2026-11-22T19:41:40-08:00 (1795405300)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -213,7 +213,7 @@ export async function runBridge(argv: string[], d: ConnectDeps): Promise<number>
 			flushHeld();
 			const queued = replayQueue;
 			replayQueue = [];
-			for (const line of queued) deliverServerLine(line);
+			for (const line of queued) if (line !== responseLine) deliverServerLine(line); // the swallowed one stays swallowed
 		})();
 	};
 

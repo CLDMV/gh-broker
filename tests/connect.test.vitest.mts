@@ -63,6 +63,7 @@ class FakeBroker {
 				}
 			});
 			sock.on("close", () => this.sockets.delete(sock));
+			sock.on("error", () => {}); // the bridge may destroy the socket mid-echo (EPIPE) — normal
 			this.onConnection?.(sock);
 		});
 		this.server = server;
@@ -333,6 +334,7 @@ describe("handshake replay after a restart", () => {
 		await b.client.waitNext(isListChanged);
 		expect(b.client.lines.filter(isListChanged)).toHaveLength(1);
 		expect(b.client.lines.filter(isStale(1))).toHaveLength(0);
+		expect(b.client.lines.filter(isResponse(1))).toHaveLength(1); // the replayed answers stay swallowed
 	});
 
 	it("forwards a handshake captured while dialing on the first connection, and replays it on the next", async () => {
