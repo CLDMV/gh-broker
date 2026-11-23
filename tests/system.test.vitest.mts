@@ -304,7 +304,7 @@ describe("broker node copy", () => {
 		f.lstatSync.mockImplementation(() => {
 			throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
 		});
-		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({ "/installer/node": "v22.12.0", "/opt/node/bin/node": "v24.11.0" }));
+		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({ "/opt/node/bin/node": "v24.11.0" }, { pathDirs: () => ["/opt/node"] }));
 		expect(f.mkdirSync).toHaveBeenCalledWith(NODE_DIR, { recursive: true, mode: 0o755 });
 		expect(f.chmodSync).toHaveBeenCalledWith(NODE_DIR, 0o755);
 		expect(f.chownSync).toHaveBeenCalledWith(NODE_DIR, 0, 0);
@@ -332,14 +332,17 @@ describe("broker node copy", () => {
 		f.readdirSync.mockReturnValue(["v21.7.3", "v22.12.0", "v24.11.0", "junk"]);
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({
-				"/first/node": "v20.15.0", // below the floor: ignored
-				"/second/node": "v24.11.0",
-				[`${nvm}/v21.7.3/bin/node`]: "v21.7.3", // odd major: ignored
-				[`${nvm}/v22.12.0/bin/node`]: "v22.12.0",
-				[`${nvm}/v24.11.0/bin/node`]: "v24.11.0",
-				"/installer/node": "v23.6.0" // odd major: ignored even though it runs
-			})
+			nodeDeps(
+				{
+					"/first/node": "v20.15.0", // below the floor: ignored
+					"/second/node": "v24.11.0",
+					[`${nvm}/v21.7.3/bin/node`]: "v21.7.3", // odd major: ignored
+					[`${nvm}/v22.12.0/bin/node`]: "v22.12.0",
+					[`${nvm}/v24.11.0/bin/node`]: "v24.11.0",
+					"/installer/node": "v23.6.0" // odd major: ignored even though it runs
+				},
+				{ pathDirs: () => ["/first", "/second"], nvmDirs: () => ["/usr/local/nvm"] }
+			)
 		);
 		// the highest qualifying version wins; a tie (none here) would keep the PATH one first
 		const [src] = f.copyFileSync.mock.calls[0];
@@ -350,7 +353,7 @@ describe("broker node copy", () => {
 		f.copyFileSync.mockClear();
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ "/second/node": "v22.12.0", "/gone/node": undefined as unknown as string })
+			nodeDeps({ "/second/node": "v22.12.0", "/gone/node": undefined as unknown as string }, { pathDirs: () => ["/gone", "/second"] })
 		);
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/second/node");
 	});
@@ -359,12 +362,18 @@ describe("broker node copy", () => {
 		world(["/new/node", "/old/node"]);
 		f.lstatSync.mockReturnValue(rootDir());
 		// existing v24; only older candidates around: kept, nothing copied
-		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({ NODE_FILE: "v24.11.0", "/old/node": "v22.12.0" }));
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps({ NODE_FILE: "v24.11.0", "/old/node": "v22.12.0" }, { pathDirs: () => ["/old"] })
+		);
 		expect(f.copyFileSync).not.toHaveBeenCalled();
 		expect(f.renameSync).not.toHaveBeenCalled();
 		expect(logs).toEqual(["broker node: kept v24.11.0 (nothing newer on this box)"]);
 		// a newer candidate appears: replaced
-		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({ NODE_FILE: "v24.11.0", "/new/node": "v26.1.0" }));
+		await sys.ensureBrokerNodeLink(
+			"/installer/node",
+			nodeDeps({ NODE_FILE: "v24.11.0", "/new/node": "v26.1.0" }, { pathDirs: () => ["/new"] })
+		);
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/new/node");
 		expect(f.renameSync).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`, NODE_FILE);
 		expect(logs.at(-1)).toBe("broker node: v26.1.0 from /new/node");
@@ -375,14 +384,14 @@ describe("broker node copy", () => {
 		f.lstatSync.mockReturnValue(rootDir());
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ NODE_FILE: "v24.11.0", "/same/node": "v24.11.0" }, { sha256: async (p) => `sha(${p})` })
+			nodeDeps({ NODE_FILE: "v24.11.0", "/same/node": "v24.11.0" }, { pathDirs: () => ["/same"], sha256: async (p) => `sha(${p})` })
 		);
 		expect(f.copyFileSync).not.toHaveBeenCalled();
 		expect(logs).toEqual([`broker node: kept v24.11.0 (same version and sha256 as /same/node)`]);
 		// same version, different build: replaced
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ NODE_FILE: "v24.11.0", "/same/node": "v24.11.0" }, { sha256: async () => "different" })
+			nodeDeps({ NODE_FILE: "v24.11.0", "/same/node": "v24.11.0" }, { pathDirs: () => ["/same"], sha256: async () => "different" })
 		);
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/same/node");
 		expect(logs.at(-1)).toBe("broker node: v24.11.0 from /same/node");
@@ -392,7 +401,7 @@ describe("broker node copy", () => {
 		world(["/broken/node"]);
 		f.lstatSync.mockReturnValue(rootDir());
 		// the existing copy does not run: treated like a first install, highest qualifying wins
-		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({ "/broken/node": "v22.12.0" }));
+		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({ "/broken/node": "v22.12.0" }, { pathDirs: () => ["/broken"] }));
 		expect(f.copyFileSync.mock.calls[0]![0]).toBe("/broken/node");
 		// nothing qualifies anywhere: the download fallback
 		f.copyFileSync.mockClear();
@@ -400,6 +409,7 @@ describe("broker node copy", () => {
 			version: "24.11.0",
 			source: "https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.xz"
 		}));
+		world([]); // nothing exists: no candidates at all
 		await sys.ensureBrokerNodeLink("/installer/node", nodeDeps({}, { download }));
 		expect(download).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`);
 		expect(f.renameSync).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`, NODE_FILE);
@@ -416,6 +426,7 @@ describe("broker node copy", () => {
 				nodeDeps(
 					{ "/bad/node": "v24.11.0" },
 					{
+						pathDirs: () => ["/bad"],
 						version: async () => {
 							throw new Error("ENOEXEC");
 						}
