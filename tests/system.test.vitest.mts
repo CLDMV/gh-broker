@@ -554,7 +554,10 @@ describe("broker node copy", () => {
 		});
 		await sys.ensureBrokerNodeLink(
 			"/installer/node",
-			nodeDeps({ "/opt/node/bin/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" }, { pathDirs: () => ["/opt/node/bin"] })
+			nodeDeps(
+				{ "/opt/node/bin/node": "v24.11.0", [`${NODE_DIR}/node.tmp-${process.pid}`]: "v24.11.0" },
+				{ pathDirs: () => ["/opt/node/bin"] }
+			)
 		);
 		expect(f.mkdirSync).toHaveBeenCalledWith(NODE_DIR, { recursive: true, mode: 0o755 }); // created over the gap
 		expect(f.renameSync).toHaveBeenCalledWith(`${NODE_DIR}/node.tmp-${process.pid}`, NODE_FILE); // and the install completed
