@@ -299,6 +299,27 @@ describe("tmuxPanes", () => {
 		]);
 	});
 
+	it("a `|@|` in a pane's path doesn't truncate the cwd: the cwd is the remainder of the line", () => {
+		const h = host({
+			listing: "%0|@|200|@|0|@|0|@|claude|@|main|@|/tmp/we|@|ird\n",
+			procs: { "200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }) },
+			capture: { "%0": "❯ \n" }
+		});
+		const [p] = tmuxPanes(SERVER(), INFO, h);
+		expect(p).toEqual({
+			id: "%0",
+			pid: 200,
+			text: "❯ \n",
+			foreground: true,
+			inMode: false,
+			synchronized: false,
+			session: "main",
+			cwd: "/tmp/we|@|ird",
+			configDir: undefined,
+			timedOut: undefined
+		});
+	});
+
 	it("runs every tmux command as the agent through /usr/bin/setpriv (groups kept), with the server's own binary, its HOME, a UTF-8 locale, no $TMUX, and a timeout", () => {
 		const h = host({ listing: "", procs: {}, hasSetpriv: true });
 		tmuxPanes(SERVER("/tmp/tmux-1000/default", "/usr/local/bin/tmux"), INFO, h);

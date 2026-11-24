@@ -142,7 +142,7 @@ sudo gh-broker agent add <user>      # group, MCP config, restart, smoke test ov
 sudo gh-broker agent remove <user>   # empty the group, restart (closes the socket), then the MCP entry (backup first) and the user's lock state
 sudo gh-broker agent list            # socket path, whether it exists, and whether the MCP config points at it (ok / missing / points elsewhere)
 sudo gh-broker agent sync [<user>]   # re-apply the MCP config for one agent or all
-sudo gh-broker agent reconnect [<user>] [--wait 5m] # /mcp reconnect <key> in the agent's running Claude Code sessions (--dry-run lists)
+sudo gh-broker agent reconnect [<user>] [--wait 5m] [--session <name|%pane>] # /mcp reconnect <key> in the agent's running Claude Code sessions (--dry-run lists)
 ```
 
 `agent remove` empties the agent's group rather than deleting it. Processes the user already has running keep that group's id, so deleting it would let a later `agent add` reuse the id and give those processes the new agent's socket. An empty group isn't an agent; `agent add` for the same user fills it again.

@@ -301,8 +301,8 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		for (const s of hit) matched.add(s);
 		return hit.length > 0;
 	};
-	// The pane's session and working directory, cleaned, printed after its id (a waiting-loop
-	// line has no Pane at hand, and prints without them).
+	// The pane's session and working directory, cleaned, printed after its id. Computed once at
+	// selection time: the waiting loop holds no Pane, so --wait lines carry it on the entry.
 	const where = (pane: Pane): string => ` (${clean(pane.session)}, ${clean(pane.cwd)})`;
 	const skip = (user: string, socket: string, pane: string, key: string | undefined, why: string, loc = ""): void => {
 		d.log(`${user} ${clean(socket)} ${clean(pane)}${loc} ${key ?? "-"} skipped (${why})`);
@@ -310,7 +310,16 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 	};
 	// With --wait, a pane blocked only by text in its input box or a dialog is set aside and
 	// re-checked until it clears or the time runs out, instead of being skipped now.
-	const waiting: { user: string; socket: string; server: TmuxServer; info: UserInfo; pane: string; key: string; why: string }[] = [];
+	const waiting: {
+		user: string;
+		socket: string;
+		server: TmuxServer;
+		info: UserInfo;
+		pane: string;
+		key: string;
+		why: string;
+		loc: string;
+	}[] = [];
 	const blocked = (
 		user: string,
 		socket: string,
@@ -323,7 +332,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 	): void => {
 		if (waitMs > 0 && !dryRun) {
 			d.log(`${user} ${clean(socket)} ${clean(pane)}${loc} ${key} waiting (${why})`);
-			waiting.push({ user, socket, server, info, pane, key, why });
+			waiting.push({ user, socket, server, info, pane, key, why, loc });
 		} else skip(user, socket, pane, key, why, loc);
 	};
 	// A background run looks only at the users and panes it was handed.
@@ -340,6 +349,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		const places: Place[] = [{ folder: info.home, saved: false }, ...extraFolders(info, d, config, user)];
 		const keys = keysOf(places, info, dir, d);
 		let panes = 0;
+		let listed = 0; // panes seen before the --session filter, for the no-sessions line below
 		const { servers, skipped: deadSockets } = d.tmuxSockets(info);
 		// Socket files whose tmux server has exited are leftovers, not sessions: one count line, not one line each.
 		if (deadSockets.length)
@@ -359,6 +369,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				}
 				throw err;
 			}
+			listed += panesOnServer.length;
 			for (const pane of panesOnServer) {
 				if (!retrying(user, socket, pane.id)) continue;
 				if (!wanted(pane)) continue;
@@ -440,9 +451,10 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				sent++;
 			}
 		}
-		// With --session the "no sessions" line would be wrong whenever panes existed but none
-		// matched: the report below is what the operator sees instead.
-		if (panes === 0 && sessions.length === 0)
+		// With --session, panes the filter dropped are not listed. The "no sessions" line stays for
+		// an agent that had no Claude panes at all (so "no pane matched --session X" is not the only
+		// output), and is suppressed only when panes existed and the filter dropped them all.
+		if (panes === 0 && (sessions.length === 0 || listed === 0))
 			d.log(
 				retry
 					? `${user}: the panes waited on are gone`
@@ -479,7 +491,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				}
 				if (text === undefined) {
 					waiting.splice(i, 1);
-					skip(w.user, w.socket, w.pane, w.key, "gone while waiting");
+					skip(w.user, w.socket, w.pane, w.key, "gone while waiting", w.loc);
 					continue;
 				}
 				if (composerState(text) !== "empty") continue;
@@ -487,14 +499,14 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				try {
 					d.tmuxSend(w.server, w.pane, `/mcp reconnect ${w.key}`, w.info);
 				} catch (err) {
-					skip(w.user, w.socket, w.pane, w.key, `send failed: ${clean((err as Error).message)}`);
+					skip(w.user, w.socket, w.pane, w.key, `send failed: ${clean((err as Error).message)}`, w.loc);
 					continue;
 				}
-				d.log(`${w.user} ${clean(w.socket)} ${clean(w.pane)} ${w.key} sent`);
+				d.log(`${w.user} ${clean(w.socket)} ${clean(w.pane)}${w.loc} ${w.key} sent`);
 				sent++;
 			}
 		}
-		for (const w of waiting) skip(w.user, w.socket, w.pane, w.key, `${w.why}; still after waiting ${wait}`);
+		for (const w of waiting) skip(w.user, w.socket, w.pane, w.key, `${w.why}; still after waiting ${wait}`, w.loc);
 	}
 	// A --session that matched no pane anywhere is the operator's typo to see, not a silent zero.
 	const unmatched = sessions.filter((s) => !matched.has(s));

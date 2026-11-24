@@ -331,7 +331,9 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 	for (const [pid, e] of table) if (Number.isInteger(e.ppid)) childrenOf.set(e.ppid, [...(childrenOf.get(e.ppid) ?? []), pid]);
 	const panes: Pane[] = [];
 	for (const line of listing.split("\n")) {
-		const [id, pidText, inMode, synchronized, command, session, cwd] = line.split(SEP);
+		// The cwd is the remainder of the line, so a `|@|` in a path doesn't truncate it (a newline
+		// in the path still splits lines — tmux format output has no escaping).
+		const [id, pidText, inMode, synchronized, command, session, ...pathParts] = line.split(SEP);
 		const panePid = Number(pidText);
 		if (!id?.startsWith("%") || !Number.isInteger(panePid)) continue;
 		const candidates = claudePidsInTree(panePid, table, childrenOf);
@@ -366,7 +368,7 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 			synchronized: synchronized === "1",
 			// An older listing (or a field that came back empty) reads as unknown, not as a guess.
 			session: session ?? "",
-			cwd: cwd ?? "",
+			cwd: pathParts.join(SEP),
 			configDir: configDirOf(claude, { proc, readHead: head }),
 			timedOut
 		});
