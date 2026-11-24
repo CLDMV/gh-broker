@@ -535,6 +535,8 @@ describe("tmuxPanes", () => {
 			expect(verdict([[201, `bash\0-c\0echo connect ${SOCK}\0`]])).toBeUndefined();
 			// a node process, but not the gh-broker CLI
 			expect(verdict([[201, `${NODE}\0/srv/evil/serve.js\0connect\0${SOCK}\0`]])).toBeUndefined();
+			// a look-alike name planted next to the CLI: the basename must be exactly gh-broker
+			expect(verdict([[201, `${NODE}\0/srv/evil/gh-broker.evil\0connect\0${SOCK}\0`]])).toBeUndefined();
 			// the CLI, but not the connect verb
 			expect(verdict([[201, `${NODE}\0${CLI}\0serve\0${SOCK}\0`]])).toBeUndefined();
 			// the bridge shape with a word extra (a wrapper, a flag)

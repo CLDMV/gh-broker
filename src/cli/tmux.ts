@@ -334,16 +334,15 @@ const underDir = (path: string, dir: string): boolean => path.startsWith("/") &&
 /**
  * Whether argv is the connect bridge the broker's MCP entry runs: the entry is
  * `sg <group> -c exec <node> <cli> connect <socket>`, so after the exec the claude's descendant is
- * `<node> <cli> connect <socket>` — argv[0] a node binary, argv[1] the gh-broker CLI (the installed
- * /usr/local/bin/gh-broker link, or the package's bin/gh-broker.mjs — both basename as
- * "gh-broker"), the `connect` verb, and an absolute socket path inside the agents directory. The
- * exact shape, not a substring: a process that merely has "connect" in its arguments is not the
- * bridge.
+ * `<node> <cli> connect <socket>` — argv[0] a node binary, argv[1] the gh-broker CLI (npm's bin
+ * link: the basename is exactly "gh-broker"), the `connect` verb, and an absolute socket path
+ * inside the agents directory. The exact shape, not a substring: a process that merely has
+ * "connect" in its arguments is not the bridge.
  */
 const isBridgeArgv = (argv: string[], dir: string): boolean =>
 	argv.length === 4 &&
 	basename(argv[0] ?? "") === "node" &&
-	(basename(argv[1] ?? "") === "gh-broker" || basename(argv[1] ?? "").startsWith("gh-broker.")) &&
+	basename(argv[1] ?? "") === "gh-broker" &&
 	argv[2] === "connect" &&
 	underDir(argv[3] ?? "", dir);
 

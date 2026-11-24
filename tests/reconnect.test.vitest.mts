@@ -740,11 +740,11 @@ describe("agent reconnect", () => {
 			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
 		});
 
-		it("a dry run lists bridge panes as skipped too, and still exits 0", () => {
+		it("a dry run lists bridge panes as skipped too, counts them in its summary, and still exits 0", () => {
 			const { d, out } = withPanes([onBridge("%1")]);
 			expect(reconnect(["repo", "--dry-run"], config, d)).toBe(0);
 			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
-			expect(out[out.length - 1]).toBe('dry run: 0 pane(s) would get "/mcp reconnect"');
+			expect(out[out.length - 1]).toBe('dry run: 0 pane(s) would get "/mcp reconnect" (1 already on the bridge)');
 		});
 
 		it("the bridge verdict comes before the key checks: a bridge pane needs nothing, even with no broker entry", () => {

@@ -61,7 +61,8 @@ blocked when the time is up are skipped. The waiting runs in the background
 wait survives the terminal closing; follow it with
 journalctl -u ${WAIT_UNIT} -f). A new --wait replaces one still running.
 --foreground waits here instead. Exits 0 when every pane was sent to (or
-handed to the background wait), 3 when some were skipped (run it again once
+handed to the background wait, or the only ones it didn't type into were
+already on the bridge), 3 when some were skipped (run it again once
 they're clear), 1 when a named user doesn't exist or a --session matched
 no pane.`;
 
@@ -536,12 +537,12 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 	// A --session that matched no pane anywhere is the operator's typo to see, not a silent zero.
 	const unmatched = sessions.filter((s) => !matched.has(s));
 	for (const s of unmatched) d.error(`no pane matched --session ${clean(s)}`);
-	// The bridge panes are their own count, in brackets after the skips: they were listed, but they
-	// are not skips — the sessions need nothing.
+	// The bridge panes are their own count, in brackets after the tail: they were listed (in a dry
+	// run too), but they are not skips — the sessions need nothing.
 	const bridge = onBridge > 0 ? ` (${onBridge} already on the bridge)` : "";
 	d.log(
 		dryRun
-			? `dry run: ${sent} pane(s) would get "/mcp reconnect"`
+			? `dry run: ${sent} pane(s) would get "/mcp reconnect"${bridge}`
 			: `sent ${sent}, skipped ${skipped}${bridge}${backgrounded ? `, waiting on ${backgrounded} in the background` : ""}`
 	);
 	if (unmatched.length) return 1;
