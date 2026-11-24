@@ -5,6 +5,7 @@ import { emptyState, emptyUser } from "../src/cli/otp.ts";
 import { makeDeps, config, NOW } from "./helpers/cli-deps.mjs";
 
 const DIR = "/run/gh-broker/agents";
+/** The pre-#143 shared-socket entry, kept as a legacy fixture: it must still be recognized as the broker's and rewritten to the current shape. */
 const OLD = {
 	type: "stdio",
 	command: "sg",
@@ -59,6 +60,14 @@ describe("agent add", () => {
 		await expect(agentCommand("add", [], config, d)).rejects.toThrow(/name the agent user: sudo gh-broker agent add <user>/);
 		expect(d.ensureGroup).not.toHaveBeenCalled();
 	});
+
+	it("refuses before registering when the bridge binary is missing", async () => {
+		const { d } = makeDeps({ binaryExists: () => false });
+		await expect(agentCommand("add", ["newbie"], config, d)).rejects.toThrow(
+			/the MCP entry would run \/usr\/local\/lib\/gh-broker\/node \/usr\/local\/bin\/gh-broker connect, but \/usr\/local\/bin\/gh-broker is not there/
+		);
+		expect(d.ensureGroup).not.toHaveBeenCalled(); // nothing half-registered
+	});
 });
 
 describe("configureMcp", () => {
@@ -76,6 +85,16 @@ describe("configureMcp", () => {
 		expect(configureMcp("repo", config, d)).toBe("unchanged");
 		expect(writes).toEqual([]);
 		expect(out[0]).toContain("already up to date");
+	});
+
+	it("refuses to write an entry when the bridge binary is missing", () => {
+		const { d } = makeDeps({ binaryExists: (p: string) => p !== "/usr/local/bin/gh-broker" });
+		expect(() => configureMcp("repo", config, d)).toThrow(
+			/the MCP entry would run \/usr\/local\/lib\/gh-broker\/node \/usr\/local\/bin\/gh-broker connect, but \/usr\/local\/bin\/gh-broker is not there/
+		);
+		expect(() => configureMcp("repo", config, d)).toThrow(/Get one with: sudo npm install -g/);
+		const { d: nodeMissing } = makeDeps({ binaryExists: (p: string) => p !== "/usr/local/lib/gh-broker/node" });
+		expect(() => configureMcp("repo", config, nodeMissing)).toThrow(/but \/usr\/local\/lib\/gh-broker\/node is not there/);
 	});
 
 	it("prints the entry for an unparseable file and for a missing user", () => {

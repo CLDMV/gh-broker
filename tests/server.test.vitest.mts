@@ -124,6 +124,7 @@ describe("startServer", () => {
 		});
 		expect(init.result.serverInfo.name).toBe("gh-broker");
 		expect(init.result.serverInfo.version).toBe(pkg.version);
+		expect(init.result.capabilities.tools).toEqual({ listChanged: true }); // the connect bridge sends notifications/tools/list_changed after a restart (#193)
 		expect((await repo.request("tools/list", {})).result.tools).toEqual(catalog);
 		expect((await repo.request("tools/call", { name: "get_me", arguments: { a: 1 } })).result.content[0].text).toBe('repo:get_me:{"a":1}');
 		// arguments omitted → router receives {}

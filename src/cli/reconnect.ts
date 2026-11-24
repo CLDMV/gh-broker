@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:33:48-08:00 (1795293228)
+ *	@Last modified time: 2026-11-22T21:08:27-08:00 (1795410507)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -37,7 +37,8 @@ export const WAIT_UNIT = "gh-broker-reconnect-wait";
 export const RECONNECT_HELP = `agent reconnect [<user>] [--dry-run] [--wait <time> [--foreground]]
 
 Sends "/mcp reconnect <key>" to every running Claude Code session of a
-registered agent (or all of them): the sessions the broker restart drops.
+registered agent (or all of them): the ones still on an old socat entry,
+or whose connect bridge did not recover from a broker restart.
 <key> is the agent's actual mcpServers entry for the broker, read back from
 its .claude.json files. A pane is skipped, with its id and the reason, when
 someone is typing in it, a dialog (a permission prompt, a question, a menu)

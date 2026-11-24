@@ -27,7 +27,12 @@ if ! node_ok; then
 	nvm alias default node >/dev/null
 	ver="$(nvm version default)"
 	set -u
-	for b in node npm npx; do ln -sfn "/usr/local/nvm/versions/node/$ver/bin/$b" "/usr/local/bin/$b"; done
+	# Fill the gap only: never replace an existing file or link (a dangling symlink counts as
+	# existing) — whatever is already at /usr/local/bin was put there by someone and is left alone.
+	for b in node npm npx; do
+		if [[ -e "/usr/local/bin/$b" || -L "/usr/local/bin/$b" ]]; then continue; fi
+		ln -s "/usr/local/nvm/versions/node/$ver/bin/$b" "/usr/local/bin/$b"
+	done
 fi
 command -v npm >/dev/null 2>&1 || { echo "npm not found — needed to build the checkout" >&2; exit 1; }
 
