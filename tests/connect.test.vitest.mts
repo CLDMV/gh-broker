@@ -487,12 +487,13 @@ describe("handshake replay after a restart", () => {
 		expect(JSON.parse(stale)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "gh-broker restarted; retry" } });
 		await waitFor(() => b.logs.some((l) => l === "bridge: no initialize response in 40ms; retrying")); // the replay still timed out
 		// a later answering connection replays again — and now swallows: the client has been told
-		// to retry, so it gets no answer for an id it gave up on, and no second -32000. Asserted
-		// only once the fake has actually SENT that replay answer (not on a timer).
+		// to retry, so it gets no answer for an id it gave up on, and no second -32000. The swallow
+		// path always writes list_changed before forwarding anything, so waiting for that line pins
+		// the whole completion without a timer.
 		broker.answerInitialize = true;
 		await waitFor(() => broker.connections >= 3);
 		await waitFor(() => broker.initializeAnswers >= 1);
-		await realSleep(20);
+		await b.client.waitNext(isListChanged);
 		expect(b.client.lines.filter(isResponse(1))).toHaveLength(0);
 		expect(b.client.lines.filter(isStale(1))).toHaveLength(1);
 	});

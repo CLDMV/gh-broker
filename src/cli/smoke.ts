@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-06T06:12:14-08:00 (1793974334)
+ *	@Last modified time: 2026-11-23T19:39:25-08:00 (1795491565)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -67,7 +67,6 @@ function connectWithRetry(socketPath: string, deadline: number): Promise<Socket>
 
 function handshake(sock: Socket, deadline: number): Promise<SmokeResult> {
 	return new Promise<SmokeResult>((resolve, reject) => {
-		let buf = "";
 		let idc = 0;
 		const pending = new Map<number, { res: (v: unknown) => void; rej: (e: Error) => void }>();
 		const timer = setTimeout(
@@ -94,26 +93,42 @@ function handshake(sock: Socket, deadline: number): Promise<SmokeResult> {
 			cleanup();
 			reject(new Error(`smoke: socket error: ${e.message}`));
 		});
-		sock.on("data", (d) => {
-			buf += d.toString("utf8");
-			let nl;
-			while ((nl = buf.indexOf("\n")) >= 0) {
-				const line = buf.slice(0, nl);
-				buf = buf.slice(nl + 1);
-				if (!line.trim()) continue;
-				let msg: RpcMessage;
-				try {
-					msg = JSON.parse(line);
-				} catch {
-					continue;
-				}
-				if (msg.id != null && pending.has(msg.id)) {
-					const { res, rej } = pending.get(msg.id)!;
-					pending.delete(msg.id);
-					if (msg.error) rej(new Error(msg.error.message || "rpc error"));
-					else res(msg.result);
-				}
+		// Chunks arrive as strings (setEncoding, as the connect bridge does): a multi-byte character
+		// split across reads decodes correctly and the line stays byte-identical.
+		sock.setEncoding("utf8");
+		// The partial line is an array of chunks: only the new chunk is searched for a newline (a
+		// newline can't straddle chunks, and earlier chunks had none), so framing stays linear
+		// instead of rescanning a growing buffer on every chunk (the pattern #193 removed from the
+		// bridge).
+		let pieces: string[] = [];
+		/** Dispatch one complete line: blank and unparseable ones are ignored, answers settle their senders. */
+		const onLine = (line: string): void => {
+			if (!line.trim()) return;
+			let msg: RpcMessage;
+			try {
+				msg = JSON.parse(line);
+			} catch {
+				return;
 			}
+			if (msg.id != null && pending.has(msg.id)) {
+				const { res, rej } = pending.get(msg.id)!;
+				pending.delete(msg.id);
+				if (msg.error) rej(new Error(msg.error.message || "rpc error"));
+				else res(msg.result);
+			}
+		};
+		sock.on("data", (chunk: string) => {
+			let at = 0; // everything before this in the chunk is already cut into lines
+			for (;;) {
+				const nl = chunk.indexOf("\n", at);
+				if (nl < 0) break;
+				pieces.push(chunk.slice(at, nl));
+				const line = pieces.join("");
+				pieces = [];
+				onLine(line);
+				at = nl + 1;
+			}
+			if (at < chunk.length) pieces.push(chunk.slice(at));
 		});
 
 		void (async () => {
