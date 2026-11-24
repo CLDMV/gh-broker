@@ -313,6 +313,17 @@ describe("upgradeCommand", () => {
 		expect(out[out.length - 1]).toMatch(/^✅ gh-broker is at .*; some sessions not reconnected$/);
 	});
 
+	it("a reconnect that exited 0 because its only untyped panes were already on the bridge prints no skip notice (#251)", () => {
+		// agent reconnect exits 0 when the only panes it didn't type into are already running the
+		// connect bridge (they aren't skips — the sessions recover on their own), so upgrade must
+		// not read that as "some sessions were skipped" and must not say reconnect was skipped.
+		const { d, out } = makeDeps();
+		expect(upgradeCommand([], config, d)).toBe(0);
+		expect(d.runNewBinary).toHaveBeenCalledWith(["agent", "reconnect"]);
+		expect(out.some((l: string) => l.includes("some sessions were skipped"))).toBe(false);
+		expect(out.at(-1)).toBe("✅ gh-broker is at latest");
+	});
+
 	it("--no-reconnect leaves two steps and never runs the new binary's reconnect", () => {
 		const { d, out } = makeDeps();
 		expect(upgradeCommand(["--no-reconnect"], config, d)).toBe(0);

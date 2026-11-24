@@ -45,7 +45,7 @@ Commands:
   agent remove <user>        unregister an agent: empty its group, restart, MCP entry, lock state
   agent list                 each agent, its socket, and whether its MCP config points at it
   agent sync [<user>]        re-apply the MCP config for one agent or all
-  agent reconnect [<user>]   send "/mcp reconnect <key>" to the agent's running Claude Code sessions (--dry-run lists them)
+  agent reconnect [<user>]   send "/mcp reconnect <key>" to the agent's running Claude Code sessions that need it (--dry-run lists them)
   otp status [<user>] [--json]
                              lock state per agent
   otp list [--json]          who is locked out now, and the command that clears each
