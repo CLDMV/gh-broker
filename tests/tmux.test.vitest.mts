@@ -11,6 +11,7 @@ import {
 } from "../src/cli/tmux.ts";
 
 const INFO = { uid: 1000, gid: 1000, home: "/home/repo" };
+const DIR = "/run/gh-broker/agents"; // the agents directory the broker's sockets live in
 const SERVER = (socket = "/tmp/tmux-1000/default", binary = "tmux"): TmuxServer => ({ socket, binary });
 const noServer = (socket: string) => ({ socket, why: "no server process for this socket" });
 
@@ -241,9 +242,10 @@ describe("tmuxPanes", () => {
 	const claudeStat = (pid: number, state = "S", ppid = 1, pgrp = pid, tpgid = pid): string =>
 		`${pid} (claude) ${state} ${ppid} ${pgrp} 100 34828 ${tpgid} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0`;
 
-	it("lists the panes whose foreground job is the agent's own Claude Code, with screen and mode flags", () => {
+	it("lists the panes whose foreground job is the agent's own Claude Code, with screen, session, cwd and mode flags", () => {
 		const h = host({
-			listing: "%0|@|200|@|0|@|0|@|claude\n%1|@|300|@|0|@|0|@|bash\n%2|@|400|@|1|@|0|@|claude\n%3|@|500|@|0|@|1|@|bash\n",
+			listing:
+				"%0|@|200|@|0|@|0|@|claude|@|main|@|/home/glm\n%1|@|300|@|0|@|0|@|bash|@|main|@|/home/glm\n%2|@|400|@|1|@|0|@|claude|@|dev|@|/tmp\n%3|@|500|@|0|@|1|@|bash|@|main|@|/home/glm\n",
 			procs: {
 				"200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }),
 				// a background claude under a shell the user is typing at: same tree, not foreground
@@ -257,7 +259,7 @@ describe("tmuxPanes", () => {
 			},
 			capture: { "%0": "✻ Waiting for 1 background agent to finish\n\n❯ \n" }
 		});
-		const panes = tmuxPanes(SERVER(), INFO, h);
+		const panes = tmuxPanes(SERVER(), INFO, DIR, h);
 		expect(panes).toEqual([
 			{
 				id: "%0",
@@ -266,17 +268,66 @@ describe("tmuxPanes", () => {
 				foreground: true,
 				inMode: false,
 				synchronized: false,
+				session: "main",
+				cwd: "/home/glm",
 				configDir: undefined,
-				timedOut: undefined
+				timedOut: undefined,
+				brokerChild: undefined
 			},
-			{ id: "%1", pid: 301, text: "", foreground: false, inMode: false, synchronized: false, configDir: undefined, timedOut: undefined },
-			{ id: "%2", pid: 400, text: "", foreground: false, inMode: true, synchronized: false, configDir: undefined, timedOut: undefined }
+			{
+				id: "%1",
+				pid: 301,
+				text: "",
+				foreground: false,
+				inMode: false,
+				synchronized: false,
+				session: "main",
+				cwd: "/home/glm",
+				configDir: undefined,
+				timedOut: undefined,
+				brokerChild: undefined
+			},
+			{
+				id: "%2",
+				pid: 400,
+				text: "",
+				foreground: false,
+				inMode: true,
+				synchronized: false,
+				session: "dev",
+				cwd: "/tmp",
+				configDir: undefined,
+				timedOut: undefined,
+				brokerChild: undefined
+			}
 		]);
+	});
+
+	it("a `|@|` in a pane's path doesn't truncate the cwd: the cwd is the remainder of the line", () => {
+		const h = host({
+			listing: "%0|@|200|@|0|@|0|@|claude|@|main|@|/tmp/we|@|ird\n",
+			procs: { "200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }) },
+			capture: { "%0": "❯ \n" }
+		});
+		const [p] = tmuxPanes(SERVER(), INFO, DIR, h);
+		expect(p).toEqual({
+			id: "%0",
+			pid: 200,
+			text: "❯ \n",
+			foreground: true,
+			inMode: false,
+			synchronized: false,
+			session: "main",
+			cwd: "/tmp/we|@|ird",
+			configDir: undefined,
+			timedOut: undefined,
+			brokerChild: undefined
+		});
 	});
 
 	it("runs every tmux command as the agent through /usr/bin/setpriv (groups kept), with the server's own binary, its HOME, a UTF-8 locale, no $TMUX, and a timeout", () => {
 		const h = host({ listing: "", procs: {}, hasSetpriv: true });
-		tmuxPanes(SERVER("/tmp/tmux-1000/default", "/usr/local/bin/tmux"), INFO, h);
+		tmuxPanes(SERVER("/tmp/tmux-1000/default", "/usr/local/bin/tmux"), INFO, DIR, h);
 		const { cmd, args, opts } = h.last();
 		expect(cmd).toBe("/usr/bin/setpriv");
 		expect(args.slice(0, 5)).toEqual([`--reuid=${INFO.uid}`, `--regid=${INFO.gid}`, "--init-groups", "--", "/usr/local/bin/tmux"]);
@@ -286,7 +337,7 @@ describe("tmuxPanes", () => {
 			"list-panes",
 			"-a",
 			"-F",
-			"#{pane_id}|@|#{pane_pid}|@|#{pane_in_mode}|@|#{pane_synchronized}|@|#{pane_current_command}"
+			"#{pane_id}|@|#{pane_pid}|@|#{pane_in_mode}|@|#{pane_synchronized}|@|#{pane_current_command}|@|#{session_name}|@|#{pane_current_path}"
 		]);
 		expect(opts.uid).toBeUndefined(); // setpriv does the switch, with the agent's groups
 		expect(opts.cwd).toBe("/");
@@ -300,7 +351,7 @@ describe("tmuxPanes", () => {
 
 	it("falls back to a uid/gid spawn when setpriv is missing", () => {
 		const h = host({ listing: "", procs: {}, hasSetpriv: false });
-		tmuxPanes(SERVER("/tmp/tmux-1000/default", "/usr/bin/tmux"), INFO, h);
+		tmuxPanes(SERVER("/tmp/tmux-1000/default", "/usr/bin/tmux"), INFO, DIR, h);
 		const { cmd, args, opts } = h.last();
 		expect(cmd).toBe("/usr/bin/tmux");
 		expect(args.slice(0, 2)).toEqual(["-S", "/tmp/tmux-1000/default"]);
@@ -311,9 +362,9 @@ describe("tmuxPanes", () => {
 	it("a tmux command killed at the timeout raises TmuxTimeout: the listing rethrows it, a capture marks the pane", () => {
 		const timedOut = { status: null, signal: "SIGTERM", stdout: "", stderr: "" };
 		const lister = host({ result: timedOut });
-		expect(() => tmuxPanes(SERVER(), INFO, lister)).toThrow(TmuxTimeout);
+		expect(() => tmuxPanes(SERVER(), INFO, DIR, lister)).toThrow(TmuxTimeout);
 		const h = host({
-			listing: "%0|@|200|@|0|@|0|@|claude\n%1|@|300|@|0|@|0|@|claude\n",
+			listing: "%0|@|200|@|0|@|0|@|claude|@|main|@|/home/glm\n%1|@|300|@|0|@|0|@|claude|@|main|@|/home/glm\n",
 			procs: {
 				"200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }),
 				"300": proc(300, { cmdline: "claude\0", stat: claudeStat(300) })
@@ -328,7 +379,7 @@ describe("tmuxPanes", () => {
 			if (args.includes("capture-pane") && calls++ === 0) return timedOut;
 			return base(cmd, args, opts);
 		};
-		const panes = tmuxPanes(SERVER(), INFO, h);
+		const panes = tmuxPanes(SERVER(), INFO, DIR, h);
 		expect(panes.map((p) => ({ id: p.id, timedOut: p.timedOut, text: p.text }))).toEqual([
 			{ id: "%0", timedOut: true, text: "" },
 			{ id: "%1", timedOut: undefined, text: "❯ \n" }
@@ -338,7 +389,7 @@ describe("tmuxPanes", () => {
 	it("captures with -J (a wrapped indicator line must arrive joined), and reads the session's CLAUDE_CONFIG_DIR", () => {
 		const calls: string[][] = [];
 		const h = host({
-			listing: "%0|@|200|@|0|@|0|@|claude\n",
+			listing: "%0|@|200|@|0|@|0|@|claude|@|main|@|/home/glm\n",
 			procs: {
 				"200": proc(200, { cmdline: "claude\0", stat: claudeStat(200), environ: "PATH=/bin\0CLAUDE_CONFIG_DIR=/srv/glm/config/\0" })
 			},
@@ -349,7 +400,7 @@ describe("tmuxPanes", () => {
 			calls.push(args);
 			return base(cmd, args, opts);
 		};
-		const [p] = tmuxPanes(SERVER(), INFO, h);
+		const [p] = tmuxPanes(SERVER(), INFO, DIR, h);
 		expect(p).toEqual({
 			id: "%0",
 			pid: 200,
@@ -357,8 +408,11 @@ describe("tmuxPanes", () => {
 			foreground: true,
 			inMode: false,
 			synchronized: false,
+			session: "main",
+			cwd: "/home/glm",
 			configDir: "/srv/glm/config",
-			timedOut: undefined
+			timedOut: undefined,
+			brokerChild: undefined
 		});
 		expect(calls[1]).toEqual([
 			`--reuid=${INFO.uid}`,
@@ -378,15 +432,135 @@ describe("tmuxPanes", () => {
 	});
 
 	it("returns no panes for a socket that answers nothing, drops lines it can't parse, and survives an unreadable /proc", () => {
-		expect(tmuxPanes(SERVER(), INFO, host({ tmuxFails: true }))).toEqual([]);
+		expect(tmuxPanes(SERVER(), INFO, DIR, host({ tmuxFails: true }))).toEqual([]);
 		const h = host({ listing: "garbage\n%2|@|not-a-pid|@|0|@|0|@|claude\n", procs: {} });
-		expect(tmuxPanes(SERVER(), INFO, h)).toEqual([]);
+		expect(tmuxPanes(SERVER(), INFO, DIR, h)).toEqual([]);
 		const noProc = host({
 			listing: "%0|@|200|@|0|@|0|@|claude\n",
 			procs: { "200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }) },
 			procThrows: true
 		});
-		expect(tmuxPanes(SERVER(), INFO, noProc)).toEqual([]);
+		expect(tmuxPanes(SERVER(), INFO, DIR, noProc)).toEqual([]);
+		// A listing without the session/cwd fields (an older tmux) still parses: both read as unknown.
+		const short = host({
+			listing: "%4|@|600|@|0|@|0|@|claude\n",
+			procs: { "600": proc(600, { cmdline: "claude\0", stat: claudeStat(600) }) },
+			capture: { "%4": "❯ \n" }
+		});
+		expect(tmuxPanes(SERVER(), INFO, DIR, short)).toEqual([
+			{
+				id: "%4",
+				pid: 600,
+				text: "❯ \n",
+				foreground: true,
+				inMode: false,
+				synchronized: false,
+				session: "",
+				cwd: "",
+				configDir: undefined,
+				timedOut: undefined,
+				brokerChild: undefined
+			}
+		]);
+	});
+
+	// The broker-child verdict (#251): what the claude's descendants say about the session's MCP
+	// entry. `dir` bounds it — a bridge or socat child only counts when the socket its argv points
+	// at is inside the agents directory.
+	describe("the broker child verdict", () => {
+		const SOCK = `${DIR}/repo.sock`;
+		const NODE = "/usr/local/lib/gh-broker/node";
+		const CLI = "/usr/local/bin/gh-broker";
+		const BRIDGE = `${NODE}\0${CLI}\0connect\0${SOCK}\0`;
+		const SOCAT = `socat\0STDIO\0UNIX-CONNECT:${SOCK}\0`;
+		/** One pane whose claude (pid 200) has the given extra processes: [pid, cmdline, uid?, ppid?]. */
+		const panesWith = (procs: Array<[number, string, number?, number?]>): Pane[] =>
+			tmuxPanes(
+				SERVER(),
+				INFO,
+				DIR,
+				host({
+					listing: "%0|@|200|@|0|@|0|@|claude|@|main|@|/home/glm\n",
+					procs: {
+						"200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }),
+						...Object.fromEntries(
+							procs.map(([pid, cmdline, uid, ppid]) => [
+								String(pid),
+								proc(pid, { cmdline, uid: uid ?? INFO.uid, stat: stat(pid, "S", ppid ?? 200, 200, 200) })
+							])
+						)
+					},
+					capture: { "%0": "❯ \n" }
+				})
+			);
+		const verdict = (procs: Array<[number, string, number?, number?]>): "bridge" | "socat" | undefined => panesWith(procs)[0]?.brokerChild;
+
+		it("a claude running the connect bridge reads as bridge — the entry's exec'd child, directly or under sg", () => {
+			// the entry is `sg <group> -c exec <node> <cli> connect <sock>`: after the exec the child
+			// is the node bridge itself
+			expect(verdict([[201, BRIDGE]])).toBe("bridge");
+			// sg forks and waits, so the bridge usually sits a level down
+			expect(
+				verdict([
+					[201, `sg\0gh-broker-agent-repo\0-c\0exec ${NODE} ${CLI} connect ${SOCK}\0`],
+					[202, BRIDGE, INFO.uid, 201]
+				])
+			).toBe("bridge");
+		});
+
+		it("a claude still on the old socat entry reads as socat", () => {
+			expect(verdict([[201, SOCAT]])).toBe("socat");
+		});
+
+		it("no broker child (the entry failed or never started) reads as undefined", () => {
+			expect(verdict([])).toBeUndefined();
+			expect(verdict([[201, "bash\0"]])).toBeUndefined();
+		});
+
+		it("a broker-shaped descendant owned by another user doesn't classify", () => {
+			expect(verdict([[201, BRIDGE, 0]])).toBeUndefined();
+			expect(verdict([[201, SOCAT, 0]])).toBeUndefined();
+			// a foreign process between the claude and the agent's own bridge doesn't hide the bridge:
+			// the uid check is on the matched process, not on the walk
+			expect(
+				verdict([
+					[201, "sudo\0-u\0other\0x\0"],
+					[202, BRIDGE, INFO.uid, 201]
+				])
+			).toBe("bridge");
+		});
+
+		it("matches argv shape, not a substring: look-alikes that aren't the entry don't classify", () => {
+			// "connect" in the arguments of some other command
+			expect(verdict([[201, `bash\0-c\0echo connect ${SOCK}\0`]])).toBeUndefined();
+			// a node process, but not the gh-broker CLI
+			expect(verdict([[201, `${NODE}\0/srv/evil/serve.js\0connect\0${SOCK}\0`]])).toBeUndefined();
+			// a look-alike name planted next to the CLI: the basename must be exactly gh-broker
+			expect(verdict([[201, `${NODE}\0/srv/evil/gh-broker.evil\0connect\0${SOCK}\0`]])).toBeUndefined();
+			// the CLI, but not the connect verb
+			expect(verdict([[201, `${NODE}\0${CLI}\0serve\0${SOCK}\0`]])).toBeUndefined();
+			// the bridge shape with a word extra (a wrapper, a flag)
+			expect(verdict([[201, `${NODE}\0${CLI}\0connect\0${SOCK}\0--retry\0`]])).toBeUndefined();
+			// a relative socket path
+			expect(verdict([[201, `${NODE}\0${CLI}\0connect\0run/gh-broker/agents/repo.sock\0`]])).toBeUndefined();
+			// not socat
+			expect(verdict([[201, `mysock\0STDIO\0UNIX-CONNECT:${SOCK}\0`]])).toBeUndefined();
+			expect(verdict([[201, `socat\0TCP-LISTEN:1234\0`]])).toBeUndefined();
+		});
+
+		it("a socket outside the agents directory doesn't classify — bridge or socat", () => {
+			expect(verdict([[201, `${NODE}\0${CLI}\0connect\0/tmp/evil.sock\0`]])).toBeUndefined();
+			expect(verdict([[201, `socat\0STDIO\0UNIX-CONNECT:/tmp/evil.sock\0`]])).toBeUndefined();
+		});
+
+		it("the bridge wins when a session briefly has both the bridge and the old socat child", () => {
+			expect(
+				verdict([
+					[201, SOCAT],
+					[202, BRIDGE]
+				])
+			).toBe("bridge");
+		});
 	});
 });
 

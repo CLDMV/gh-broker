@@ -19,17 +19,18 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.16.2 (November 2026)
+### Latest: v0.17.0 (November 2026)
 
-- **`agent add` refuses before it saves anything.** With the bridge binary missing, `agent add --claude-config` used to save the folders and then refuse, leaving them remembered for an agent that was never registered. It now checks first and writes nothing.
-- [View full v0.16.2 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.2.md)
+- **`agent reconnect` leaves sessions on the bridge alone.** It reads each session's running process tree, and one already on the `connect` bridge, which redials a restarted broker by itself, is listed but not typed into. So `upgrade` no longer skips or waits on panes that never needed it. `--all` restores the old send-to-everything behaviour.
+- **Pane lines name the tmux session and folder, and `--session` picks panes.** `%77 (main, /home/repo) github skipped (…)` says where a pane is, and `agent reconnect repo --session %77` retries just that one.
+- [View full v0.17.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.17.0.md)
 
 ### Recent Releases
 
+- **v0.16.2** (November 2026) — `agent add` refuses a missing bridge binary before saving `--claude-config` folders ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.2.md))
 - **v0.16.1** (November 2026) — the node download extracts `bin/node` from the archive's real top folder, so `install` works on a box with no root-owned node ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.1.md))
 - **v0.16.0** (November 2026) — MCP sessions survive a broker restart (`gh-broker connect`), and the broker keeps its own node at `/usr/local/lib/gh-broker/node` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.0.md))
 - **v0.15.0** (November 2026) — `agent reconnect --wait` and `upgrade --wait` reconnect sessions once typing or a dialog clears ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.15.0.md))
-- **v0.14.2** (November 2026) — `agent reconnect` reads 24-bit colour sessions, and skipped panes no longer fail `upgrade` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.2.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 

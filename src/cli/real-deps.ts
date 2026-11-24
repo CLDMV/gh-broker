@@ -271,7 +271,7 @@ export function realDeps(): CliDeps {
 		restart: restartService,
 		// Every tmux command runs AS THE AGENT (uid/gid, its HOME, no $TMUX) — see src/cli/tmux.ts.
 		tmuxSockets: (info) => tmuxSockets(info),
-		tmuxPanes: (socket, info) => tmuxPanes(socket, info),
+		tmuxPanes: (socket, info, dir) => tmuxPanes(socket, info, dir),
 		tmuxPaneText: (socket, pane, info) => tmuxPaneText(socket, pane, info),
 		tmuxSend: (socket, pane, text, info) => tmuxSend(socket, pane, text, info),
 		// A synchronous pause: the CLI is synchronous, and --wait only polls a few panes.

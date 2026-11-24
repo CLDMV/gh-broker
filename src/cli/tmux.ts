@@ -36,8 +36,14 @@
  * Claude Code only when a claude process owned by the agent runs in its tree AND is the pane
  * tty's foreground job (pgrp == the pane pid's tpgid, not stopped, and the pane's current command
  * is claude/node) — a Ctrl-Z'd or background claude never gets text typed into the shell above
- * it. The effects take their host access injected (defaults below are the real /proc, /tmp and
- * commands), so the unit tests never spawn anything or read a real /proc.
+ * it. Each pane also records what its claude's DESCENDANTS say about the session's broker MCP
+ * child (#251): the connect bridge the entry runs (a session that has one recovers from a broker
+ * restart on its own, so reconnect need not type into it), the old socat entry, or none. The
+ * verdict comes from the running process tree rather than the .claude.json file — the file can
+ * already say `connect` while the session still runs the socat entry it loaded before the file
+ * was rewritten, which is exactly the case the reconnect step exists for. The effects take their
+ * host access injected (defaults below are the real /proc, /tmp and commands), so the unit tests
+ * never spawn anything or read a real /proc.
  */
 import { basename } from "node:path";
 import { lstatSync, readdirSync, readlinkSync } from "node:fs";
@@ -73,8 +79,21 @@ export interface Pane {
 	inMode: boolean;
 	/** synchronize-panes is on: keys would go to every pane in the window. */
 	synchronized: boolean;
+	/** The tmux session the pane is in (user-controlled: clean it before printing). */
+	session: string;
+	/** The pane's working directory, as tmux sees it (user-controlled: clean it before printing). */
+	cwd: string;
 	/** The session's CLAUDE_CONFIG_DIR, when it runs with one. */
 	configDir?: string;
+	/**
+	 * What the claude's process tree says about its broker MCP child (#251): `"bridge"` — one
+	 * descendant is the connect bridge the entry runs, so the session recovers from a broker
+	 * restart on its own; `"socat"` — one is the old socat entry, which dies with the socket;
+	 * undefined — no broker child at all (the entry failed or never started). Judged here, where
+	 * the process table is at hand, not from the session's .claude.json: the file can already say
+	 * `connect` while the session still runs the entry it loaded before the file was rewritten.
+	 */
+	brokerChild?: "bridge" | "socat";
 	/** tmux did not answer in time while capturing this pane's screen: skip it, don't judge it. */
 	timedOut?: boolean;
 }
@@ -117,7 +136,15 @@ export const TMUX_TIMEOUT_MS = 5000;
 
 /** The list-panes field separator: printable ASCII, so no locale can rewrite it (the tab once arrived as `_`). */
 const SEP = "|@|";
-const FORMAT = ["#{pane_id}", "#{pane_pid}", "#{pane_in_mode}", "#{pane_synchronized}", "#{pane_current_command}"].join(SEP);
+const FORMAT = [
+	"#{pane_id}",
+	"#{pane_pid}",
+	"#{pane_in_mode}",
+	"#{pane_synchronized}",
+	"#{pane_current_command}",
+	"#{session_name}",
+	"#{pane_current_path}"
+].join(SEP);
 
 /** One tmux command that would not answer in time. */
 export class TmuxTimeout extends Error {}
@@ -301,8 +328,72 @@ function claudePidsInTree(pid: number, table: Map<number, ProcEntry>, childrenOf
 	return out;
 }
 
-/** The Claude Code panes on one tmux server (a socket that answers nothing has none). */
-export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions = {}): Pane[] {
+/** Whether `path` is an absolute path inside the agents directory (the sockets the MCP entries dial). */
+const underDir = (path: string, dir: string): boolean => path.startsWith("/") && path.startsWith(`${dir.replace(/\/+$/, "")}/`);
+
+/**
+ * Whether argv is the connect bridge the broker's MCP entry runs: the entry is
+ * `sg <group> -c exec <node> <cli> connect <socket>`, so after the exec the claude's descendant is
+ * `<node> <cli> connect <socket>` — argv[0] a node binary, argv[1] the gh-broker CLI (npm's bin
+ * link: the basename is exactly "gh-broker"), the `connect` verb, and an absolute socket path
+ * inside the agents directory. The exact shape, not a substring: a process that merely has
+ * "connect" in its arguments is not the bridge.
+ */
+const isBridgeArgv = (argv: string[], dir: string): boolean =>
+	argv.length === 4 &&
+	basename(argv[0] ?? "") === "node" &&
+	basename(argv[1] ?? "") === "gh-broker" &&
+	argv[2] === "connect" &&
+	underDir(argv[3] ?? "", dir);
+
+/** Whether argv is the old socat entry the installer rewrote: `socat … UNIX-CONNECT:<socket>` with the socket inside the agents directory. */
+const isSocatArgv = (argv: string[], dir: string): boolean =>
+	basename(argv[0] ?? "") === "socat" &&
+	argv.some((a) => {
+		const m = /^UNIX-CONNECT:(\/.+)$/.exec(a);
+		return m !== null && underDir(m[1]!, dir);
+	});
+
+/**
+ * What the claude process `pid` runs as its broker MCP child, from its own descendants:
+ * `"bridge"` when one is the connect bridge (the session recovers from a broker restart on its
+ * own), `"socat"` when one is the old socat entry, undefined when there is no broker child at all
+ * (the entry failed or never started). Breadth-first like claudePidsInTree; the bridge wins over
+ * socat wherever either sits in the tree, since a session mid-rewrite can briefly have both and
+ * the bridge is the one that recovers. A candidate must be owned by the agent uid — the child is
+ * what the installer's entry exec'd for that user, and another user's look-alike must not read as
+ * the session's bridge.
+ */
+function brokerChildOf(
+	pid: number,
+	table: Map<number, ProcEntry>,
+	childrenOf: Map<number, number[]>,
+	dir: string,
+	uid: number
+): "bridge" | "socat" | undefined {
+	const seen = new Set([pid]);
+	const queue = [...(childrenOf.get(pid) ?? [])];
+	let socat = false;
+	for (let i = 0; i < queue.length; i++) {
+		const child = queue[i]!;
+		if (seen.has(child)) continue;
+		seen.add(child);
+		for (const grand of childrenOf.get(child) ?? []) queue.push(grand);
+		const entry = table.get(child);
+		if (!entry || entry.uid !== uid) continue;
+		if (isBridgeArgv(entry.argv, dir)) return "bridge";
+		if (isSocatArgv(entry.argv, dir)) socat = true;
+	}
+	return socat ? "socat" : undefined;
+}
+
+/**
+ * The Claude Code panes on one tmux server (a socket that answers nothing has none). `dir` is the
+ * agents directory the broker's sockets live in (`agentsDir(config.listen)`): a bridge or socat
+ * child only counts when the socket its argv points at is inside it, so a look-alike aimed at some
+ * other socket never reads as the session's broker child.
+ */
+export function tmuxPanes(server: TmuxServer, info: UserInfo, dir: string, opts: TmuxOptions = {}): Pane[] {
 	const { proc, readdir, lstat, head, exec, hasCmd } = resolve(opts);
 	let listing: string;
 	try {
@@ -319,7 +410,9 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 	for (const [pid, e] of table) if (Number.isInteger(e.ppid)) childrenOf.set(e.ppid, [...(childrenOf.get(e.ppid) ?? []), pid]);
 	const panes: Pane[] = [];
 	for (const line of listing.split("\n")) {
-		const [id, pidText, inMode, synchronized, command] = line.split(SEP);
+		// The cwd is the remainder of the line, so a `|@|` in a path doesn't truncate it (a newline
+		// in the path still splits lines — tmux format output has no escaping).
+		const [id, pidText, inMode, synchronized, command, session, ...pathParts] = line.split(SEP);
 		const panePid = Number(pidText);
 		if (!id?.startsWith("%") || !Number.isInteger(panePid)) continue;
 		const candidates = claudePidsInTree(panePid, table, childrenOf);
@@ -352,7 +445,15 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 			foreground: fg !== undefined,
 			inMode: inMode !== undefined && inMode !== "0" && inMode !== "",
 			synchronized: synchronized === "1",
+			// An older listing (or a field that came back empty) reads as unknown, not as a guess.
+			session: session ?? "",
+			cwd: pathParts.join(SEP),
 			configDir: configDirOf(claude, { proc, readHead: head }),
+			// Judged from the running process tree here, where table/childrenOf are at hand — never
+			// from the .claude.json file, which can already say `connect` while the session still
+			// runs the socat entry it loaded before the file was rewritten (the case the reconnect
+			// step exists for).
+			brokerChild: brokerChildOf(claude, table, childrenOf, dir, info.uid),
 			timedOut
 		});
 	}

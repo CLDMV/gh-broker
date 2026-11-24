@@ -15,7 +15,9 @@
 
 /**
  * `gh-broker agent reconnect` (#223): send `/mcp reconnect <key>` to each running Claude Code
- * session of a registered agent (or one agent). The key is the agent's actual `mcpServers` entry
+ * session of a registered agent (or one agent) that needs it (#251) — a session already running
+ * the connect bridge recovers from a broker restart on its own, so it is listed but not typed
+ * into (--all sends to it anyway). The key is the agent's actual `mcpServers` entry
  * for the broker, read back from its `.claude.json` files — mcp-config.ts writes those entries, so
  * brokerKeyOf knows what one looks like wherever it is. The sessions are found as root through
  * every tmux server the agent user runs (src/cli/tmux.ts), but every tmux command runs AS THE
@@ -35,15 +37,22 @@ import type { ConfigLayer } from "./config-merge.ts";
 export const WAIT_UNIT = "gh-broker-reconnect-wait";
 
 export const RECONNECT_HELP = `agent reconnect [<user>] [--dry-run] [--wait <time> [--foreground]]
+[--session <name|%pane>] [--all]
 
-Sends "/mcp reconnect <key>" to every running Claude Code session of a
-registered agent (or all of them): the ones still on an old socat entry,
-or whose connect bridge did not recover from a broker restart.
+Sends "/mcp reconnect <key>" to the running Claude Code sessions of a
+registered agent (or all of them) that need it: the ones still on an old
+socat entry, or with no broker MCP process running at all. A session already
+running the connect bridge redials a restarted broker on its own (the bridge
+never gives up), so typing into it is noise: those panes are listed as
+already on the bridge, and are not counted as skipped. --all sends to every
+running Claude Code session instead.
 <key> is the agent's actual mcpServers entry for the broker, read back from
 its .claude.json files. A pane is skipped, with its id and the reason, when
 someone is typing in it, a dialog (a permission prompt, a question, a menu)
 is showing, it is in copy mode, or its key is not one that is safe to type
 blind. Claude working in it is fine: what is typed is queued.
+--session <name|%pane> (repeatable) keeps only the panes whose tmux session
+name or pane id matches (a value that matches nothing is reported).
 --dry-run lists what it would send where. --wait <time> (e.g. 90s, 5m; at
 most 30m) keeps checking the panes skipped for text in the input box or a
 dialog every few seconds, and sends to each once it is clear; the ones still
@@ -52,8 +61,10 @@ blocked when the time is up are skipped. The waiting runs in the background
 wait survives the terminal closing; follow it with
 journalctl -u ${WAIT_UNIT} -f). A new --wait replaces one still running.
 --foreground waits here instead. Exits 0 when every pane was sent to (or
-handed to the background wait), 3 when some were skipped (run it again once
-they're clear), 1 when a named user doesn't exist.`;
+handed to the background wait, or the only ones it didn't type into were
+already on the bridge), 3 when some were skipped (run it again once
+they're clear), 1 when a named user doesn't exist or a --session matched
+no pane.`;
 
 /** The effects `agent reconnect` (and `upgrade`'s last step) use. */
 export interface ReconnectDeps {
@@ -64,8 +75,8 @@ export interface ReconnectDeps {
 	mcpIO: FolderIo;
 	/** The agent's tmux servers: socket + the binary that owns it, and the sockets skipped (dead, or no owning server process found). */
 	tmuxSockets: (info: UserInfo) => TmuxServers;
-	/** The Claude Code panes on one tmux server, with their screen and foreground/mode state. */
-	tmuxPanes: (server: TmuxServer, info: UserInfo) => Pane[];
+	/** The Claude Code panes on one tmux server, with their screen and foreground/mode state. `dir` is the agents directory the broker's sockets live in, for the broker-child verdict (see Pane.brokerChild). */
+	tmuxPanes: (server: TmuxServer, info: UserInfo, dir: string) => Pane[];
 	/** Re-capture one pane's screen right before sending; undefined when the pane is gone. */
 	tmuxPaneText: (server: TmuxServer, pane: string, info: UserInfo) => string | undefined;
 	/** Send literal text to a pane as the agent and press Enter (tmux send-keys -l, then a separate Enter). */
@@ -186,7 +197,7 @@ interface Retry {
 }
 const RETRY = /^([a-z_][a-z0-9_-]*):(%\d+)@(\/.+)$/;
 
-/** Split `agent reconnect` arguments into the agent users (at most one), --dry-run, --wait, --foreground, --retry and --help. */
+/** Split `agent reconnect` arguments into the agent users (at most one), --dry-run, --wait, --foreground, --session, --retry, --all and --help. */
 function parseReconnectArgs(rest: string[]): {
 	users: string[];
 	dryRun: boolean;
@@ -194,13 +205,17 @@ function parseReconnectArgs(rest: string[]): {
 	waitMs: number;
 	wait?: string;
 	foreground: boolean;
+	sessions: string[];
 	retry?: Retry[];
+	all: boolean;
 } {
 	const users: string[] = [];
 	let dryRun = false;
 	let help = false;
 	let foreground = false;
 	let retry: Retry[] | undefined;
+	let all = false;
+	const sessions: string[] = [];
 	let waitMs = 0;
 	let wait: string | undefined;
 	for (let i = 0; i < rest.length; i++) {
@@ -208,7 +223,15 @@ function parseReconnectArgs(rest: string[]): {
 		if (a === "--dry-run") dryRun = true;
 		else if (a === "-h" || a === "--help") help = true;
 		else if (a === "--foreground") foreground = true;
-		else if (a === "--retry") {
+		else if (a === "--all") all = true;
+		else if (a === "--session" || a.startsWith("--session=")) {
+			const v = a === "--session" ? rest[++i] : a.slice("--session=".length);
+			// A bare --session followed by another flag (or nothing) is a mistake, not a
+			// session called "--dry-run": refuse it. --session=-x names that one explicitly.
+			if (v === undefined || v === "" || (a === "--session" && v.startsWith("-")))
+				throw new Error("--session takes a tmux session name or a pane id, e.g. --session main or --session %3");
+			sessions.push(v);
+		} else if (a === "--retry") {
 			// Internal: the backgrounded --wait run gets the panes it waits on this way, and
 			// touches no other pane.
 			const m = RETRY.exec(rest[++i] ?? "");
@@ -226,7 +249,11 @@ function parseReconnectArgs(rest: string[]): {
 	if (users.length > 1) throw new Error("name at most one agent user: sudo gh-broker agent reconnect [<user>]");
 	if (foreground && waitMs === 0) throw new Error("--foreground is for --wait");
 	if (retry && (waitMs === 0 || !foreground || users.length || dryRun)) throw new Error("--retry is for the background --wait run");
-	return { users, dryRun, help, waitMs, foreground, ...(wait !== undefined ? { wait } : {}), ...(retry ? { retry } : {}) };
+	// The background run already has its exact panes (--retry); the foreground run never forwards
+	// --session to it, and --all would widen it to panes it was never handed.
+	if (retry && sessions.length) throw new Error("--session is not for the background --wait run");
+	if (retry && all) throw new Error("--all is not for the background --wait run");
+	return { users, dryRun, help, waitMs, foreground, sessions, all, ...(wait !== undefined ? { wait } : {}), ...(retry ? { retry } : {}) };
 }
 
 /**
@@ -257,10 +284,11 @@ function keyFor(pane: Pane, info: UserInfo, keys: Map<string, string>): string |
 
 /**
  * Run one `agent reconnect`. Returns the exit code: 0 when every pane found was sent to (or
- * there were none), 3 when some were only skipped (they can be retried), 1 when a user is missing.
+ * there were none), 3 when some were only skipped (they can be retried), 1 when a user is missing
+ * or a --session matched no pane.
  */
 export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps): number {
-	const { users, dryRun, help, waitMs, wait, foreground, retry } = parseReconnectArgs(rest);
+	const { users, dryRun, help, waitMs, wait, foreground, retry, sessions, all } = parseReconnectArgs(rest);
 	if (help) {
 		d.log(RECONNECT_HELP);
 		return 0;
@@ -273,19 +301,57 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 	}
 	let sent = 0;
 	let skipped = 0;
+	// Panes already running the connect bridge: listed like the skips, but counted apart — the
+	// session needs nothing (it recovers from a broker restart on its own), so they don't fail the
+	// run and upgrade's "some sessions were skipped" notice doesn't fire for them (#251).
+	let onBridge = 0;
 	let missing = 0;
-	const skip = (user: string, socket: string, pane: string, key: string | undefined, why: string): void => {
-		d.log(`${user} ${clean(socket)} ${clean(pane)} ${key ?? "-"} skipped (${why})`);
+	// --session keeps only the panes whose exact tmux session name or pane id matches. A pane it
+	// excludes is not listed at all; a value that matches no pane anywhere in the run is reported
+	// at the end, and fails the run.
+	const matched = new Set<string>();
+	const wanted = (pane: Pane): boolean => {
+		if (sessions.length === 0) return true;
+		const hit = sessions.filter((s) => s === pane.session || s === pane.id);
+		for (const s of hit) matched.add(s);
+		return hit.length > 0;
+	};
+	// The pane's session and working directory, cleaned, printed after its id. Computed once at
+	// selection time: the waiting loop holds no Pane, so --wait lines carry it on the entry.
+	const where = (pane: Pane): string => ` (${clean(pane.session)}, ${clean(pane.cwd)})`;
+	// The shape every per-pane line shares: user, socket, pane, where it sits, key, verdict.
+	const line = (user: string, socket: string, pane: string, key: string | undefined, verdict: string, loc = ""): string =>
+		`${user} ${clean(socket)} ${clean(pane)}${loc} ${key ?? "-"} ${verdict}`;
+	const skip = (user: string, socket: string, pane: string, key: string | undefined, why: string, loc = ""): void => {
+		d.log(line(user, socket, pane, key, `skipped (${why})`, loc));
 		skipped++;
 	};
 	// With --wait, a pane blocked only by text in its input box or a dialog is set aside and
 	// re-checked until it clears or the time runs out, instead of being skipped now.
-	const waiting: { user: string; socket: string; server: TmuxServer; info: UserInfo; pane: string; key: string; why: string }[] = [];
-	const blocked = (user: string, socket: string, server: TmuxServer, info: UserInfo, pane: string, key: string, why: string): void => {
+	const waiting: {
+		user: string;
+		socket: string;
+		server: TmuxServer;
+		info: UserInfo;
+		pane: string;
+		key: string;
+		why: string;
+		loc: string;
+	}[] = [];
+	const blocked = (
+		user: string,
+		socket: string,
+		server: TmuxServer,
+		info: UserInfo,
+		pane: string,
+		key: string,
+		why: string,
+		loc: string
+	): void => {
 		if (waitMs > 0 && !dryRun) {
-			d.log(`${user} ${clean(socket)} ${clean(pane)} ${key} waiting (${why})`);
-			waiting.push({ user, socket, server, info, pane, key, why });
-		} else skip(user, socket, pane, key, why);
+			d.log(line(user, socket, pane, key, `waiting (${why})`, loc));
+			waiting.push({ user, socket, server, info, pane, key, why, loc });
+		} else skip(user, socket, pane, key, why, loc);
 	};
 	// A background run looks only at the users and panes it was handed.
 	const retrying = (user: string, socket: string, pane: string): boolean =>
@@ -301,6 +367,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		const places: Place[] = [{ folder: info.home, saved: false }, ...extraFolders(info, d, config, user)];
 		const keys = keysOf(places, info, dir, d);
 		let panes = 0;
+		let listed = 0; // panes seen before the --session filter, for the no-sessions line below
 		const { servers, skipped: deadSockets } = d.tmuxSockets(info);
 		// Socket files whose tmux server has exited are leftovers, not sessions: one count line, not one line each.
 		if (deadSockets.length)
@@ -311,7 +378,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 			const socket = server.socket;
 			let panesOnServer: Pane[];
 			try {
-				panesOnServer = d.tmuxPanes(server, info);
+				panesOnServer = d.tmuxPanes(server, info, dir);
 			} catch (err) {
 				if (err instanceof TmuxTimeout) {
 					d.log(`${user} ${clean(socket)} - skipped (tmux timed out)`);
@@ -320,38 +387,48 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				}
 				throw err;
 			}
+			listed += panesOnServer.length;
 			for (const pane of panesOnServer) {
 				if (!retrying(user, socket, pane.id)) continue;
+				if (!wanted(pane)) continue;
 				panes++;
+				if (pane.brokerChild === "bridge" && !all) {
+					// Already running the connect bridge: the session recovers from a broker restart
+					// on its own, so typing into it is noise. Not a skip (see onBridge) and not a
+					// --wait candidate — it isn't blocked, there is nothing to wait for.
+					d.log(line(user, socket, pane.id, undefined, "skipped (already on the connect bridge)", where(pane)));
+					onBridge++;
+					continue;
+				}
 				if (pane.timedOut) {
-					skip(user, socket, pane.id, undefined, "tmux timed out");
+					skip(user, socket, pane.id, undefined, "tmux timed out", where(pane));
 					continue;
 				}
 				if (pane.inMode) {
-					skip(user, socket, pane.id, undefined, "pane is in copy mode");
+					skip(user, socket, pane.id, undefined, "pane is in copy mode", where(pane));
 					continue;
 				}
 				if (pane.synchronized) {
-					skip(user, socket, pane.id, undefined, "synchronize-panes is on");
+					skip(user, socket, pane.id, undefined, "synchronize-panes is on", where(pane));
 					continue;
 				}
 				// tmux pane ids are %<number>; anything else from the (agent-controlled) server is
 				// not typed at, and only its cleaned form reaches the log.
 				if (!/^%\d+$/.test(pane.id)) {
-					skip(user, socket, pane.id, undefined, "unsafe pane id");
+					skip(user, socket, pane.id, undefined, "unsafe pane id", where(pane));
 					continue;
 				}
 				const key = keyFor(pane, info, keys);
 				if (!key) {
-					skip(user, socket, pane.id, undefined, "no broker MCP entry in its .claude.json files");
+					skip(user, socket, pane.id, undefined, "no broker MCP entry in its .claude.json files", where(pane));
 					continue;
 				}
 				if (!safeKey(key)) {
-					skip(user, socket, pane.id, undefined, "unsafe MCP key");
+					skip(user, socket, pane.id, undefined, "unsafe MCP key", where(pane));
 					continue;
 				}
 				if (!pane.foreground) {
-					skip(user, socket, pane.id, key, "claude is not the pane's foreground job");
+					skip(user, socket, pane.id, key, "claude is not the pane's foreground job", where(pane));
 					continue;
 				}
 				const composer = composerState(pane.text);
@@ -363,12 +440,13 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 						info,
 						pane.id,
 						key,
-						composer === "typing" ? "composer not empty, or a dialog is showing" : "no Claude Code prompt on screen"
+						composer === "typing" ? "composer not empty, or a dialog is showing" : "no Claude Code prompt on screen",
+						where(pane)
 					);
 					continue;
 				}
 				if (dryRun) {
-					d.log(`${user} ${clean(socket)} ${clean(pane.id)} ${key} would send`);
+					d.log(line(user, socket, pane.id, key, "would send", where(pane)));
 				} else {
 					// Re-capture between the check and the send: the operator may have started
 					// typing (or the pane died) while the checks ran.
@@ -377,29 +455,32 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 						fresh = d.tmuxPaneText(server, pane.id, info);
 					} catch (err) {
 						if (!(err instanceof TmuxTimeout)) throw err;
-						skip(user, socket, pane.id, key, "tmux timed out");
+						skip(user, socket, pane.id, key, "tmux timed out", where(pane));
 						continue;
 					}
 					if (fresh === undefined) {
-						skip(user, socket, pane.id, key, "gone since capture");
+						skip(user, socket, pane.id, key, "gone since capture", where(pane));
 						continue;
 					}
 					if (composerState(fresh) !== "empty") {
-						blocked(user, socket, server, info, pane.id, key, "changed since capture");
+						blocked(user, socket, server, info, pane.id, key, "changed since capture", where(pane));
 						continue;
 					}
 					try {
 						d.tmuxSend(server, pane.id, `/mcp reconnect ${key}`, info);
 					} catch (err) {
-						skip(user, socket, pane.id, key, `send failed: ${clean((err as Error).message)}`);
+						skip(user, socket, pane.id, key, `send failed: ${clean((err as Error).message)}`, where(pane));
 						continue;
 					}
-					d.log(`${user} ${clean(socket)} ${clean(pane.id)} ${key} sent`);
+					d.log(line(user, socket, pane.id, key, "sent", where(pane)));
 				}
 				sent++;
 			}
 		}
-		if (panes === 0)
+		// With --session, panes the filter dropped are not listed. The "no sessions" line stays for
+		// an agent that had no Claude panes at all (so "no pane matched --session X" is not the only
+		// output), and is suppressed only when panes existed and the filter dropped them all.
+		if (panes === 0 && (sessions.length === 0 || listed === 0))
 			d.log(
 				retry
 					? `${user}: the panes waited on are gone`
@@ -436,7 +517,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				}
 				if (text === undefined) {
 					waiting.splice(i, 1);
-					skip(w.user, w.socket, w.pane, w.key, "gone while waiting");
+					skip(w.user, w.socket, w.pane, w.key, "gone while waiting", w.loc);
 					continue;
 				}
 				if (composerState(text) !== "empty") continue;
@@ -444,20 +525,27 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				try {
 					d.tmuxSend(w.server, w.pane, `/mcp reconnect ${w.key}`, w.info);
 				} catch (err) {
-					skip(w.user, w.socket, w.pane, w.key, `send failed: ${clean((err as Error).message)}`);
+					skip(w.user, w.socket, w.pane, w.key, `send failed: ${clean((err as Error).message)}`, w.loc);
 					continue;
 				}
-				d.log(`${w.user} ${clean(w.socket)} ${clean(w.pane)} ${w.key} sent`);
+				d.log(line(w.user, w.socket, w.pane, w.key, "sent", w.loc));
 				sent++;
 			}
 		}
-		for (const w of waiting) skip(w.user, w.socket, w.pane, w.key, `${w.why}; still after waiting ${wait}`);
+		for (const w of waiting) skip(w.user, w.socket, w.pane, w.key, `${w.why}; still after waiting ${wait}`, w.loc);
 	}
+	// A --session that matched no pane anywhere is the operator's typo to see, not a silent zero.
+	const unmatched = sessions.filter((s) => !matched.has(s));
+	for (const s of unmatched) d.error(`no pane matched --session ${clean(s)}`);
+	// The bridge panes are their own count, in brackets after the tail: they were listed (in a dry
+	// run too), but they are not skips — the sessions need nothing.
+	const bridge = onBridge > 0 ? ` (${onBridge} already on the bridge)` : "";
 	d.log(
 		dryRun
-			? `dry run: ${sent} pane(s) would get "/mcp reconnect"`
-			: `sent ${sent}, skipped ${skipped}${backgrounded ? `, waiting on ${backgrounded} in the background` : ""}`
+			? `dry run: ${sent} pane(s) would get "/mcp reconnect"${bridge}`
+			: `sent ${sent}, skipped ${skipped}${bridge}${backgrounded ? `, waiting on ${backgrounded} in the background` : ""}`
 	);
+	if (unmatched.length) return 1;
 	if (skipped === 0) return 0;
 	return missing > 0 ? 1 : 3;
 }

@@ -49,11 +49,14 @@ Usage: sudo gh-broker upgrade [--version <v>] [--force] [--no-reconnect] [--wait
   1. npm install -g --prefix /usr/local --ignore-scripts @cldmv/gh-broker@<latest|version>
   2. the newly installed binary's install, with these flags (see: gh-broker install --help)
   3. the newly installed binary's agent reconnect — "/mcp reconnect <key>" in every running
-     Claude Code session
+     Claude Code session that needs it: a session already on the connect bridge recovers from
+     the restart on its own and is left alone
 
 Stops at the first failed step and prints what to run to finish. Sessions step 3
 skips (someone typing, a dialog open) don't fail the upgrade; it says to rerun
-agent reconnect once they're clear. --wait <time> (e.g. 5m) is passed to step 3,
+agent reconnect once they're clear. (The sessions already on the bridge aren't
+skips at all: reconnect exits 0 when they're the only ones it didn't type into.)
+--wait <time> (e.g. 5m) is passed to step 3,
 which then keeps checking those sessions in the background (journalctl -u
 gh-broker-reconnect-wait -f) and sends once each is clear.
 --no-reconnect skips step 3.
