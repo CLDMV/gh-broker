@@ -381,7 +381,7 @@ describe("agent reconnect", () => {
 		const { d, out } = withPanes([pane("%3", IDLE), pane("%4", IDLE, { foreground: false })]);
 		expect(reconnect(["repo"], config, d)).toBe(3);
 		expect(d.tmuxSockets).toHaveBeenCalledWith(info);
-		expect(d.tmuxPanes).toHaveBeenCalledWith(SERVER, info);
+		expect(d.tmuxPanes).toHaveBeenCalledWith(SERVER, info, DIR);
 		expect(d.tmuxPaneText).toHaveBeenCalledWith(SERVER, "%3", info);
 		expect(d.tmuxSend).toHaveBeenCalledTimes(1);
 		expect(d.tmuxSend).toHaveBeenCalledWith(SERVER, "%3", "/mcp reconnect github", info);
@@ -690,6 +690,77 @@ describe("agent reconnect", () => {
 			expect(() => reconnect(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`, "--session", "main"], config, d)).toThrow(
 				"--session is not for the background --wait run"
 			);
+		});
+	});
+
+	// The broker-child verdict (#251): a session whose process tree already runs the connect bridge
+	// recovers from a broker restart on its own, so it is listed but not typed into, and it is not
+	// a skip — it doesn't fail the run and upgrade's skip notice doesn't fire for it. --all sends
+	// to it anyway.
+	describe("the connect bridge verdict", () => {
+		const onBridge = (id: string, over: Partial<Pane> = {}): Pane => pane(id, IDLE, { brokerChild: "bridge", ...over });
+
+		it("skips a session already on the connect bridge — listed, but not a skip: the run exits 0", () => {
+			const { d, out } = withPanes([onBridge("%1")]);
+			expect(reconnect(["repo"], config, d)).toBe(0);
+			expect(d.tmuxSend).not.toHaveBeenCalled();
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
+			expect(out[out.length - 1]).toBe("sent 0, skipped 0 (1 already on the bridge)");
+		});
+
+		it("sends to a session on the old socat entry, and to one with no broker child at all", () => {
+			const { d, out } = withPanes([pane("%1", IDLE, { brokerChild: "socat" }), pane("%2", IDLE)]);
+			expect(reconnect(["repo"], config, d)).toBe(0);
+			expect(d.tmuxSend).toHaveBeenCalledTimes(2);
+			expect(d.tmuxSend).toHaveBeenCalledWith(SERVER, "%1", "/mcp reconnect github", info);
+			expect(out[out.length - 1]).toBe("sent 2, skipped 0");
+		});
+
+		it("a bridge pane and a real skip together: the real skip fails the run, the bridge one doesn't", () => {
+			const { d, out } = withPanes([onBridge("%1"), pane("%2", "❯ half typed")]);
+			expect(reconnect(["repo"], config, d)).toBe(3);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
+			expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) github skipped (composer not empty, or a dialog is showing)`);
+			expect(out[out.length - 1]).toBe("sent 0, skipped 1 (1 already on the bridge)");
+		});
+
+		it("--all sends to a bridge pane too, and the summary doesn't count it", () => {
+			const { d, out } = withPanes([onBridge("%1"), pane("%2", IDLE)]);
+			expect(reconnect(["repo", "--all"], config, d)).toBe(0);
+			expect(d.tmuxSend).toHaveBeenCalledTimes(2);
+			expect(d.tmuxSend).toHaveBeenCalledWith(SERVER, "%1", "/mcp reconnect github", info);
+			expect(out[out.length - 1]).toBe("sent 2, skipped 0");
+		});
+
+		it("a bridge pane never goes to --wait: it isn't blocked, there is nothing to wait for", () => {
+			const { d, out } = withPanes([onBridge("%1", { text: "❯ half typed" })]);
+			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(0);
+			expect(d.startBackground).not.toHaveBeenCalled();
+			expect(d.sleep).not.toHaveBeenCalled();
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
+		});
+
+		it("a dry run lists bridge panes as skipped too, and still exits 0", () => {
+			const { d, out } = withPanes([onBridge("%1")]);
+			expect(reconnect(["repo", "--dry-run"], config, d)).toBe(0);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
+			expect(out[out.length - 1]).toBe('dry run: 0 pane(s) would get "/mcp reconnect"');
+		});
+
+		it("the bridge verdict comes before the key checks: a bridge pane needs nothing, even with no broker entry", () => {
+			const noEntry = JSON.stringify({ mcpServers: { x: { command: "npx" } } });
+			const { d, out } = withPanes([onBridge("%1")], {}, { [claude("repo")]: noEntry });
+			expect(reconnect(["repo"], config, d)).toBe(0);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
+			expect(out.some((l: string) => l.includes("no broker MCP entry"))).toBe(false);
+		});
+
+		it("refuses --all in the background run, and --all=x like the other valueless flags", () => {
+			const { d } = withPanes([pane("%1", IDLE)]);
+			expect(() => reconnect(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`, "--all"], config, d)).toThrow(
+				"--all is not for the background --wait run"
+			);
+			expect(() => reconnect(["repo", "--all=x"], config, d)).toThrow("unknown flag: --all=x");
 		});
 	});
 
