@@ -27,7 +27,7 @@ import { connect as netConnect } from "node:net";
 import { CLI_PATH, parseGroups, parsePasswd } from "./agents.ts";
 import type { ConnectDeps } from "./connect.ts";
 import { nodeFloorMin, NODE_LINK_DIR, type NodeSourceDeps } from "./system.ts";
-import { distTarballName, expectedSha, latestLts, sha256Hex, verifyExtracted, verifyTarball } from "./node-dist.ts";
+import { distBinMember, distTarballName, expectedSha, latestLts, sha256Hex, verifyExtracted, verifyTarball } from "./node-dist.ts";
 import { SEMVER } from "./upgrade.ts";
 import { stateStore, writeFileAtomic, storeSeed } from "./otp.ts";
 import { pinner, readOwnedFile, scanConfigFolders, sessionConfigFolders } from "./mcp-config.ts";
@@ -154,9 +154,9 @@ export async function downloadLatestLts(dest: string): Promise<string> {
 		// is no network-bytes-to-file write anywhere in this flow). The extracted binary is then
 		// re-hashed against the same member streamed from the SAME buffer, so the file copied to
 		// dest is byte-identical to the bin/node member of the SHASUMS-verified bytes.
-		const member = `${name}/bin/node`;
+		const member = distBinMember(name);
 		run("tar", ["-xJf", "-", "--no-same-owner", "-C", work, member], { input: buf });
-		const extracted = join(work, name, "bin", "node");
+		const extracted = join(work, member);
 		verifyExtracted(sha256Hex(readFileSync(extracted)), sha256Hex(tarMember(buf, member)), member);
 		copyFileSync(extracted, dest);
 	} finally {

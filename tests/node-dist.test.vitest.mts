@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { distTarballName, expectedSha, latestLts, sha256Hex, verifyExtracted, verifyTarball } from "../src/cli/node-dist.ts";
+import { distBinMember, distTarballName, expectedSha, latestLts, sha256Hex, verifyExtracted, verifyTarball } from "../src/cli/node-dist.ts";
 
 const SUMS = `d41d8cd98f00b204e9800998ecf8427e  node-v24.11.0-linux-arm64.tar.xz
 5f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80  node-v24.11.0-linux-x64.tar.xz
@@ -23,6 +23,17 @@ describe("latestLts", () => {
 		expect(() => latestLts([{ version: "v25.0.0", lts: false }])).toThrow(/no LTS release/);
 		expect(() => latestLts([{ version: "24.11.0", lts: true }])).toThrow(/malformed version "24\.11\.0"/);
 		expect(() => latestLts([{ version: "v24", lts: true }])).toThrow(/malformed version/);
+	});
+});
+
+describe("distBinMember", () => {
+	it("is the tarball name without .tar.xz, then bin/node", () => {
+		expect(distBinMember("node-v26.13.1-linux-x64.tar.xz")).toBe("node-v26.13.1-linux-x64/bin/node");
+		expect(distBinMember(distTarballName("v24.11.0", "arm64"))).toBe("node-v24.11.0-linux-arm64/bin/node");
+	});
+
+	it("refuses a name that is not a .tar.xz tarball", () => {
+		expect(() => distBinMember("node-v24.11.0-linux-x64.zip")).toThrow(/not a \.tar\.xz tarball/);
 	});
 });
 

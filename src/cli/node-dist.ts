@@ -38,6 +38,15 @@ export function distTarballName(version: string, arch: string): string {
 	return `node-${version}-linux-${arch}.tar.xz`;
 }
 
+/**
+ * The node binary's path inside a nodejs.org tarball: the archive's top folder is the tarball's
+ * name without `.tar.xz` (`node-v24.11.0-linux-x64/bin/node`), never the file name itself.
+ */
+export function distBinMember(tarballName: string): string {
+	if (!tarballName.endsWith(".tar.xz")) throw new Error(`node download: ${tarballName} is not a .tar.xz tarball`);
+	return `${tarballName.slice(0, -".tar.xz".length)}/bin/node`;
+}
+
 /** The expected sha256 of `name` out of a SHASUMS256.txt body; a missing line is a hard failure. */
 export function expectedSha(sums: string, name: string): string {
 	const line = sums
