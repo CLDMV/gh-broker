@@ -1,9 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // The real effects behind the CLI, with their process and filesystem access mocked: nothing here
 // spawns npm or touches the filesystem.
 const h = vi.hoisted(() => ({ spawnSync: vi.fn() }));
 vi.mock("node:child_process", () => ({ spawnSync: h.spawnSync }));
+vi.mock("node:os", () => ({
+	hostname: vi.fn(() => "box"),
+	tmpdir: vi.fn(() => "/tmp"),
+	userInfo: vi.fn(() => ({ homedir: "/root", uid: 0, gid: 0, username: "root" }))
+}));
 vi.mock("node:fs", () => {
 	const fns = [
 		"writeFileSync",
@@ -21,7 +26,9 @@ vi.mock("node:fs", () => {
 		"fchmodSync",
 		"fchownSync",
 		"mkdirSync",
+		"mkdtempSync",
 		"cpSync",
+		"copyFileSync",
 		"symlinkSync",
 		"realpathSync",
 		"lstatSync",
@@ -47,7 +54,10 @@ vi.mock("node:fs", () => {
 });
 
 import * as fs from "node:fs";
-import { realDeps } from "../src/cli/real-deps.ts";
+import * as os from "node:os";
+import { downloadLatestLts, nodeSourceDeps, realDeps } from "../src/cli/real-deps.ts";
+import { NODE_LINK_DIR } from "../src/cli/system.ts";
+import { sha256Hex } from "../src/cli/node-dist.ts";
 
 const f = vi.mocked(fs) as any;
 const ok = (stdout = ""): { status: number; stdout: string; stderr: string } => ({ status: 0, stdout, stderr: "" });
@@ -155,8 +165,8 @@ describe("runNewBinary", () => {
 		h.spawnSync.mockReturnValue(ok());
 		realDeps().runNewBinary(["install", "--claude-config", "repo:/srv/x"]);
 		const [cmd, args, opts] = h.spawnSync.mock.calls[0]!;
-		expect(cmd).toBe("/usr/local/bin/gh-broker");
-		expect(args).toEqual(["install", "--claude-config", "repo:/srv/x"]);
+		expect(cmd).toBe(process.execPath); // the maintained node, not whatever the PATH shebang finds
+		expect(args).toEqual(["/usr/local/bin/gh-broker", "install", "--claude-config", "repo:/srv/x"]);
 		expect(opts).toEqual({ stdio: "inherit" });
 	});
 
@@ -174,5 +184,166 @@ describe("runNewBinary", () => {
 		expect(() => realDeps().runNewBinary(["install"])).toThrow("/usr/local/bin/gh-broker install exited on signal SIGTERM");
 		h.spawnSync.mockReturnValue({ error: new Error("EACCES"), status: null, stdout: "", stderr: "" });
 		expect(() => realDeps().runNewBinary(["install"])).toThrow("/usr/local/bin/gh-broker install: EACCES");
+	});
+});
+
+describe("downloadLatestLts", () => {
+	const INDEX = JSON.stringify([
+		{ version: "v25.0.0", lts: false },
+		{ version: "v24.11.0", lts: "jod" }
+	]);
+	const member = Buffer.from("the real node binary");
+	const tarball = Buffer.from("the verified tarball bytes");
+	const arch = process.arch === "x64" || process.arch === "arm64" ? process.arch : "x64";
+	const name = `node-v24.11.0-linux-${arch}.tar.xz`;
+	const tarballUrl = `https://nodejs.org/dist/v24.11.0/${name}`;
+	const fetched: string[] = [];
+
+	const stubFetch = (tarballBody: Buffer = tarball, sums = `${sha256Hex(tarball)}  ${name}\n`): void => {
+		fetched.length = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string | URL) => {
+				const u = String(url);
+				fetched.push(u);
+				if (u.endsWith("/index.json"))
+					return { ok: true, status: 200, text: async () => INDEX, arrayBuffer: async () => new ArrayBuffer(0) };
+				if (u.endsWith("SHASUMS256.txt"))
+					return { ok: true, status: 200, text: async () => sums, arrayBuffer: async () => new ArrayBuffer(0) };
+				return {
+					ok: true,
+					status: 200,
+					text: async () => "",
+					arrayBuffer: async () => tarballBody.buffer.slice(tarballBody.byteOffset, tarballBody.byteOffset + tarballBody.byteLength)
+				};
+			})
+		);
+	};
+
+	beforeEach(() => {
+		f.readFileSync.mockImplementation((p: string) => (String(p).includes("bin/node") ? member : "{}"));
+		f.readdirSync.mockReturnValue([]); // no stale .dl-* unless a test seeds one
+		f.mkdtempSync.mockReturnValue("/usr/local/lib/gh-broker/.dl-abc123");
+		h.spawnSync.mockImplementation((cmd: string, args: string[] = []) => {
+			const line = [cmd, ...args].join(" ");
+			if (line.startsWith("tar -xJOf")) return { status: 0, stdout: member, stderr: "" };
+			return { status: 0, stdout: "", stderr: "" };
+		});
+	});
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("downloads once, verifies, extracts into a fresh mkdtemp dir with the archive's ownership discarded, and re-hashes the extracted binary", async () => {
+		stubFetch();
+		f.readdirSync.mockReturnValue([".dl-stale"]); // litter from a killed run: swept first
+		await expect(downloadLatestLts("/usr/local/lib/gh-broker/node.tmp-1")).resolves.toBe(tarballUrl);
+		// S1: exactly one fetch of the tarball — the verified bytes are the bytes written
+		expect(fetched.filter((u) => u === tarballUrl)).toHaveLength(1);
+		expect(fetched.filter((u) => u.includes("node-v24.11.0-linux"))).toHaveLength(1);
+		// B1: a fresh 0700-root mkdtemp dir INSIDE the vetted broker dir — never $TMPDIR (a sudo -E
+		// TMPDIR on a non-sticky path would let another user swap the extraction) — tar drops the
+		// archive's own ownership, and the extracted file is re-hashed against the member streamed
+		// from the same verified tarball
+		expect(f.mkdtempSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-`);
+		const tarArgs = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJf")![1] as string[];
+		expect(tarArgs).toContain("--no-same-owner");
+		// alert #12: the tarball is never written to disk — the verified buffer goes to tar on stdin
+		expect(f.writeFileSync).not.toHaveBeenCalled();
+		const extractCall = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJf")!;
+		expect(extractCall[1]).toEqual(["-xJf", "-", "--no-same-owner", "-C", "/usr/local/lib/gh-broker/.dl-abc123", `${name}/bin/node`]);
+		expect((extractCall[2] as { input: Buffer }).input).toEqual(tarball);
+		// SF3: the re-hash stream reads the member from the same verified buffer on stdin — a
+		// regression back to a path argument would hard-fail every download (no tarball on disk)
+		const memberCall = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJOf")!;
+		expect(memberCall[1]).toEqual(["-xJOf", "-", `${name}/bin/node`]);
+		expect((memberCall[2] as { input: Buffer }).input).toEqual(tarball);
+		expect(f.copyFileSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-abc123/${name}/bin/node`, "/usr/local/lib/gh-broker/node.tmp-1");
+		// a stale .dl-* from a killed run is swept first, and the real node is never swept
+		expect(f.readdirSync).toHaveBeenCalledWith(NODE_LINK_DIR);
+		expect(f.rmSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-stale`, { recursive: true, force: true });
+		expect(f.rmSync.mock.calls.map((c: any[]) => String(c[0]))).not.toContain(NODE_LINK_DIR + "/node");
+		f.readdirSync.mockReturnValue([]); // the later rmSync assertions see the sweep done
+	});
+
+	it("fails a checksum mismatch without extracting anything", async () => {
+		stubFetch(tarball, `deadbeef  ${name}\n`);
+		await expect(downloadLatestLts("/d/node")).rejects.toThrow(/checksum mismatch.*not installing an unverified binary/);
+		expect(f.writeFileSync).not.toHaveBeenCalled();
+		expect(f.copyFileSync).not.toHaveBeenCalled();
+	});
+
+	it("fails offline with a clear message", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new TypeError("fetch failed");
+			})
+		);
+		await expect(downloadLatestLts("/d/node")).rejects.toThrow(/cannot reach https:\/\/nodejs\.org\/dist\/index\.json/);
+	});
+
+	it("fails when the extracted file does not match the tarball's own member (a swap)", async () => {
+		stubFetch();
+		f.readFileSync.mockImplementation((p: string) => (String(p).includes("bin/node") ? Buffer.from("swapped binary") : "{}"));
+		await expect(downloadLatestLts("/d/node")).rejects.toThrow(/does not match the verified tarball/);
+		expect(f.copyFileSync).not.toHaveBeenCalled();
+	});
+
+	it("gives the tarball its own long timeout, short ones for index and SHASUMS", async () => {
+		stubFetch();
+		const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+		await downloadLatestLts("/d/node");
+		const calls = timeoutSpy.mock.calls.map((c) => c[0]);
+		expect(calls.filter((ms) => ms === 30_000)).toHaveLength(2); // index.json + SHASUMS256.txt
+		expect(calls).toContain(300_000); // the ~30MB tarball
+		timeoutSpy.mockRestore();
+	});
+
+	it("removes the .dl- work dir even when the extraction fails (there is no tarball on disk)", async () => {
+		stubFetch();
+		h.spawnSync.mockImplementation((cmd: string, args: string[] = []) => {
+			const line = [cmd, ...args].join(" ");
+			if (line.startsWith("tar -xJf")) return { status: 2, stdout: "", stderr: "tar: error" };
+			if (line.startsWith("tar -xJOf")) return { status: 0, stdout: member, stderr: "" };
+			return { status: 0, stdout: "", stderr: "" };
+		});
+		await expect(downloadLatestLts("/d/node")).rejects.toThrow(/tar/);
+		expect(f.rmSync).toHaveBeenCalledWith("/usr/local/lib/gh-broker/.dl-abc123", { recursive: true, force: true });
+	});
+});
+
+describe("nodeSourceDeps", () => {
+	beforeEach(() => {
+		f.readFileSync.mockReturnValue(JSON.stringify({ engines: { node: ">=22.0.0" } }));
+		f.readdirSync.mockReturnValue(["v22.12.0", "junk", ".stash", "v24.11.0"]);
+	});
+
+	it("enumerates nvm roots in order, taking root's home from the passwd entry, never $HOME", () => {
+		vi.mocked(os.userInfo).mockReturnValue({ homedir: "/root", uid: 0, gid: 0, username: "root" } as unknown as ReturnType<
+			typeof import("node:os").userInfo
+		>);
+		delete process.env.NVM_DIR;
+		process.env.HOME = "/home/attacker"; // a sudo -E session must not point root's nvm here
+		expect(nodeSourceDeps(() => {}).nvmDirs()).toEqual(["/usr/local/nvm", "/root/.nvm"]);
+		process.env.NVM_DIR = "/custom/nvm";
+		expect(nodeSourceDeps(() => {}).nvmDirs()).toEqual(["/custom/nvm", "/usr/local/nvm", "/root/.nvm"]);
+		delete process.env.NVM_DIR;
+		delete process.env.HOME;
+	});
+
+	it("ignores non-absolute PATH entries", () => {
+		process.env.PATH = "/bin:rel/bin:/usr/bin";
+		expect(nodeSourceDeps(() => {}).pathDirs()).toEqual(["/bin", "/usr/bin"]);
+		delete process.env.PATH;
+	});
+
+	it("lists only the nvm version directories", () => {
+		expect(nodeSourceDeps(() => {}).listVersions("/nvm/versions/node")).toEqual(["v22.12.0", "v24.11.0"]);
+	});
+
+	it("version() rejects a non-zero exit and a spawn error (the 5s timeout shape)", async () => {
+		h.spawnSync.mockReturnValue({ status: 1, stdout: "", stderr: "" });
+		await expect(nodeSourceDeps(() => {}).version("/x/node")).rejects.toThrow(/--version exited 1/);
+		h.spawnSync.mockReturnValue({ status: null, signal: "SIGTERM", stdout: "", stderr: "", error: new Error("ETIMEDOUT") });
+		await expect(nodeSourceDeps(() => {}).version("/x/node")).rejects.toThrow(/--version: ETIMEDOUT/);
 	});
 });

@@ -1,5 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
-import { composerState, parseWait, reconnect, safeKey, undimmed, MAX_WAIT_MS, RECONNECT_HELP, WAIT_POLL_MS } from "../src/cli/reconnect.ts";
+import {
+	composerState,
+	parseWait,
+	reconnect,
+	safeKey,
+	undimmed,
+	MAX_WAIT_MS,
+	RECONNECT_HELP,
+	WAIT_POLL_MS,
+	WAIT_UNIT
+} from "../src/cli/reconnect.ts";
 import { brokerKeyOf, mcpEntry, SkippedFolder } from "../src/cli/mcp-config.ts";
 import { TmuxTimeout, type Pane, type TmuxServer } from "../src/cli/tmux.ts";
 import { makeDeps, config, GROUPS } from "./helpers/cli-deps.mjs";
@@ -234,7 +244,7 @@ describe("agent reconnect", () => {
 			const { d, out } = withPanes([pane("%1", TYPING), pane("%2", IDLE)]);
 			// first re-capture is for %2's pre-send check; then %1 is polled: still typing, then clear
 			d.tmuxPaneText.mockReturnValueOnce(IDLE).mockReturnValueOnce(TYPING).mockReturnValueOnce(IDLE);
-			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(0);
+			expect(reconnect(["repo", "--wait", "1m", "--foreground"], config, d)).toBe(0);
 			expect(out).toContain(`repo ${SOCK} %1 github waiting (composer not empty, or a dialog is showing)`);
 			expect(out).toContain("waiting up to 1m for 1 pane to clear");
 			expect(out).toContain(`repo ${SOCK} %1 github sent`);
@@ -247,7 +257,7 @@ describe("agent reconnect", () => {
 
 		it("skips a pane still blocked at the deadline, with the reason and how long it waited", () => {
 			const { d, out } = withPanes([pane("%1", "Do you want to proceed?\n1. Yes")], {}, {}, "Do you want to proceed?\n1. Yes");
-			expect(reconnect(["repo", "--wait=12s"], config, d)).toBe(3);
+			expect(reconnect(["repo", "--wait=12s", "--foreground"], config, d)).toBe(3);
 			expect(d.tmuxSend).not.toHaveBeenCalled();
 			// 5s, 5s, then the 2s left: never past the deadline
 			expect(d.sleep.mock.calls.map((c: number[]) => c[0])).toEqual([5000, 5000, 2000]);
@@ -258,7 +268,7 @@ describe("agent reconnect", () => {
 		it("waits on a pane that changed between the check and the send", () => {
 			const { d, out } = withPanes([pane("%1", IDLE)]);
 			d.tmuxPaneText.mockReturnValueOnce(TYPING).mockReturnValueOnce(IDLE);
-			expect(reconnect(["repo", "--wait", "30s"], config, d)).toBe(0);
+			expect(reconnect(["repo", "--wait", "30s", "--foreground"], config, d)).toBe(0);
 			expect(out).toContain(`repo ${SOCK} %1 github waiting (changed since capture)`);
 			expect(out).toContain(`repo ${SOCK} %1 github sent`);
 		});
@@ -276,7 +286,7 @@ describe("agent reconnect", () => {
 			d.tmuxSend.mockImplementationOnce(() => {
 				throw new Error("pane is dead");
 			});
-			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(3);
+			expect(reconnect(["repo", "--wait", "1m", "--foreground"], config, d)).toBe(3);
 			expect(out).toContain(`repo ${SOCK} %3 github skipped (send failed: pane is dead)`);
 			expect(out).toContain(`repo ${SOCK} %1 github skipped (gone while waiting)`);
 			expect(out).toContain(`repo ${SOCK} %2 github sent`);
@@ -288,7 +298,70 @@ describe("agent reconnect", () => {
 			d.tmuxPaneText.mockImplementationOnce(() => {
 				throw new Error("boom");
 			});
-			expect(() => reconnect(["repo", "--wait", "1m"], config, d)).toThrow("boom");
+			expect(() => reconnect(["repo", "--wait", "1m", "--foreground"], config, d)).toThrow("boom");
+		});
+
+		it("hands the blocked panes to a background run and returns without waiting", () => {
+			const { d, out } = withPanes([pane("%1", TYPING), pane("%2", IDLE)]);
+			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(0);
+			expect(d.sleep).not.toHaveBeenCalled();
+			expect(d.startBackground).toHaveBeenCalledWith(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`]);
+			expect(out).toContain(`repo ${SOCK} %2 github sent`);
+			expect(out).toContain(`waiting up to 1m in the background for 1 pane to clear: journalctl -u ${WAIT_UNIT} -f`);
+			expect(out[out.length - 1]).toBe("sent 1, skipped 0, waiting on 1 in the background");
+		});
+
+		it("waits here when the background run can't be started", () => {
+			const { d, out, err } = withPanes([pane("%1", TYPING)]);
+			d.startBackground.mockImplementationOnce(() => {
+				throw new Error("systemd-run: not found");
+			});
+			d.tmuxPaneText.mockReturnValueOnce(IDLE);
+			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(0);
+			expect(err).toContain("couldn't start the background wait (systemd-run: not found); waiting here instead");
+			expect(d.sleep).toHaveBeenCalledTimes(1);
+			expect(out).toContain(`repo ${SOCK} %1 github sent`);
+		});
+
+		it("a background run touches only the panes it was handed", () => {
+			const { d, out } = withPanes([pane("%1", TYPING), pane("%2", IDLE)]);
+			d.tmuxPaneText.mockReturnValueOnce(IDLE);
+			expect(reconnect(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`], config, d)).toBe(0);
+			expect(d.tmuxSend).toHaveBeenCalledTimes(1);
+			expect(d.tmuxSend).toHaveBeenCalledWith(SERVER, "%1", "/mcp reconnect github", info);
+			expect(d.startBackground).not.toHaveBeenCalled();
+			expect(out.some((l: string) => l.includes("%2"))).toBe(false);
+			expect(out[out.length - 1]).toBe("sent 1, skipped 0");
+		});
+
+		it("a background run says so when its panes are gone", () => {
+			const { d, out } = withPanes([pane("%2", IDLE)]);
+			expect(reconnect(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`], config, d)).toBe(0);
+			expect(out).toContain("repo: the panes waited on are gone");
+			expect(d.tmuxSend).not.toHaveBeenCalled();
+		});
+
+		it("refuses --foreground without --wait, and --retry outside the background run", () => {
+			const { d } = withPanes([pane("%1", IDLE)]);
+			expect(() => reconnect(["--foreground"], config, d)).toThrow("--foreground is for --wait");
+			expect(() => reconnect(["--wait", "1m", "--retry", `repo:%1@${SOCK}`], config, d)).toThrow(
+				"--retry is for the background --wait run"
+			);
+			expect(() => reconnect(["repo", "--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`], config, d)).toThrow(
+				"--retry is for the background --wait run"
+			);
+			for (const bad of ["repo:%1", "repo:1@/s", "Repo:%1@/s", "repo:%1@rel", ""])
+				expect(() => reconnect(["--wait", "1m", "--foreground", "--retry", bad], config, d)).toThrow(
+					"--retry takes <user>:<pane>@<socket>"
+				);
+			expect(() => reconnect(["--wait", "1m", "--foreground", "--retry"], config, d)).toThrow("--retry takes");
+		});
+
+		it("refuses a --retry for an agent that isn't registered", () => {
+			const { d } = withPanes([pane("%1", IDLE)]);
+			expect(() => reconnect(["--wait", "1m", "--foreground", "--retry", `nobody:%1@${SOCK}`], config, d)).toThrow(
+				'"nobody" is not a registered agent'
+			);
 		});
 
 		it("doesn't wait on a dry run", () => {

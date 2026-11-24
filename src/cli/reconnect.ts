@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T12:33:48-08:00 (1795293228)
+ *	@Last modified time: 2026-11-22T21:08:27-08:00 (1795410507)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -31,10 +31,14 @@ import { brokerKeyOf, extraFolders, inFolder, MCP_FILE, type FolderIo, type Plac
 import { TmuxTimeout, type Pane, type TmuxServer, type TmuxServers } from "./tmux.ts";
 import type { ConfigLayer } from "./config-merge.ts";
 
-export const RECONNECT_HELP = `agent reconnect [<user>] [--dry-run] [--wait <time>]
+/** The systemd unit a backgrounded --wait runs as. */
+export const WAIT_UNIT = "gh-broker-reconnect-wait";
+
+export const RECONNECT_HELP = `agent reconnect [<user>] [--dry-run] [--wait <time> [--foreground]]
 
 Sends "/mcp reconnect <key>" to every running Claude Code session of a
-registered agent (or all of them): the sessions the broker restart drops.
+registered agent (or all of them): the ones still on an old socat entry,
+or whose connect bridge did not recover from a broker restart.
 <key> is the agent's actual mcpServers entry for the broker, read back from
 its .claude.json files. A pane is skipped, with its id and the reason, when
 someone is typing in it, a dialog (a permission prompt, a question, a menu)
@@ -43,9 +47,13 @@ blind. Claude working in it is fine: what is typed is queued.
 --dry-run lists what it would send where. --wait <time> (e.g. 90s, 5m; at
 most 30m) keeps checking the panes skipped for text in the input box or a
 dialog every few seconds, and sends to each once it is clear; the ones still
-blocked when the time is up are skipped. Exits 0 when every pane was sent
-to, 3 when some were skipped (run it again once they're clear), 1 when a
-named user doesn't exist.`;
+blocked when the time is up are skipped. The waiting runs in the background
+(a systemd unit, ${WAIT_UNIT}, so the command returns at once and the
+wait survives the terminal closing; follow it with
+journalctl -u ${WAIT_UNIT} -f). A new --wait replaces one still running.
+--foreground waits here instead. Exits 0 when every pane was sent to (or
+handed to the background wait), 3 when some were skipped (run it again once
+they're clear), 1 when a named user doesn't exist.`;
 
 /** The effects `agent reconnect` (and `upgrade`'s last step) use. */
 export interface ReconnectDeps {
@@ -65,6 +73,11 @@ export interface ReconnectDeps {
 	/** The clock and a blocking pause, for --wait. */
 	now: () => number;
 	sleep: (ms: number) => void;
+	/**
+	 * Run `gh-broker agent reconnect <args>` as the WAIT_UNIT systemd unit, stopping one already
+	 * running first, and return without waiting for it. Throws when the unit can't be started.
+	 */
+	startBackground: (args: string[]) => void;
 }
 
 /** How often --wait re-checks the panes it is waiting on. */
@@ -165,18 +178,43 @@ export const safeKey = (key: string): boolean => /^[A-Za-z0-9_.-]{1,64}$/.test(k
 // eslint-disable-next-line no-control-regex -- blanking control characters is the point
 const clean = (s: string): string => s.replace(/[\x00-\x1f\x7f\x80-\x9f]/g, "?");
 
-/** Split `agent reconnect` arguments into the agent users (at most one), --dry-run, --wait and --help. */
-function parseReconnectArgs(rest: string[]): { users: string[]; dryRun: boolean; help: boolean; waitMs: number; wait?: string } {
+/** One pane a backgrounded --wait retries: `<user>:<pane>@<socket>` on its command line. */
+interface Retry {
+	user: string;
+	pane: string;
+	socket: string;
+}
+const RETRY = /^([a-z_][a-z0-9_-]*):(%\d+)@(\/.+)$/;
+
+/** Split `agent reconnect` arguments into the agent users (at most one), --dry-run, --wait, --foreground, --retry and --help. */
+function parseReconnectArgs(rest: string[]): {
+	users: string[];
+	dryRun: boolean;
+	help: boolean;
+	waitMs: number;
+	wait?: string;
+	foreground: boolean;
+	retry?: Retry[];
+} {
 	const users: string[] = [];
 	let dryRun = false;
 	let help = false;
+	let foreground = false;
+	let retry: Retry[] | undefined;
 	let waitMs = 0;
 	let wait: string | undefined;
 	for (let i = 0; i < rest.length; i++) {
 		const a = rest[i]!;
 		if (a === "--dry-run") dryRun = true;
 		else if (a === "-h" || a === "--help") help = true;
-		else if (a === "--wait" || a.startsWith("--wait=")) {
+		else if (a === "--foreground") foreground = true;
+		else if (a === "--retry") {
+			// Internal: the backgrounded --wait run gets the panes it waits on this way, and
+			// touches no other pane.
+			const m = RETRY.exec(rest[++i] ?? "");
+			if (!m) throw new Error("--retry takes <user>:<pane>@<socket>");
+			(retry ??= []).push({ user: m[1]!, pane: m[2]!, socket: m[3]! });
+		} else if (a === "--wait" || a.startsWith("--wait=")) {
 			const v = a === "--wait" ? rest[++i] : a.slice("--wait=".length);
 			const ms = v === undefined ? undefined : parseWait(v);
 			if (ms === undefined) throw new Error("--wait takes a time up to 30m, e.g. --wait 90s or --wait 5m");
@@ -186,7 +224,9 @@ function parseReconnectArgs(rest: string[]): { users: string[]; dryRun: boolean;
 		else users.push(a);
 	}
 	if (users.length > 1) throw new Error("name at most one agent user: sudo gh-broker agent reconnect [<user>]");
-	return { users, dryRun, help, waitMs, ...(wait !== undefined ? { wait } : {}) };
+	if (foreground && waitMs === 0) throw new Error("--foreground is for --wait");
+	if (retry && (waitMs === 0 || !foreground || users.length || dryRun)) throw new Error("--retry is for the background --wait run");
+	return { users, dryRun, help, waitMs, foreground, ...(wait !== undefined ? { wait } : {}), ...(retry ? { retry } : {}) };
 }
 
 /**
@@ -220,14 +260,14 @@ function keyFor(pane: Pane, info: UserInfo, keys: Map<string, string>): string |
  * there were none), 3 when some were only skipped (they can be retried), 1 when a user is missing.
  */
 export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps): number {
-	const { users, dryRun, help, waitMs, wait } = parseReconnectArgs(rest);
+	const { users, dryRun, help, waitMs, wait, foreground, retry } = parseReconnectArgs(rest);
 	if (help) {
 		d.log(RECONNECT_HELP);
 		return 0;
 	}
 	const dir = agentsDir(config.listen);
 	const registered = registeredAgents(d.groups()).map((a) => a.user);
-	for (const user of users) {
+	for (const user of users.length ? users : [...new Set(retry?.map((r) => r.user))]) {
 		assertAgentName(user);
 		if (!registered.includes(user)) throw new Error(`"${user}" is not a registered agent`);
 	}
@@ -247,7 +287,10 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 			waiting.push({ user, socket, server, info, pane, key, why });
 		} else skip(user, socket, pane, key, why);
 	};
-	for (const user of users.length ? users : registered) {
+	// A background run looks only at the users and panes it was handed.
+	const retrying = (user: string, socket: string, pane: string): boolean =>
+		!retry || retry.some((r) => r.user === user && r.socket === socket && r.pane === pane);
+	for (const user of users.length ? users : retry ? [...new Set(retry.map((r) => r.user))] : registered) {
 		const info = d.userInfo(user);
 		if (!info) {
 			d.error(`${user}: no such user`);
@@ -278,6 +321,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				throw err;
 			}
 			for (const pane of panesOnServer) {
+				if (!retrying(user, socket, pane.id)) continue;
 				panes++;
 				if (pane.timedOut) {
 					skip(user, socket, pane.id, undefined, "tmux timed out");
@@ -355,7 +399,26 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				sent++;
 			}
 		}
-		if (panes === 0) d.log(`${user}: no Claude Code sessions running${servers.length ? "" : " (no tmux server)"}`);
+		if (panes === 0)
+			d.log(
+				retry
+					? `${user}: the panes waited on are gone`
+					: `${user}: no Claude Code sessions running${servers.length ? "" : " (no tmux server)"}`
+			);
+	}
+	let backgrounded = 0;
+	if (waiting.length > 0 && !foreground) {
+		const args = ["--wait", wait!, "--foreground", ...waiting.flatMap((w) => ["--retry", `${w.user}:${w.pane}@${w.socket}`])];
+		try {
+			d.startBackground(args);
+			backgrounded = waiting.length;
+			d.log(
+				`waiting up to ${wait} in the background for ${waiting.length} pane${waiting.length === 1 ? "" : "s"} to clear: journalctl -u ${WAIT_UNIT} -f`
+			);
+			waiting.length = 0;
+		} catch (err) {
+			d.error(`couldn't start the background wait (${clean((err as Error).message)}); waiting here instead`);
+		}
 	}
 	if (waiting.length > 0) {
 		d.log(`waiting up to ${wait} for ${waiting.length} pane${waiting.length === 1 ? "" : "s"} to clear`);
@@ -390,7 +453,11 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 		}
 		for (const w of waiting) skip(w.user, w.socket, w.pane, w.key, `${w.why}; still after waiting ${wait}`);
 	}
-	d.log(dryRun ? `dry run: ${sent} pane(s) would get "/mcp reconnect"` : `sent ${sent}, skipped ${skipped}`);
+	d.log(
+		dryRun
+			? `dry run: ${sent} pane(s) would get "/mcp reconnect"`
+			: `sent ${sent}, skipped ${skipped}${backgrounded ? `, waiting on ${backgrounded} in the background` : ""}`
+	);
 	if (skipped === 0) return 0;
 	return missing > 0 ? 1 : 3;
 }

@@ -47,15 +47,15 @@ Neither the config nor the secrets path is hardcoded to `/etc`. Both resolve thr
 
 Only the Linux defaults are exercised today; the others are wired so a later platform port is a table entry, not surgery.
 
-## Node runtime: a maintained symlink, no runtime resolution
+## Node runtime: a broker-owned copy, no runtime resolution
 
-The service runs jailed (`ProtectHome`), so it cannot use a `/home` nvm, and there is no login shell at start. Rather than have the unit _resolve_ node at runtime, the installer maintains a **stable symlink** — `/usr/local/bin/node` → the chosen node — and the unit simply runs it:
+The service runs jailed (`ProtectHome`), so it cannot use a `/home` nvm, and there is no login shell at start. Rather than have the unit _resolve_ node at runtime, the installer keeps a **root-owned copy** of a qualifying node at `/usr/local/lib/gh-broker/node` — inside a root:root 0755 directory the service user cannot write (so it cannot swap the binary the bridges run) — and the unit simply runs it. The copy is replaced atomically (written to a temp file, proven to run, renamed over the final name), so a running bridge keeps the old inode while the new one lands. A copy, not a symlink: a link into nvm is only as safe as whoever owns the target and dangles when that version is removed. Candidates are every `node` on PATH (all entries), the system nvm roots and the installer's own node, each vetted by running its `--version` (even LTS majors at or above the package's floor only), with the latest LTS from nodejs.org — verified against SHASUMS256.txt — as the fallback. Anything already at `/usr/local/bin/{node,npm,npx}` from older installs is left alone:
 
 ```ini
-ExecStart=/usr/local/bin/node /opt/gh-broker/dist/index.mjs --config <resolved>
+ExecStart=/usr/local/lib/gh-broker/node /opt/gh-broker/dist/index.mjs --config <resolved>
 ```
 
-The symlink is the single indirection: the CLI (via `PATH`) and the service resolve the _same_ link, so "CLI node == service node" holds by construction. Bumping node is re-pointing the symlink — which is exactly the node step the installer runs on setup and on update, so it is not a special case. This removes `launch.sh` (a runtime nvm resolver that duplicated the symlink) and keeps the hardened unit free of a `bash`/`nvm` startup dependency.
+The copy is the single indirection for the service and for every agent's bridge (the MCP entry prefixes it before the `gh-broker` binary, whose `#!/usr/bin/env node` would otherwise pick up whatever node the agent's PATH finds first). Bumping node is replacing the copy — which is exactly the node step the installer runs on setup and on update, so it is not a special case. This removes `launch.sh` (a runtime nvm resolver that duplicated the indirection) and keeps the hardened unit free of a `bash`/`nvm` startup dependency.
 
 ## Tooling: Node, with one optional shell bootstrap
 
@@ -67,13 +67,13 @@ The only things that can't be Node are bootstrapping node itself and building a 
 
 `sudo gh-broker install` (the package bin `bin/gh-broker.mjs`, built from `src/bin/gh-broker.ts`, hands `install` to `src/cli/install.ts`) is idempotent — first install and later upgrade are one command:
 
-1. detect platform + check prerequisites (`socat`, `rsync`, `systemctl`, `sudo`),
+1. detect platform + check prerequisites (`rsync`, `systemctl`, `sudo`),
 2. **register the agents** — migrate members of the old `gh-broker-clients` group, add the user named on the command line (creating it if asked), give each a `gh-broker-agent-<user>` group — hard stop if it can't (no silent warn-and-continue),
-3. ensure node on a stable path + the `/usr/local/bin/node` symlink,
+3. ensure node on a stable path: a root-owned copy of a qualifying node at `/usr/local/lib/gh-broker/node` (root:root 0755 directory, atomic replace; nothing under `/usr/local/bin` is touched),
 4. **regenerate the config** by layering the example, the deployed config, `--config` and the flags (a first install with no owner asks for one),
 5. **choose the secret backend and store the PATs** — keep existing, migrate a legacy `systemd-creds` token, or take it from `--secrets-file` / env / a prompt (see the Secrets section),
 6. validate the config with the real loader (`node dist/index.mjs --check`),
-7. deploy (unit → `/usr/local/bin/node`, `dist/` and a version marker in `/opt/gh-broker`, config, secrets), generating the OTP seed on the way if none is stored,
+7. deploy (unit → `/etc/systemd/system/gh-broker.service` running the broker's own node copy, `dist/` and a version marker in `/opt/gh-broker`, config, secrets), generating the OTP seed on the way if none is stored,
 8. write each agent's MCP config, then **smoke test** each agent's own socket — MCP `initialize` + one real read → ✅/❌.
 
 The same flow runs **fully unattended** via flags — `--agent-user`, `--secrets-provider`, `--secrets-file` / `GH_BROKER_SECRET_<NAME>`, `--create-agent-user`, `--non-interactive`, and the config flags (`--owner`, `--config`, ...); prompts are the default when flags are omitted. See [`../deploy/README.md`](../deploy/README.md) and `--help`.

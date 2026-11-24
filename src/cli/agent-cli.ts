@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-22T22:30:10-08:00 (1795415410)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,7 +23,10 @@ import {
 	agentGroup,
 	agentsDir,
 	assertAgentName,
+	CLI_PATH,
 	registeredAgents,
+	NODE_PATH,
+	NPM_INSTALL_COMMAND,
 	socketPath,
 	versionWarning,
 	type Group,
@@ -59,6 +62,8 @@ export interface AgentDeps extends Pick<OtpDeps, "log" | "error" | "now" | "read
 	mcpIO: FolderIo;
 	writeConfig: (config: ConfigLayer) => void;
 	socketExists: (path: string) => boolean;
+	/** Whether an installed file (the bridge CLI, the node it runs on) is there. */
+	binaryExists: (path: string) => boolean;
 	smoke: (socketPath: string) => Promise<Pick<SmokeResult, "tools">>;
 }
 
@@ -121,6 +126,15 @@ function rememberFolders(config: ConfigLayer, user: string, dirs: string[], d: A
 
 const registry = (d: Pick<AgentDeps, "groups">): RegisteredAgent[] => registeredAgents(d.groups());
 
+/** The MCP entries run the global CLI on the maintained node; throw naming the missing one when either is missing. */
+export function assertBridgeBinaries(d: Pick<AgentDeps, "binaryExists">): void {
+	const missing = [CLI_PATH, NODE_PATH].find((p) => !d.binaryExists(p));
+	if (missing !== undefined)
+		throw new Error(
+			`the MCP entry would run ${NODE_PATH} ${CLI_PATH} connect, but ${missing} is not there. Get one with: ${NPM_INSTALL_COMMAND}`
+		);
+}
+
 const BAD = ["failed", "unsafe", "unreadable"];
 
 /**
@@ -138,6 +152,9 @@ export function configureMcp(user: string, config: ConfigLayer, d: AgentDeps, { 
 		d.log(JSON.stringify({ github: entry }, null, "\t"));
 		return "skipped";
 	}
+	// The entries run the global CLI on the maintained node; writing them without either binary
+	// would leave the agent a config that can't start its bridge.
+	assertBridgeBinaries(d);
 	const home = configureFolder(user, { folder: info.home, saved: false }, info, dir, entry, d);
 	let worst = home;
 	for (const place of extraFolders(info, d, config, user)) {
@@ -210,6 +227,9 @@ export async function smokeAgent(user: string, config: ConfigLayer, d: Pick<Agen
 
 /** `user` is a valid name and an existing user (agentCommand checks both before it saves anything). */
 async function add(config: ConfigLayer, user: string, noMcp: boolean, d: AgentDeps): Promise<number> {
+	// Before the group exists: a refusal must leave nothing half-registered (an agent with no MCP
+	// entry and no restart).
+	if (!noMcp) assertBridgeBinaries(d);
 	d.ensureGroup(user);
 	d.log(`${user}: registered (group ${agentGroup(user)})`);
 	configureMcp(user, config, d, { noMcp });

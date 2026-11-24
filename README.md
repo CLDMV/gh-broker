@@ -19,17 +19,18 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.15.0 (November 2026)
+### Latest: v0.16.0 (November 2026)
 
-- **`agent reconnect --wait`.** Sessions skipped because someone was typing or a dialog was open get re-checked every 5 seconds and reconnected as soon as they're clear, for up to the time given (`--wait 5m`). `upgrade --wait 5m` passes it to its reconnect step, so an upgrade no longer needs a rerun for those sessions.
-- [View full v0.15.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.15.0.md)
+- **MCP sessions survive a broker restart.** Agent MCP entries now run `gh-broker connect` instead of socat. The bridge redials the daemon, replays the session's handshake and tells the client to refetch its tools, so an `install` or `upgrade` no longer drops every session until someone types `/mcp reconnect`.
+- **The broker's own node.** `install` and `upgrade` keep a root-owned copy of the newest qualifying LTS node at `/usr/local/lib/gh-broker/node` (downloaded and checksum-verified when the box has none) for the service and the bridges, and no longer touch `/usr/local/bin/node`. `agent reconnect --wait` now waits in the background.
+- [View full v0.16.0 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.0.md)
 
 ### Recent Releases
 
+- **v0.15.0** (November 2026) — `agent reconnect --wait` and `upgrade --wait` reconnect sessions once typing or a dialog clears ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.15.0.md))
 - **v0.14.2** (November 2026) — `agent reconnect` reads 24-bit colour sessions, and skipped panes no longer fail `upgrade` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.2.md))
 - **v0.14.1** (November 2026) — `agent reconnect` sends to idle and working sessions; a dimmed prompt suggestion no longer reads as typing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.1.md))
 - **v0.14.0** (November 2026) — `report_custom_properties` reads repository custom property values, per repo or across an org ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.0.md))
-- **v0.13.1** (November 2026) — `report_release_changes` lists a commit's issue number as `not-a-pr` instead of failing on it ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.13.1.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
@@ -148,7 +149,7 @@ The broker presents its **own** MCP contract to the agent — a proxied tool's s
 ### Requirements
 
 - **Linux with systemd.** The broker runs as a hardened systemd service and listens on a Unix socket.
-- **Node.js 22.0.0 or later** (`engines.node` is `>=22.0.0`; development needs 22.22.0+). The installer points `/usr/local/bin/node` at the node it runs under.
+- **Node.js 22.0.0 or later** (`engines.node` is `>=22.0.0`; development needs 22.22.0+). The installer keeps a root-owned copy of a qualifying node at `/usr/local/lib/gh-broker/node` (leaving any existing `/usr/local/bin` links alone).
 - **The agent runs as its own Linux user**, without passwordless sudo, so it can't read the broker's secrets. The model behind that is in [docs/agent-user-model.md](docs/agent-user-model.md).
 - **Two fine-grained PATs per org** (read and write). The scopes are listed in [deploy/README.md](deploy/README.md).
 

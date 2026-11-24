@@ -60,7 +60,7 @@ The two-user split only holds if the agent user has no _other_ route to root or 
 
 - **No passwordless sudo for the agent.** If the agent could `sudo`, every gate above is moot. Verify: as the agent user, `sudo -n true` → fails.
 - **Rootless docker (mandatory if the agent has docker access).** The agent here is in the `docker` group — which on a **rootful** daemon is root-equivalent (a container can bind-mount host `/` and read any file, including the creds). It is safe _only because docker runs rootless_: the group grants access to the agent's own userns-mapped daemon, not to a host-root daemon. If you put the agent user in a rootful `docker` group, you have handed it the credentials. Keep docker rootless, or keep the agent out of the docker group.
-- **The agent never has the credentials on any readable path** — not in `~/.claude.json`, not in an env var, not in a file it owns. The socket bridge (`socat STDIO UNIX-CONNECT:…`) is the whole of its access.
+- **The agent never has the credentials on any readable path** — not in `~/.claude.json`, not in an env var, not in a file it owns. The socket bridge (`gh-broker connect …`) is the whole of its access.
 
 ## Setting up the agent user
 

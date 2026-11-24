@@ -8,7 +8,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-22T23:00:19-08:00 (1795417219)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -43,7 +43,7 @@ import {
 	requireGid,
 	ensureServiceUser,
 	createAgentUser,
-	pointNodeSymlinks,
+	ensureBrokerNodeLink,
 	currentNodeBin,
 	ensureDirs,
 	installUnit,
@@ -78,6 +78,7 @@ import { hostname } from "node:os";
 import {
 	assertAgentName,
 	classifyInstall,
+	CLI_PATH,
 	migrationPlan,
 	NPM_INSTALL_COMMAND,
 	parseGroups,
@@ -85,7 +86,7 @@ import {
 	LEGACY_CLIENTS_GROUP
 } from "./agents.ts";
 import { configureMcp, smokeAgent } from "./agent-cli.ts";
-import { realDeps } from "./real-deps.ts";
+import { realDeps, nodeSourceDeps } from "./real-deps.ts";
 
 // The package root: this module is bundled into bin/gh-broker.mjs.
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -232,9 +233,12 @@ async function runInstall(argv: string[]): Promise<void> {
 
 	step("prerequisites");
 	for (const cmd of ["systemctl", "useradd", "getent", "sudo"]) if (!has(cmd)) die(`missing required command: ${cmd}`);
-	for (const cmd of ["socat", "rsync"])
-		if (!has(cmd))
-			log(`  note: '${cmd}' not found — ${cmd === "socat" ? "the agent socket bridge needs it" : "will fall back to a plain copy"}`);
+	if (!has("rsync")) log(`  note: 'rsync' not found — will fall back to a plain copy`);
+	// The MCP entries run the global CLI; writing them without the binary would leave every agent
+	// a config that can't start its bridge. Refused here, before anything is created or deployed
+	// (--no-mcp-config writes no entries, so it needs neither).
+	if (!opts.noMcpConfig && !existsSync(CLI_PATH))
+		die(`the MCP entries would run ${CLI_PATH} connect, but it is not there. Get one with: ${NPM_INSTALL_COMMAND}`);
 
 	// --- agent users ---
 	// An agent is registered by the group gh-broker-agent-<user>. Upgrades keep the registered ones,
@@ -288,7 +292,8 @@ async function runInstall(argv: string[]): Promise<void> {
 		log(
 			`  warning: this package is installed under an nvm Node version folder; that copy breaks when Node is upgraded. Reinstall it globally: ${NPM_INSTALL_COMMAND}`
 		);
-	else if (where === "checkout" && !existsSync("/usr/local/bin/gh-broker"))
+	// Only reachable with the MCP config skipped: otherwise the prerequisites step already died.
+	else if (where === "checkout" && opts.noMcpConfig && !existsSync(CLI_PATH))
 		log(`  note: no global gh-broker command found. Get one with: ${NPM_INSTALL_COMMAND}`);
 
 	// --- the daemon bundle ---
@@ -302,13 +307,17 @@ async function runInstall(argv: string[]): Promise<void> {
 	log(`  config:  ${paths.config}`);
 	log(`  secrets: ${paths.secrets}`);
 
-	// --- users, groups, dirs, node symlink ---
+	// --- users, groups, dirs, the broker's own node ---
 	step("service user, groups, directories");
 	ensureServiceUser(SVC_USER, SVC_GROUP);
 	for (const name of agents) ensureAgentGroup(name, SVC_USER);
 	ensureDirs(configDir, APP_DIR, SVC_USER, SVC_GROUP);
-	const linked = pointNodeSymlinks(currentNodeBin());
-	log(`  node symlink -> ${currentNodeBin()} (${linked.join(", ")})`);
+	// A root-owned copy of a qualifying node at NODE_PATH (discovery, vetting, download and their
+	// one-line verdicts are inside; the effects are the real ones).
+	await ensureBrokerNodeLink(
+		currentNodeBin(),
+		nodeSourceDeps((m) => log(`  ${m}`))
+	);
 
 	// --- config: merge(example, current) ---
 	step("config (example + deployed + --config + flags)");

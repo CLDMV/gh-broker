@@ -54,7 +54,8 @@ Usage: sudo gh-broker upgrade [--version <v>] [--force] [--no-reconnect] [--wait
 Stops at the first failed step and prints what to run to finish. Sessions step 3
 skips (someone typing, a dialog open) don't fail the upgrade; it says to rerun
 agent reconnect once they're clear. --wait <time> (e.g. 5m) is passed to step 3,
-which then keeps checking those sessions and sends once each is clear.
+which then keeps checking those sessions in the background (journalctl -u
+gh-broker-reconnect-wait -f) and sends once each is clear.
 --no-reconnect skips step 3.
 The target must be a semantic version (--version 0.12.1); a downgrade needs --force. When the
 package is installed AND deployed at the target, nothing runs unless --force. Other flags pass

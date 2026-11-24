@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T11:28:19-08:00 (1795289299)
+ *	@Last modified time: 2026-11-22T21:08:26-08:00 (1795410506)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -37,7 +37,7 @@ import {
 } from "node:fs";
 import { basename } from "node:path";
 import { absoluteFolders } from "./config-merge.ts";
-import { agentGroup, socketPath, type UserInfo } from "./agents.ts";
+import { agentGroup, CLI_PATH, NODE_PATH, socketPath, type UserInfo } from "./agents.ts";
 import type { ConfigLayer } from "./config-merge.ts";
 
 /** A file's owner. */
@@ -155,9 +155,13 @@ function load(io: McpIo, path: string, uid: number): OwnedFile | { unsafe: strin
 	}
 }
 
-/** The entry for `user`. `sg` makes the new group effective without a re-login. */
+/** The entry for `user`. `sg` makes the new group effective without a re-login; the bridge is the gh-broker binary itself, run on the maintained node (#193). */
 export function mcpEntry(user: string, dir: string): McpEntry {
-	return { type: "stdio", command: "sg", args: [agentGroup(user), "-c", `exec socat STDIO UNIX-CONNECT:${socketPath(dir, user)}`] };
+	return {
+		type: "stdio",
+		command: "sg",
+		args: [agentGroup(user), "-c", `exec ${NODE_PATH} ${CLI_PATH} connect ${socketPath(dir, user)}`]
+	};
 }
 
 /** Whether an entry points at a broker socket: the standard /run/gh-broker/ tree, or the configured agents directory. */

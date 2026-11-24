@@ -1,5 +1,20 @@
 #!/usr/bin/env node
 /**
+ *
+ *	@Project: @cldmv/gh-broker
+ *	@Filename: /.githooks/install.mjs
+ *	@Date: 2026-11-22T19:38:37+00:00 (1795376317)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-11-22T22:38:50-08:00 (1795415930)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
  * @fileoverview Installs the committed pre-commit hook into `.git/hooks/pre-commit`.
  *
  * Wire it into package.json so it runs on `npm install`. Use the guarded form
