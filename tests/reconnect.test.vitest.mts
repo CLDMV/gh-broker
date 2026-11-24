@@ -621,6 +621,69 @@ describe("agent reconnect", () => {
 		expect(out.join("\n")).not.toContain("\r");
 	});
 
+	describe("--session", () => {
+		const TYPING = "❯ half a sentence";
+		it("keeps only the panes whose tmux session name matches, and says nothing about the rest", () => {
+			const { d, out } = withPanes([pane("%1", IDLE), pane("%2", IDLE, { session: "other" })]);
+			expect(reconnect(["repo", "--session", "main"], config, d)).toBe(0);
+			expect(d.tmuxSend).toHaveBeenCalledTimes(1);
+			expect(d.tmuxSend).toHaveBeenCalledWith(SERVER, "%1", "/mcp reconnect github", info);
+			expect(out.some((l: string) => l.includes("%2"))).toBe(false);
+			expect(out[out.length - 1]).toBe("sent 1, skipped 0");
+		});
+
+		it("matches pane ids too, and several values are a union", () => {
+			const { d, out } = withPanes([pane("%1", IDLE), pane("%2", IDLE, { session: "other" }), pane("%3", IDLE, { session: "third" })]);
+			expect(reconnect(["repo", "--session", "%3", "--session", "main"], config, d)).toBe(0);
+			expect(d.tmuxSend).toHaveBeenCalledTimes(2);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github sent`);
+			expect(out).toContain(`repo ${SOCK} %3 (third, /home/repo) github sent`);
+			expect(out.some((l: string) => l.includes("%2"))).toBe(false);
+		});
+
+		it("filters a dry run", () => {
+			const { d, out } = withPanes([pane("%1", IDLE), pane("%2", IDLE, { session: "other" })]);
+			expect(reconnect(["repo", "--dry-run", "--session", "main"], config, d)).toBe(0);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github would send`);
+			expect(out.some((l: string) => l.includes("%2"))).toBe(false);
+			expect(out[out.length - 1]).toBe('dry run: 1 pane(s) would get "/mcp reconnect"');
+		});
+
+		it("filters what --wait watches: the background run is handed only the matching panes", () => {
+			const { d, out } = withPanes([pane("%1", TYPING), pane("%2", TYPING, { session: "other" })]);
+			expect(reconnect(["repo", "--session", "main", "--wait", "1m"], config, d)).toBe(0);
+			expect(d.startBackground).toHaveBeenCalledWith(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`]);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github waiting (composer not empty, or a dialog is showing)`);
+			expect(out.some((l: string) => l.includes("%2"))).toBe(false);
+		});
+
+		it("reports a --session that matched no pane, fails the run, and never says no sessions were running", () => {
+			const { d, out, err } = withPanes([pane("%1", IDLE)]);
+			expect(reconnect(["repo", "--session", "typo"], config, d)).toBe(1);
+			expect(err).toContain("no pane matched --session typo");
+			expect(d.tmuxSend).not.toHaveBeenCalled();
+			expect(d.startBackground).not.toHaveBeenCalled();
+			// the "no sessions running" line would be wrong here: the pane exists, it just didn't match
+			expect(out.some((l: string) => l.includes("no Claude Code sessions running"))).toBe(false);
+		});
+
+		it("a dry run with no match fails the same way", () => {
+			const { d, err } = withPanes([pane("%1", IDLE)]);
+			expect(reconnect(["repo", "--dry-run", "--session", "%9"], config, d)).toBe(1);
+			expect(err).toContain("no pane matched --session %9");
+		});
+
+		it("refuses a missing value, a flag as the value, and --session in the background run", () => {
+			const { d } = withPanes([pane("%1", IDLE)]);
+			expect(() => reconnect(["repo", "--session"], config, d)).toThrow("--session takes a tmux session name or a pane id");
+			expect(() => reconnect(["repo", "--session", "--dry-run"], config, d)).toThrow("--session takes a tmux session name or a pane id");
+			expect(() => reconnect(["repo", "--session", ""], config, d)).toThrow("--session takes a tmux session name or a pane id");
+			expect(() => reconnect(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`, "--session", "main"], config, d)).toThrow(
+				"--session is not for the background --wait run"
+			);
+		});
+	});
+
 	it("reports a registered agent with no user account and exits 1", () => {
 		const groups = [...GROUPS, { name: "gh-broker-agent-ghost", gid: 992, members: ["gh-broker", "ghost"] }];
 		const { d, err } = makeDeps({ groups: () => groups });
