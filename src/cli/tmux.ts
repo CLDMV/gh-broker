@@ -73,6 +73,10 @@ export interface Pane {
 	inMode: boolean;
 	/** synchronize-panes is on: keys would go to every pane in the window. */
 	synchronized: boolean;
+	/** The tmux session the pane is in (user-controlled: clean it before printing). */
+	session: string;
+	/** The pane's working directory, as tmux sees it (user-controlled: clean it before printing). */
+	cwd: string;
 	/** The session's CLAUDE_CONFIG_DIR, when it runs with one. */
 	configDir?: string;
 	/** tmux did not answer in time while capturing this pane's screen: skip it, don't judge it. */
@@ -117,7 +121,15 @@ export const TMUX_TIMEOUT_MS = 5000;
 
 /** The list-panes field separator: printable ASCII, so no locale can rewrite it (the tab once arrived as `_`). */
 const SEP = "|@|";
-const FORMAT = ["#{pane_id}", "#{pane_pid}", "#{pane_in_mode}", "#{pane_synchronized}", "#{pane_current_command}"].join(SEP);
+const FORMAT = [
+	"#{pane_id}",
+	"#{pane_pid}",
+	"#{pane_in_mode}",
+	"#{pane_synchronized}",
+	"#{pane_current_command}",
+	"#{session_name}",
+	"#{pane_current_path}"
+].join(SEP);
 
 /** One tmux command that would not answer in time. */
 export class TmuxTimeout extends Error {}
@@ -319,7 +331,7 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 	for (const [pid, e] of table) if (Number.isInteger(e.ppid)) childrenOf.set(e.ppid, [...(childrenOf.get(e.ppid) ?? []), pid]);
 	const panes: Pane[] = [];
 	for (const line of listing.split("\n")) {
-		const [id, pidText, inMode, synchronized, command] = line.split(SEP);
+		const [id, pidText, inMode, synchronized, command, session, cwd] = line.split(SEP);
 		const panePid = Number(pidText);
 		if (!id?.startsWith("%") || !Number.isInteger(panePid)) continue;
 		const candidates = claudePidsInTree(panePid, table, childrenOf);
@@ -352,6 +364,9 @@ export function tmuxPanes(server: TmuxServer, info: UserInfo, opts: TmuxOptions 
 			foreground: fg !== undefined,
 			inMode: inMode !== undefined && inMode !== "0" && inMode !== "",
 			synchronized: synchronized === "1",
+			// An older listing (or a field that came back empty) reads as unknown, not as a guess.
+			session: session ?? "",
+			cwd: cwd ?? "",
 			configDir: configDirOf(claude, { proc, readHead: head }),
 			timedOut
 		});

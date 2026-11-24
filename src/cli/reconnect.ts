@@ -274,18 +274,30 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 	let sent = 0;
 	let skipped = 0;
 	let missing = 0;
-	const skip = (user: string, socket: string, pane: string, key: string | undefined, why: string): void => {
-		d.log(`${user} ${clean(socket)} ${clean(pane)} ${key ?? "-"} skipped (${why})`);
+	// The pane's session and working directory, cleaned, printed after its id (a waiting-loop
+	// line has no Pane at hand, and prints without them).
+	const where = (pane: Pane): string => ` (${clean(pane.session)}, ${clean(pane.cwd)})`;
+	const skip = (user: string, socket: string, pane: string, key: string | undefined, why: string, loc = ""): void => {
+		d.log(`${user} ${clean(socket)} ${clean(pane)}${loc} ${key ?? "-"} skipped (${why})`);
 		skipped++;
 	};
 	// With --wait, a pane blocked only by text in its input box or a dialog is set aside and
 	// re-checked until it clears or the time runs out, instead of being skipped now.
 	const waiting: { user: string; socket: string; server: TmuxServer; info: UserInfo; pane: string; key: string; why: string }[] = [];
-	const blocked = (user: string, socket: string, server: TmuxServer, info: UserInfo, pane: string, key: string, why: string): void => {
+	const blocked = (
+		user: string,
+		socket: string,
+		server: TmuxServer,
+		info: UserInfo,
+		pane: string,
+		key: string,
+		why: string,
+		loc: string
+	): void => {
 		if (waitMs > 0 && !dryRun) {
-			d.log(`${user} ${clean(socket)} ${clean(pane)} ${key} waiting (${why})`);
+			d.log(`${user} ${clean(socket)} ${clean(pane)}${loc} ${key} waiting (${why})`);
 			waiting.push({ user, socket, server, info, pane, key, why });
-		} else skip(user, socket, pane, key, why);
+		} else skip(user, socket, pane, key, why, loc);
 	};
 	// A background run looks only at the users and panes it was handed.
 	const retrying = (user: string, socket: string, pane: string): boolean =>
@@ -324,34 +336,34 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				if (!retrying(user, socket, pane.id)) continue;
 				panes++;
 				if (pane.timedOut) {
-					skip(user, socket, pane.id, undefined, "tmux timed out");
+					skip(user, socket, pane.id, undefined, "tmux timed out", where(pane));
 					continue;
 				}
 				if (pane.inMode) {
-					skip(user, socket, pane.id, undefined, "pane is in copy mode");
+					skip(user, socket, pane.id, undefined, "pane is in copy mode", where(pane));
 					continue;
 				}
 				if (pane.synchronized) {
-					skip(user, socket, pane.id, undefined, "synchronize-panes is on");
+					skip(user, socket, pane.id, undefined, "synchronize-panes is on", where(pane));
 					continue;
 				}
 				// tmux pane ids are %<number>; anything else from the (agent-controlled) server is
 				// not typed at, and only its cleaned form reaches the log.
 				if (!/^%\d+$/.test(pane.id)) {
-					skip(user, socket, pane.id, undefined, "unsafe pane id");
+					skip(user, socket, pane.id, undefined, "unsafe pane id", where(pane));
 					continue;
 				}
 				const key = keyFor(pane, info, keys);
 				if (!key) {
-					skip(user, socket, pane.id, undefined, "no broker MCP entry in its .claude.json files");
+					skip(user, socket, pane.id, undefined, "no broker MCP entry in its .claude.json files", where(pane));
 					continue;
 				}
 				if (!safeKey(key)) {
-					skip(user, socket, pane.id, undefined, "unsafe MCP key");
+					skip(user, socket, pane.id, undefined, "unsafe MCP key", where(pane));
 					continue;
 				}
 				if (!pane.foreground) {
-					skip(user, socket, pane.id, key, "claude is not the pane's foreground job");
+					skip(user, socket, pane.id, key, "claude is not the pane's foreground job", where(pane));
 					continue;
 				}
 				const composer = composerState(pane.text);
@@ -363,12 +375,13 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 						info,
 						pane.id,
 						key,
-						composer === "typing" ? "composer not empty, or a dialog is showing" : "no Claude Code prompt on screen"
+						composer === "typing" ? "composer not empty, or a dialog is showing" : "no Claude Code prompt on screen",
+						where(pane)
 					);
 					continue;
 				}
 				if (dryRun) {
-					d.log(`${user} ${clean(socket)} ${clean(pane.id)} ${key} would send`);
+					d.log(`${user} ${clean(socket)} ${clean(pane.id)}${where(pane)} ${key} would send`);
 				} else {
 					// Re-capture between the check and the send: the operator may have started
 					// typing (or the pane died) while the checks ran.
@@ -377,24 +390,24 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 						fresh = d.tmuxPaneText(server, pane.id, info);
 					} catch (err) {
 						if (!(err instanceof TmuxTimeout)) throw err;
-						skip(user, socket, pane.id, key, "tmux timed out");
+						skip(user, socket, pane.id, key, "tmux timed out", where(pane));
 						continue;
 					}
 					if (fresh === undefined) {
-						skip(user, socket, pane.id, key, "gone since capture");
+						skip(user, socket, pane.id, key, "gone since capture", where(pane));
 						continue;
 					}
 					if (composerState(fresh) !== "empty") {
-						blocked(user, socket, server, info, pane.id, key, "changed since capture");
+						blocked(user, socket, server, info, pane.id, key, "changed since capture", where(pane));
 						continue;
 					}
 					try {
 						d.tmuxSend(server, pane.id, `/mcp reconnect ${key}`, info);
 					} catch (err) {
-						skip(user, socket, pane.id, key, `send failed: ${clean((err as Error).message)}`);
+						skip(user, socket, pane.id, key, `send failed: ${clean((err as Error).message)}`, where(pane));
 						continue;
 					}
-					d.log(`${user} ${clean(socket)} ${clean(pane.id)} ${key} sent`);
+					d.log(`${user} ${clean(socket)} ${clean(pane.id)}${where(pane)} ${key} sent`);
 				}
 				sent++;
 			}
