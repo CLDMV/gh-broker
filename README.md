@@ -19,17 +19,17 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.16.1 (November 2026)
+### Latest: v0.16.2 (November 2026)
 
-- **The node download works.** When the box has no root-owned qualifying node, `install` and `upgrade` download one from nodejs.org. In v0.16.0 that asked `tar` for the wrong path inside the archive and the install stopped at the node step; it now extracts `bin/node` from the archive's real top folder.
-- [View full v0.16.1 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.1.md)
+- **`agent add` refuses before it saves anything.** With the bridge binary missing, `agent add --claude-config` used to save the folders and then refuse, leaving them remembered for an agent that was never registered. It now checks first and writes nothing.
+- [View full v0.16.2 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.2.md)
 
 ### Recent Releases
 
+- **v0.16.1** (November 2026) — the node download extracts `bin/node` from the archive's real top folder, so `install` works on a box with no root-owned node ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.1.md))
 - **v0.16.0** (November 2026) — MCP sessions survive a broker restart (`gh-broker connect`), and the broker keeps its own node at `/usr/local/lib/gh-broker/node` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.0.md))
 - **v0.15.0** (November 2026) — `agent reconnect --wait` and `upgrade --wait` reconnect sessions once typing or a dialog clears ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.15.0.md))
 - **v0.14.2** (November 2026) — `agent reconnect` reads 24-bit colour sessions, and skipped panes no longer fail `upgrade` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.2.md))
-- **v0.14.1** (November 2026) — `agent reconnect` sends to idle and working sessions; a dimmed prompt suggestion no longer reads as typing ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.14.1.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
