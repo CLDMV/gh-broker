@@ -241,9 +241,10 @@ describe("tmuxPanes", () => {
 	const claudeStat = (pid: number, state = "S", ppid = 1, pgrp = pid, tpgid = pid): string =>
 		`${pid} (claude) ${state} ${ppid} ${pgrp} 100 34828 ${tpgid} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0`;
 
-	it("lists the panes whose foreground job is the agent's own Claude Code, with screen and mode flags", () => {
+	it("lists the panes whose foreground job is the agent's own Claude Code, with screen, session, cwd and mode flags", () => {
 		const h = host({
-			listing: "%0|@|200|@|0|@|0|@|claude\n%1|@|300|@|0|@|0|@|bash\n%2|@|400|@|1|@|0|@|claude\n%3|@|500|@|0|@|1|@|bash\n",
+			listing:
+				"%0|@|200|@|0|@|0|@|claude|@|main|@|/home/glm\n%1|@|300|@|0|@|0|@|bash|@|main|@|/home/glm\n%2|@|400|@|1|@|0|@|claude|@|dev|@|/tmp\n%3|@|500|@|0|@|1|@|bash|@|main|@|/home/glm\n",
 			procs: {
 				"200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }),
 				// a background claude under a shell the user is typing at: same tree, not foreground
@@ -266,12 +267,57 @@ describe("tmuxPanes", () => {
 				foreground: true,
 				inMode: false,
 				synchronized: false,
+				session: "main",
+				cwd: "/home/glm",
 				configDir: undefined,
 				timedOut: undefined
 			},
-			{ id: "%1", pid: 301, text: "", foreground: false, inMode: false, synchronized: false, configDir: undefined, timedOut: undefined },
-			{ id: "%2", pid: 400, text: "", foreground: false, inMode: true, synchronized: false, configDir: undefined, timedOut: undefined }
+			{
+				id: "%1",
+				pid: 301,
+				text: "",
+				foreground: false,
+				inMode: false,
+				synchronized: false,
+				session: "main",
+				cwd: "/home/glm",
+				configDir: undefined,
+				timedOut: undefined
+			},
+			{
+				id: "%2",
+				pid: 400,
+				text: "",
+				foreground: false,
+				inMode: true,
+				synchronized: false,
+				session: "dev",
+				cwd: "/tmp",
+				configDir: undefined,
+				timedOut: undefined
+			}
 		]);
+	});
+
+	it("a `|@|` in a pane's path doesn't truncate the cwd: the cwd is the remainder of the line", () => {
+		const h = host({
+			listing: "%0|@|200|@|0|@|0|@|claude|@|main|@|/tmp/we|@|ird\n",
+			procs: { "200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }) },
+			capture: { "%0": "❯ \n" }
+		});
+		const [p] = tmuxPanes(SERVER(), INFO, h);
+		expect(p).toEqual({
+			id: "%0",
+			pid: 200,
+			text: "❯ \n",
+			foreground: true,
+			inMode: false,
+			synchronized: false,
+			session: "main",
+			cwd: "/tmp/we|@|ird",
+			configDir: undefined,
+			timedOut: undefined
+		});
 	});
 
 	it("runs every tmux command as the agent through /usr/bin/setpriv (groups kept), with the server's own binary, its HOME, a UTF-8 locale, no $TMUX, and a timeout", () => {
@@ -286,7 +332,7 @@ describe("tmuxPanes", () => {
 			"list-panes",
 			"-a",
 			"-F",
-			"#{pane_id}|@|#{pane_pid}|@|#{pane_in_mode}|@|#{pane_synchronized}|@|#{pane_current_command}"
+			"#{pane_id}|@|#{pane_pid}|@|#{pane_in_mode}|@|#{pane_synchronized}|@|#{pane_current_command}|@|#{session_name}|@|#{pane_current_path}"
 		]);
 		expect(opts.uid).toBeUndefined(); // setpriv does the switch, with the agent's groups
 		expect(opts.cwd).toBe("/");
@@ -313,7 +359,7 @@ describe("tmuxPanes", () => {
 		const lister = host({ result: timedOut });
 		expect(() => tmuxPanes(SERVER(), INFO, lister)).toThrow(TmuxTimeout);
 		const h = host({
-			listing: "%0|@|200|@|0|@|0|@|claude\n%1|@|300|@|0|@|0|@|claude\n",
+			listing: "%0|@|200|@|0|@|0|@|claude|@|main|@|/home/glm\n%1|@|300|@|0|@|0|@|claude|@|main|@|/home/glm\n",
 			procs: {
 				"200": proc(200, { cmdline: "claude\0", stat: claudeStat(200) }),
 				"300": proc(300, { cmdline: "claude\0", stat: claudeStat(300) })
@@ -338,7 +384,7 @@ describe("tmuxPanes", () => {
 	it("captures with -J (a wrapped indicator line must arrive joined), and reads the session's CLAUDE_CONFIG_DIR", () => {
 		const calls: string[][] = [];
 		const h = host({
-			listing: "%0|@|200|@|0|@|0|@|claude\n",
+			listing: "%0|@|200|@|0|@|0|@|claude|@|main|@|/home/glm\n",
 			procs: {
 				"200": proc(200, { cmdline: "claude\0", stat: claudeStat(200), environ: "PATH=/bin\0CLAUDE_CONFIG_DIR=/srv/glm/config/\0" })
 			},
@@ -357,6 +403,8 @@ describe("tmuxPanes", () => {
 			foreground: true,
 			inMode: false,
 			synchronized: false,
+			session: "main",
+			cwd: "/home/glm",
 			configDir: "/srv/glm/config",
 			timedOut: undefined
 		});
@@ -387,6 +435,26 @@ describe("tmuxPanes", () => {
 			procThrows: true
 		});
 		expect(tmuxPanes(SERVER(), INFO, noProc)).toEqual([]);
+		// A listing without the session/cwd fields (an older tmux) still parses: both read as unknown.
+		const short = host({
+			listing: "%4|@|600|@|0|@|0|@|claude\n",
+			procs: { "600": proc(600, { cmdline: "claude\0", stat: claudeStat(600) }) },
+			capture: { "%4": "❯ \n" }
+		});
+		expect(tmuxPanes(SERVER(), INFO, short)).toEqual([
+			{
+				id: "%4",
+				pid: 600,
+				text: "❯ \n",
+				foreground: true,
+				inMode: false,
+				synchronized: false,
+				session: "",
+				cwd: "",
+				configDir: undefined,
+				timedOut: undefined
+			}
+		]);
 	});
 });
 

