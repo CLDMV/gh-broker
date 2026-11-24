@@ -41,11 +41,11 @@ export const RECONNECT_HELP = `agent reconnect [<user>] [--dry-run] [--wait <tim
 
 Sends "/mcp reconnect <key>" to the running Claude Code sessions of a
 registered agent (or all of them) that need it: the ones still on an old
-socat entry, or whose connect bridge did not recover from a broker restart.
-A session already running the connect bridge recovers from a restart on its
-own, so typing into it is noise: those panes are listed as already on the
-bridge, and are not counted as skipped. --all sends to every running Claude
-Code session instead.
+socat entry, or with no broker MCP process running at all. A session already
+running the connect bridge redials a restarted broker on its own (the bridge
+never gives up), so typing into it is noise: those panes are listed as
+already on the bridge, and are not counted as skipped. --all sends to every
+running Claude Code session instead.
 <key> is the agent's actual mcpServers entry for the broker, read back from
 its .claude.json files. A pane is skipped, with its id and the reason, when
 someone is typing in it, a dialog (a permission prompt, a question, a menu)
