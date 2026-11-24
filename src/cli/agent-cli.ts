@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T22:30:10-08:00 (1795415410)
+ *	@Last modified time: 2026-11-23T19:39:24-08:00 (1795491564)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -92,7 +92,12 @@ export async function agentCommand(command: string, rest: string[], config: Conf
 			throw new Error(
 				`user "${names[0]}" does not exist; create it first (the installer can: sudo gh-broker install --agent-user ${names[0]} --create-agent-user)`
 			);
-		if (claudeConfigs.length) config = rememberFolders(config, names[0]!, claudeConfigs, d);
+		if (claudeConfigs.length) {
+			// Refuse before saving: add's MCP config needs the bridge binaries (see add), and a command
+			// that dies must not leave the folders remembered for an agent it never registered.
+			if (!noMcp) assertBridgeBinaries(d);
+			config = rememberFolders(config, names[0]!, claudeConfigs, d);
+		}
 		return add(config, names[0]!, noMcp, d);
 	}
 	return remove(config, names[0]!, d);
