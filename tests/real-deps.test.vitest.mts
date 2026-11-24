@@ -197,6 +197,8 @@ describe("downloadLatestLts", () => {
 	const arch = process.arch === "x64" || process.arch === "arm64" ? process.arch : "x64";
 	const name = `node-v24.11.0-linux-${arch}.tar.xz`;
 	const tarballUrl = `https://nodejs.org/dist/v24.11.0/${name}`;
+	// the archive's top folder is the tarball name without .tar.xz, not the file name
+	const binMember = `node-v24.11.0-linux-${arch}/bin/node`;
 	const fetched: string[] = [];
 
 	const stubFetch = (tarballBody: Buffer = tarball, sums = `${sha256Hex(tarball)}  ${name}\n`): void => {
@@ -249,14 +251,14 @@ describe("downloadLatestLts", () => {
 		// alert #12: the tarball is never written to disk — the verified buffer goes to tar on stdin
 		expect(f.writeFileSync).not.toHaveBeenCalled();
 		const extractCall = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJf")!;
-		expect(extractCall[1]).toEqual(["-xJf", "-", "--no-same-owner", "-C", "/usr/local/lib/gh-broker/.dl-abc123", `${name}/bin/node`]);
+		expect(extractCall[1]).toEqual(["-xJf", "-", "--no-same-owner", "-C", "/usr/local/lib/gh-broker/.dl-abc123", binMember]);
 		expect((extractCall[2] as { input: Buffer }).input).toEqual(tarball);
 		// SF3: the re-hash stream reads the member from the same verified buffer on stdin — a
 		// regression back to a path argument would hard-fail every download (no tarball on disk)
 		const memberCall = h.spawnSync.mock.calls.find((c: any[]) => c[0] === "tar" && c[1]![0] === "-xJOf")!;
-		expect(memberCall[1]).toEqual(["-xJOf", "-", `${name}/bin/node`]);
+		expect(memberCall[1]).toEqual(["-xJOf", "-", binMember]);
 		expect((memberCall[2] as { input: Buffer }).input).toEqual(tarball);
-		expect(f.copyFileSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-abc123/${name}/bin/node`, "/usr/local/lib/gh-broker/node.tmp-1");
+		expect(f.copyFileSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-abc123/${binMember}`, "/usr/local/lib/gh-broker/node.tmp-1");
 		// a stale .dl-* from a killed run is swept first, and the real node is never swept
 		expect(f.readdirSync).toHaveBeenCalledWith(NODE_LINK_DIR);
 		expect(f.rmSync).toHaveBeenCalledWith(`${NODE_LINK_DIR}/.dl-stale`, { recursive: true, force: true });
