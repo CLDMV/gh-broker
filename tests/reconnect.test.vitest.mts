@@ -700,11 +700,11 @@ describe("agent reconnect", () => {
 	describe("the connect bridge verdict", () => {
 		const onBridge = (id: string, over: Partial<Pane> = {}): Pane => pane(id, IDLE, { brokerChild: "bridge", ...over });
 
-		it("skips a session already on the connect bridge — listed, but not a skip: the run exits 0", () => {
+		it("leaves a session already on the connect bridge alone — listed as nothing to do, not a skip: the run exits 0", () => {
 			const { d, out } = withPanes([onBridge("%1")]);
 			expect(reconnect(["repo"], config, d)).toBe(0);
 			expect(d.tmuxSend).not.toHaveBeenCalled();
-			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - on the connect bridge (nothing to do)`);
 			expect(out[out.length - 1]).toBe("sent 0, skipped 0 (1 already on the bridge)");
 		});
 
@@ -719,7 +719,7 @@ describe("agent reconnect", () => {
 		it("a bridge pane and a real skip together: the real skip fails the run, the bridge one doesn't", () => {
 			const { d, out } = withPanes([onBridge("%1"), pane("%2", "❯ half typed")]);
 			expect(reconnect(["repo"], config, d)).toBe(3);
-			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - on the connect bridge (nothing to do)`);
 			expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) github skipped (composer not empty, or a dialog is showing)`);
 			expect(out[out.length - 1]).toBe("sent 0, skipped 1 (1 already on the bridge)");
 		});
@@ -737,13 +737,13 @@ describe("agent reconnect", () => {
 			expect(reconnect(["repo", "--wait", "1m"], config, d)).toBe(0);
 			expect(d.startBackground).not.toHaveBeenCalled();
 			expect(d.sleep).not.toHaveBeenCalled();
-			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - on the connect bridge (nothing to do)`);
 		});
 
 		it("a dry run lists bridge panes as skipped too, counts them in its summary, and still exits 0", () => {
 			const { d, out } = withPanes([onBridge("%1")]);
 			expect(reconnect(["repo", "--dry-run"], config, d)).toBe(0);
-			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - on the connect bridge (nothing to do)`);
 			expect(out[out.length - 1]).toBe('dry run: 0 pane(s) would get "/mcp reconnect" (1 already on the bridge)');
 		});
 
@@ -751,7 +751,7 @@ describe("agent reconnect", () => {
 			const noEntry = JSON.stringify({ mcpServers: { x: { command: "npx" } } });
 			const { d, out } = withPanes([onBridge("%1")], {}, { [claude("repo")]: noEntry });
 			expect(reconnect(["repo"], config, d)).toBe(0);
-			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (already on the connect bridge)`);
+			expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - on the connect bridge (nothing to do)`);
 			expect(out.some((l: string) => l.includes("no broker MCP entry"))).toBe(false);
 		});
 

@@ -396,7 +396,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 					// Already running the connect bridge: the session recovers from a broker restart
 					// on its own, so typing into it is noise. Not a skip (see onBridge) and not a
 					// --wait candidate — it isn't blocked, there is nothing to wait for.
-					d.log(line(user, socket, pane.id, undefined, "skipped (already on the connect bridge)", where(pane)));
+					d.log(line(user, socket, pane.id, undefined, "on the connect bridge (nothing to do)", where(pane)));
 					onBridge++;
 					continue;
 				}
