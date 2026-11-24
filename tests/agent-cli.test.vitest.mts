@@ -451,6 +451,16 @@ describe("other Claude config folders (#163)", () => {
 		expect(sync.d.writeConfig).toHaveBeenCalledWith({ ...config, claudeConfigDirs: { repo: [SAVED] } });
 	});
 
+	it("add with a missing bridge binary refuses before the folders are saved", async () => {
+		const { d, writes } = withFolders({});
+		d.binaryExists = () => false;
+		await expect(agentCommand("add", ["repo", "--claude-config", SAVED], config, d)).rejects.toThrow(
+			/the MCP entry would run \/usr\/local\/lib\/gh-broker\/node \/usr\/local\/bin\/gh-broker connect, but \/usr\/local\/bin\/gh-broker is not there/
+		);
+		expect(d.writeConfig).not.toHaveBeenCalled(); // nothing remembered for an agent that was never registered
+		expect(writes).toEqual([]); // and no MCP config was written either
+	});
+
 	it("refuses --claude-config without an absolute folder, without the agent named, or on the wrong command", async () => {
 		const { d } = withFolders({});
 		await expect(agentCommand("sync", ["--claude-config", SAVED], config, d)).rejects.toThrow(/needs the agent named/);
