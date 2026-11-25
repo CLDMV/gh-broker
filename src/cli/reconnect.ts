@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-24T16:26:34-08:00 (1795566394)
+ *	@Last modified time: 2026-11-24T16:32:40-08:00 (1795566760)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -439,7 +439,7 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 						undefined,
 						cfg
 							? `its CLAUDE_CONFIG_DIR ${cfg} has no broker MCP entry: sudo gh-broker agent sync ${user} --claude-config ${cfg}`
-							: "no broker MCP entry in its .claude.json files",
+							: "no broker MCP entry in its .claude.json file",
 						where(pane)
 					);
 					continue;

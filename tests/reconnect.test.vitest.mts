@@ -494,6 +494,14 @@ describe("agent reconnect", () => {
 		expect(d.tmuxSend).not.toHaveBeenCalled();
 	});
 
+	it("skips a session with no config folder when even the home file has no broker entry", () => {
+		const noEntry = JSON.stringify({ mcpServers: { x: { command: "npx" } } });
+		const { d, out } = withPanes([pane("%1", IDLE)], {}, { [claude("repo")]: noEntry });
+		expect(reconnect(["repo"], config, d)).toBe(3);
+		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (no broker MCP entry in its .claude.json file)`);
+		expect(d.tmuxSend).not.toHaveBeenCalled();
+	});
+
 	it("sends the key from the session's own config folder, and the home file's only to a session with no config folder", () => {
 		const ALT = "/home/repo/.claude-alt";
 		const files = {
