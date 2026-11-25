@@ -431,14 +431,18 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 					// and the home file's may be wrong for it (#270); the folder comes from the agent's
 					// environment, so it is cleaned wherever it is printed. A session with no
 					// CLAUDE_CONFIG_DIR at all is skipped only when even the home file has no entry.
+					// A folder the broker reads was looked at and has no entry; one it doesn't read was never
+					// looked at, so the line says that instead of claiming what its file holds.
 					const cfg = pane.configDir && clean(pane.configDir);
+					const read = pane.configDir !== undefined && places.some((p) => p.folder === pane.configDir);
+					const why = read ? "has no broker MCP entry" : "is not a config folder the broker manages";
 					skip(
 						user,
 						socket,
 						pane.id,
 						undefined,
 						cfg
-							? `its CLAUDE_CONFIG_DIR ${cfg} has no broker MCP entry: sudo gh-broker agent sync ${user} --claude-config ${cfg}`
+							? `its CLAUDE_CONFIG_DIR ${cfg} ${why}: sudo gh-broker agent sync ${user} --claude-config ${cfg}`
 							: "no broker MCP entry in its .claude.json file",
 						where(pane)
 					);

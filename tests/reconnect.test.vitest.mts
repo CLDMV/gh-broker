@@ -456,7 +456,7 @@ describe("agent reconnect", () => {
 		// one, but its key may be wrong for this session — skipped with the sync named, not borrowed.
 		expect(reconnect(["repo"], { ...config, claudeConfigDirs: { repo: [SAVED] } }, d)).toBe(3);
 		expect(out).toContain(
-			`repo ${SOCK} %1 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR /home/repo/.claude-alt has no broker MCP entry: sudo gh-broker agent sync repo --claude-config /home/repo/.claude-alt)`
+			`repo ${SOCK} %1 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR /home/repo/.claude-alt is not a config folder the broker manages: sudo gh-broker agent sync repo --claude-config /home/repo/.claude-alt)`
 		);
 	});
 
@@ -489,7 +489,7 @@ describe("agent reconnect", () => {
 			`repo ${SOCK} %1 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR ${ALT} has no broker MCP entry: sudo gh-broker agent sync repo --claude-config ${ALT})`
 		);
 		expect(out).toContain(
-			`repo ${SOCK} %2 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR /opt/claude-unregistered has no broker MCP entry: sudo gh-broker agent sync repo --claude-config /opt/claude-unregistered)`
+			`repo ${SOCK} %2 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR /opt/claude-unregistered is not a config folder the broker manages: sudo gh-broker agent sync repo --claude-config /opt/claude-unregistered)`
 		);
 		expect(d.tmuxSend).not.toHaveBeenCalled();
 	});
@@ -531,7 +531,7 @@ describe("agent reconnect", () => {
 		const { d, out } = withPanes([pane("%1", IDLE, { configDir: "/tmp/evil\rdir" })]);
 		expect(reconnect(["repo"], config, d)).toBe(3);
 		expect(out).toContain(
-			`repo ${SOCK} %1 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR /tmp/evil?dir has no broker MCP entry: sudo gh-broker agent sync repo --claude-config /tmp/evil?dir)`
+			`repo ${SOCK} %1 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR /tmp/evil?dir is not a config folder the broker manages: sudo gh-broker agent sync repo --claude-config /tmp/evil?dir)`
 		);
 		expect(out.join("\n")).not.toContain("\r");
 	});
