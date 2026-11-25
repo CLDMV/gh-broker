@@ -19,17 +19,17 @@ It runs as a dedicated `gh-broker` system user, holds a read-scoped and a write-
 
 ## ✨ What's New
 
-### Latest: v0.17.1 (November 2026)
+### Latest: v0.17.2 (November 2026)
 
-- **Bridge panes aren't reported as skipped.** A session already on the connect bridge now prints `on the connect bridge (nothing to do)`, matching the summary, which never counted it as a skip.
-- [View full v0.17.1 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.17.1.md)
+- **Reconnect doesn't type a command a session can't run.** A session started with its own `CLAUDE_CONFIG_DIR` only gets that folder's broker key. If the folder has none, the session is skipped, and the line names the `agent sync --claude-config` command that fixes it. Before, it got the home file's key and failed with `MCP server "github" not found` on every upgrade.
+- [View full v0.17.2 Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.17.2.md)
 
 ### Recent Releases
 
+- **v0.17.1** (November 2026) — panes already on the connect bridge print `on the connect bridge (nothing to do)` instead of `skipped` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.17.1.md))
 - **v0.17.0** (November 2026) — `agent reconnect` leaves sessions on the connect bridge alone, names each pane's tmux session and folder, and takes `--session` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.17.0.md))
 - **v0.16.2** (November 2026) — `agent add` refuses a missing bridge binary before saving `--claude-config` folders ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.2.md))
 - **v0.16.1** (November 2026) — the node download extracts `bin/node` from the archive's real top folder, so `install` works on a box with no root-owned node ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.1.md))
-- **v0.16.0** (November 2026) — MCP sessions survive a broker restart (`gh-broker connect`), and the broker keeps its own node at `/usr/local/lib/gh-broker/node` ([Changelog](https://github.com/CLDMV/gh-broker/blob/master/docs/changelog/v0/v0.16.0.md))
 
 📚 For the complete version history, see the [docs/changelog/](https://github.com/CLDMV/gh-broker/tree/master/docs/changelog/) folder.
 
