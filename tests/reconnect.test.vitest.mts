@@ -437,7 +437,7 @@ describe("agent reconnect", () => {
 		expect(out).toContain(`repo ${SOCK} %3 (main, /home/repo) github skipped (no Claude Code prompt on screen)`);
 	});
 
-	it("skips a pane when the session's files have no broker entry, and never borrows another folder's key", () => {
+	it("skips a pane whose CLAUDE_CONFIG_DIR has no broker entry, and never borrows another folder's key", () => {
 		const SAVED = "/data/claude-saved";
 		const saved = JSON.stringify({ mcpServers: { "gh-broker": mcpEntry("repo", DIR) } });
 		const { d, out } = makeDeps(
@@ -452,13 +452,49 @@ describe("agent reconnect", () => {
 			},
 			{ [claude("repo")]: JSON.stringify({ mcpServers: { x: { command: "npx" } } }), [`${SAVED}/.claude.json`]: saved }
 		);
-		// The session's own folder and the home file have no entry; the saved folder has one, but
-		// its key may be wrong for this session — skipped, not borrowed.
+		// The session's own folder has no entry, and neither has the home file; the saved folder has
+		// one, but its key may be wrong for this session — skipped with the sync named, not borrowed.
 		expect(reconnect(["repo"], { ...config, claudeConfigDirs: { repo: [SAVED] } }, d)).toBe(3);
-		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) - skipped (no broker MCP entry in its .claude.json files)`);
+		expect(out).toContain(
+			`repo ${SOCK} %1 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR /home/repo/.claude-alt has no broker MCP entry: sudo gh-broker agent sync repo --claude-config /home/repo/.claude-alt)`
+		);
 	});
 
-	it("sends the key from the session's own config folder, else the home file's", () => {
+	it("skips a pane whose config folder has no broker entry even when the home file has one (#270)", () => {
+		const ALT = "/home/repo/.claude-alt";
+		const noEntry = JSON.stringify({ mcpServers: { x: { command: "npx" } } });
+		const { d, out } = makeDeps(
+			{
+				tmuxSockets: vi.fn(() => ({ servers: [{ socket: SOCK, binary: "tmux" }], skipped: [] })),
+				tmuxPanes: vi.fn(() => [pane("%1", IDLE, { configDir: ALT }), pane("%2", IDLE, { configDir: "/opt/claude-unregistered" })]),
+				mcpIO: {
+					read: (p: string) =>
+						p === claude("repo")
+							? { text: entry, stat: { uid: 1000, gid: 1000, mode: 0o100600 } }
+							: p === `${ALT}/.claude.json`
+								? { text: noEntry, stat: { uid: 1000, gid: 1000, mode: 0o100600 } }
+								: undefined,
+					write: () => {},
+					scan: (home: string) => (home === "/home/repo" ? [ALT] : [])
+				}
+			},
+			{ [claude("repo")]: entry, [`${ALT}/.claude.json`]: noEntry }
+		);
+		// The home file has the entry, but neither session runs with it: %1's config folder is known
+		// to the broker and has no broker entry in its file, %2's is a folder the broker was never
+		// told about — both are skipped with the sync that fixes each, and the home key is not
+		// borrowed (it is the home session's key, not theirs).
+		expect(reconnect(["repo"], config, d)).toBe(3);
+		expect(out).toContain(
+			`repo ${SOCK} %1 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR ${ALT} has no broker MCP entry: sudo gh-broker agent sync repo --claude-config ${ALT})`
+		);
+		expect(out).toContain(
+			`repo ${SOCK} %2 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR /opt/claude-unregistered has no broker MCP entry: sudo gh-broker agent sync repo --claude-config /opt/claude-unregistered)`
+		);
+		expect(d.tmuxSend).not.toHaveBeenCalled();
+	});
+
+	it("sends the key from the session's own config folder, and the home file's only to a session with no config folder", () => {
 		const ALT = "/home/repo/.claude-alt";
 		const files = {
 			[claude("repo")]: entry,
@@ -476,9 +512,20 @@ describe("agent reconnect", () => {
 			},
 			files
 		);
+		// %2 runs with no CLAUDE_CONFIG_DIR, so the home file's key is its key; %1 gets its own
+		// folder's, never the home file's.
 		expect(reconnect(["repo"], config, d)).toBe(0);
 		expect(out).toContain(`repo ${SOCK} %1 (main, /home/repo) gh-broker-repo sent`);
 		expect(out).toContain(`repo ${SOCK} %2 (main, /home/repo) github sent`);
+	});
+
+	it("blank control characters out of a config folder in the skip reason", () => {
+		const { d, out } = withPanes([pane("%1", IDLE, { configDir: "/tmp/evil\rdir" })]);
+		expect(reconnect(["repo"], config, d)).toBe(3);
+		expect(out).toContain(
+			`repo ${SOCK} %1 (main, /home/repo) - skipped (its CLAUDE_CONFIG_DIR /tmp/evil?dir has no broker MCP entry: sudo gh-broker agent sync repo --claude-config /tmp/evil?dir)`
+		);
+		expect(out.join("\n")).not.toContain("\r");
 	});
 
 	it("refuses to type a key that could carry a newline or a command, and logs no part of it", () => {

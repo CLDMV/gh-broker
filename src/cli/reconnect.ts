@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-22T21:08:27-08:00 (1795410507)
+ *	@Last modified time: 2026-11-24T16:26:34-08:00 (1795566394)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -47,9 +47,13 @@ never gives up), so typing into it is noise: those panes are listed as
 already on the bridge, and are not counted as skipped. --all sends to every
 running Claude Code session instead.
 <key> is the agent's actual mcpServers entry for the broker, read back from
-its .claude.json files. A pane is skipped, with its id and the reason, when
-someone is typing in it, a dialog (a permission prompt, a question, a menu)
-is showing, it is in copy mode, or its key is not one that is safe to type
+its .claude.json files: the one in the session's own CLAUDE_CONFIG_DIR
+folder when it runs with one, the home file's only when it doesn't. A
+session whose config folder has no broker entry is skipped, with the
+command that fixes it: sudo gh-broker agent sync <user> --claude-config
+<dir>. A pane is skipped, with its id and the reason, when someone is
+typing in it, a dialog (a permission prompt, a question, a menu) is
+showing, it is in copy mode, or its key is not one that is safe to type
 blind. Claude working in it is fine: what is typed is queued.
 --session <name|%pane> (repeatable) keeps only the panes whose tmux session
 name or pane id matches (a value that matches nothing is reported).
@@ -274,12 +278,14 @@ function keysOf(places: Place[], info: UserInfo, dir: string, d: { mcpIO: Folder
 }
 
 /**
- * The key to send to a pane: the one in the session's own config folder's file, else the home
- * file's. A pane whose own session folder has no broker entry is skipped, not guessed at — some
- * other folder's key may be wrong for that session.
+ * The key to send to a pane: the one in the session's own CLAUDE_CONFIG_DIR folder's file, and
+ * the home file's only when the session runs with no CLAUDE_CONFIG_DIR at all. A pane whose
+ * config folder has no broker entry is skipped, not guessed at — some other folder's key (the
+ * home one included) may be wrong for that session (#270).
  */
 function keyFor(pane: Pane, info: UserInfo, keys: Map<string, string>): string | undefined {
-	return (pane.configDir && keys.get(pane.configDir)) || keys.get(info.home);
+	if (!pane.configDir) return keys.get(info.home);
+	return keys.get(pane.configDir);
 }
 
 /**
@@ -420,7 +426,22 @@ export function reconnect(rest: string[], config: ConfigLayer, d: ReconnectDeps)
 				}
 				const key = keyFor(pane, info, keys);
 				if (!key) {
-					skip(user, socket, pane.id, undefined, "no broker MCP entry in its .claude.json files", where(pane));
+					// No key to send. A session with a CLAUDE_CONFIG_DIR whose file has no broker entry
+					// is skipped with the sync that adds one named — its own key is the only right one,
+					// and the home file's may be wrong for it (#270); the folder comes from the agent's
+					// environment, so it is cleaned wherever it is printed. A session with no
+					// CLAUDE_CONFIG_DIR at all is skipped only when even the home file has no entry.
+					const cfg = pane.configDir && clean(pane.configDir);
+					skip(
+						user,
+						socket,
+						pane.id,
+						undefined,
+						cfg
+							? `its CLAUDE_CONFIG_DIR ${cfg} has no broker MCP entry: sudo gh-broker agent sync ${user} --claude-config ${cfg}`
+							: "no broker MCP entry in its .claude.json files",
+						where(pane)
+					);
 					continue;
 				}
 				if (!safeKey(key)) {
