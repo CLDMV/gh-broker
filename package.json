@@ -10,11 +10,13 @@
 	"exports": {
 		".": {
 			"types": "./types/core/index.d.ts",
+			"require": "./dist/core/index.cjs",
 			"default": "./dist/core/index.mjs"
 		},
 		"./package.json": "./package.json",
 		"./core": {
 			"types": "./types/core/index.d.ts",
+			"require": "./dist/core/index.cjs",
 			"default": "./dist/core/index.mjs"
 		}
 	},

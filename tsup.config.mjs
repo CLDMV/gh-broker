@@ -35,6 +35,7 @@
  * Sourcemaps are generated for local debugging but kept out of the published tarball by
  * the `!dist/**\/*.map` and `!bin/**\/*.map` negations in package.json `files`.
  */
+import { copyFileSync } from "node:fs";
 import { defineConfig } from "tsup";
 
 const shared = {
@@ -57,7 +58,15 @@ export default defineConfig([
 	{ ...shared, entry: { "gh-broker": "src/bin/gh-broker.ts" }, outDir: "bin", clean: false },
 	// The library subpath (§6): dependencies stay external (tsup's default — the
 	// package's `dependencies`, unlike the daemon's noExternal above).
-	{ ...shared, entry: { "core/index": "src/core/index.ts" }, outDir: "dist", clean: false },
+	// src/core/index.cjs (the generic CommonJS shim) is copied verbatim next to the built
+	// entry, where its require("./index.mjs") resolves. It is never compiled or bundled.
+	{
+		...shared,
+		entry: { "core/index": "src/core/index.ts" },
+		outDir: "dist",
+		clean: false,
+		onSuccess: async () => copyFileSync("src/core/index.cjs", "dist/core/index.cjs")
+	},
 	// The library's types (§6): a dedicated dts-only build of the same barrel → types/.
 	// `dts: { only: true }` is the config-file form of --dts-only (the `dtsOnly` flag is
 	// CLI-only); a bare `dts: true` would skip the build entirely here.

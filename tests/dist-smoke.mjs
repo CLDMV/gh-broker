@@ -71,6 +71,38 @@ try {
 		],
 		{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
 	);
+	// The CommonJS entry (the generic CLDMV shim, copied next to the core bundle): require() of
+	// the package returns the module object, with the same keys and the same values as `import`.
+	// Run in a plain child process, the way a CJS consumer loads it, for both exports entries.
+	for (const subpath of ["dist/core/index.cjs", "dist/core/index.mjs"]) {
+		const out = execFileSync(
+			process.execPath,
+			[
+				"-e",
+				`const esm = require(${JSON.stringify(join(root, "dist", "core", "index.mjs"))}); const cjs = require(${JSON.stringify(join(root, subpath))});
+				const keys = (o) => Object.keys(o).filter((k) => k !== "__esModule").sort();
+				if (typeof cjs !== "object" || cjs === null) throw new Error("require() did not return the module object");
+				if (JSON.stringify(keys(cjs)) !== JSON.stringify(keys(esm))) throw new Error("require() keys differ from the ESM namespace");
+				for (const k of keys(esm)) if (cjs[k] !== esm[k]) throw new Error("require() value differs from the ESM export " + k);
+				console.log(keys(cjs).length)`
+			],
+			{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+		);
+		if (!(Number(out) > 5)) throw new Error(`${subpath}: unexpectedly few exports (${out.trim()})`);
+	}
+	// And through the package's own name, so the exports map's "require" condition is what resolves.
+	const pkgOut = execFileSync(
+		process.execPath,
+		[
+			"-e",
+			`const cjs = require("@cldmv/gh-broker"); const sub = require("@cldmv/gh-broker/core"); import("@cldmv/gh-broker").then((esm) => {
+				for (const k of Object.keys(esm)) if (cjs[k] !== esm[k] || sub[k] !== esm[k]) throw new Error("name-resolved require() differs on " + k);
+				console.log("ok");
+			})`
+		],
+		{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], cwd: root }
+	);
+	if (pkgOut.trim() !== "ok") throw new Error("require by package name failed");
 } catch (err) {
 	console.error(`dist smoke test failed: ${err.stderr || err.message}`);
 	process.exitCode = 1;
